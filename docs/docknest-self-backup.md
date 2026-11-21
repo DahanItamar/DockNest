@@ -1,6 +1,6 @@
-# DockNest self-backup
+# Self Backup
 
-Administrators can open **DockNest backup** in the Administration sidebar, set a separate recovery passphrase (at least 24 characters), and choose **Back up DockNest now**. The existing worker creates the kit and uploads it to the connected SFTP destination selected for app backups. The feature is opt-in and needs no Docker socket. An optional timezone-aware schedule refreshes the remote kit.
+Administrators can open **Self Backup** in the Administration sidebar, set a separate recovery passphrase (at least 24 characters), and choose **Back up DockNest now**. The existing worker creates the kit and uploads it to the connected SFTP destination selected for app backups. The feature is opt-in and needs no Docker socket. An optional timezone-aware schedule refreshes the remote kit.
 
 One latest successful encrypted kit is retained directly under `<selected-storage-root>/BACKUP/docknest-recovery/`, named `docknest_<manager-key-id>_<UTC-date>_<UTC-time>Z--<backup-id>.dkit`. A root already ending in `BACKUP` is reused. This folder is a sibling of the server folders used for app archives; no extra manager-key directory is created. See the complete [storage hierarchy](deployment.md). A queued job records its destination so a later storage selection does not redirect in-flight work; subsequent jobs use the new selection. Existing app backups retain their recorded paths. An older kit under `docknest-manager/<manager-key-id>/`, or a previous local kit, remains downloadable until a replacement succeeds; cleanup then removes the old file.
 

@@ -37,7 +37,7 @@ Real copy and restore count as validated only after the Linux integration tests 
 | Retention | Per destination. Pins apply to every copy. Object Lock deferrals are per copy. Deleting a backup deletes all its copies. |
 | Incremental chains | Each destination holds whole chains. A copy of an increment is made only after its parent is copied there. |
 | Recovery kit | Written to every destination that holds copies, so each one can be recovered on its own. |
-| DockNest's own backup | Unchanged: it uses the default destination. |
+| Self Backup | Unchanged: it uses the default destination. |
 
 ## Data model
 

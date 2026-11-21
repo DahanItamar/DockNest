@@ -73,7 +73,7 @@ export function storageJoin(directory,name){
 }
 export function managerBackupDirectory(targetId,keyId){
  const options=targetOptions(targetId);
- if(!adapters[options.mode])throw new Error('DockNest backup requires the selected SFTP destination');
+ if(!adapters[options.mode])throw new Error('Self Backup requires the selected SFTP destination');
  if(!/^[a-f0-9]{16}$/.test(keyId))throw new Error('Invalid manager key identifier');
  return targetPrefix(options)+path.posix.join(backupRoot(options.root),'docknest-recovery');
 }

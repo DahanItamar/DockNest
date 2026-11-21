@@ -116,7 +116,7 @@ One module in the browser (`web/report/`) builds every link, on the constant bas
 | Failed or recovery-required job (`job-failure.yml`) | administrators | job type, failing phase key, how a recovery-required job ended, app kind, storage type, container-count bucket, helper outcome class |
 | Storage test (`storage-failure.yml`) | administrators | protocol; error class (SFTP: a fixed class; S3: the provider code from a fixed list, else `other`) |
 | Server connection test (`server-connection.yml`) | administrators | failed check (`ssh`, `host-key`, `python`, `docker`), error class |
-| DockNest backup (`self-backup-failure.yml`) | administrators | destination type, how it ended |
+| Self Backup (`self-backup-failure.yml`) | administrators | destination type, how it ended |
 | Unexpected app error (`app-error.yml`) | administrators | page id, area, error name (for example `TypeError`) |
 | Update failure (`update-failure.yml`) | administrators | versions, outcome, result class, failed stage and phase, timeline (phase ids and relative seconds), reason code, schema, install mode, updater version |
 
@@ -124,7 +124,7 @@ Every report except Report a bug adds the DockNest version and install mode, and
 
 **Never included:** host names, IP addresses, URLs, paths, user names, emails, app or server names, request or user ids, error text, logs and stack traces. The only two exceptions are described next, and both are visible in the review dialog before anything leaves your browser.
 
-**"What happened?" prefill (2.4.1).** The job, storage, server and DockNest backup templates have a "What happened?" field. It is filled in only in these two ways:
+**"What happened?" prefill (2.4.1).** The job, storage, server and Self Backup templates have a "What happened?" field. It is filled in only in these two ways:
 
 1. *DockNest's own fixed messages.* `web/report/catalogue-data.js` is a static allow-list of messages that DockNest code throws as literals, with no interpolated value (so no name, host, path or secret can be in them). If the error EXACTLY equals one entry, the field is filled with the panel's plain explanation sentence plus that entry. The text always comes from the constants in the list, never from the server string, and anything that is not an exact match (a prefix, a different case, extra text after it) is not used. `tests/problem-reports.test.js` checks that every entry still exists in `src/` or `remote/helper/` and has no interpolation.
 2. *Any other error text, only if you tick "Include the error message".* Off by default. The text is redacted in the browser with the same rules as the update excerpt (IP addresses, emails, URLs, host names, absolute paths, key and token values, name keys such as `user=`), limited to 40 lines and 2 KiB, shown in an editable box before GitHub opens, and redacted again when the link is built. When it does not fit in the link, it is not sent and a **Copy** button is offered instead. The link builder also refuses any free text that redaction would still change. Redaction cannot recognise every private word (for example a bare person's name), so read the text before you share it.

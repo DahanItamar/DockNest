@@ -23,6 +23,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Changed
 
+- DockNest's own backup is now called **Self Backup** in the menu, page, alerts and docs. Nothing changes in how it works, and your existing settings and backups are untouched.
 - Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.

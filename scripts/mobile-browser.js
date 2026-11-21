@@ -75,7 +75,7 @@ try{
  // Card footers on phones: buttons never overlap the content above them.
  for(const width of [320,402,480]){
   await page.setViewportSize({width,height:874});
-  for(const name of ['Servers','Apps & Schedules','Storage','DockNest backup','Update Center']){
+  for(const name of ['Servers','Apps & Schedules','Storage','Self Backup','Update Center']){
    try{await navigate(name)}catch(e){await page.screenshot({path:'test-results/mobile/fail.png'});throw new Error('navigate '+name+' '+width+': '+e.message.slice(0,80))}await page.waitForTimeout(150);
    const bad=await page.evaluate(()=>{const out=[],hitTest=(a,b)=>a.left<b.right-.5&&a.right>b.left+.5&&a.top<b.bottom-.5&&a.bottom>b.top+.5;for(const footer of document.querySelectorAll('.card-footer')){const f=footer.getBoundingClientRect(),card=footer.closest('.card');if(!f.height)continue;
     if(card)for(const sibling of [...card.children].filter(c=>c!==footer&&(c.compareDocumentPosition(footer)&Node.DOCUMENT_POSITION_FOLLOWING))){const b=sibling.getBoundingClientRect();if(b.height&&b.bottom>f.top+.5)out.push('footer overlaps preceding content');}

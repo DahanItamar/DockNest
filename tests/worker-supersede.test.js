@@ -45,12 +45,12 @@ test('a superseded restore records no verification evidence and leaves the resto
  assert.equal(db.prepare("SELECT status FROM restores WHERE id='restore-z'").get().status,'recovery_required');
  assert.equal(db.prepare("SELECT COUNT(*) n FROM backup_verifications WHERE backup_id='backup-z'").get().n,0);
 });
-test('a superseded DockNest self-backup keeps the outcome recorded by the new holder',async()=>{
+test('a superseded Self Backup keeps the outcome recorded by the new holder',async()=>{
  const insert=db.prepare("INSERT INTO manager_backups(id,status,created_at,error) VALUES(?,?,?,?)");
- insert.run('kit-old','failed',at,'Worker interrupted. Previous successful DockNest backup is kept.');
+ insert.run('kit-old','failed',at,'Worker interrupted. Previous successful Self Backup is kept.');
  await executeSelfBackup({id:'kit-old',created_at:at,target_id:null});
- assert.equal(db.prepare("SELECT error FROM manager_backups WHERE id='kit-old'").get().error,'Worker interrupted. Previous successful DockNest backup is kept.');
+ assert.equal(db.prepare("SELECT error FROM manager_backups WHERE id='kit-old'").get().error,'Worker interrupted. Previous successful Self Backup is kept.');
  insert.run('kit-own','running',at,null);
  await executeSelfBackup({id:'kit-own',created_at:at,target_id:null});
- assert.match(db.prepare("SELECT status,error FROM manager_backups WHERE id='kit-own'").get().error,/DockNest backup failed/);
+ assert.match(db.prepare("SELECT status,error FROM manager_backups WHERE id='kit-own'").get().error,/Self Backup failed/);
 });
