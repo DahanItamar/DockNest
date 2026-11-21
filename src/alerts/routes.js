@@ -12,8 +12,7 @@
 // so neither the words nor the answer time say anything about the network behind the address.
 import express from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
-import { recentlyVerified, requireAdmin, requireRecentAuth } from '../auth.js';
+import { recentlyVerified, requireAdmin, requireRecentAuth, userRateLimit } from '../auth.js';
 import { EVENTS, SOURCE_KINDS, DISK_USED_PERCENT, DISK_FREE_BYTES } from './events.js';
 import { listRules, createRule, updateRule, deleteRule } from './store.js';
 import { canManageAlerts, alertSettings, setAllowPrivateNetwork, setOperatorsManage, legacyChangedSinceImport, connectionLimits } from './connections.js';
@@ -45,18 +44,9 @@ function gate(req, res, next) {
   if (canManageAlerts(req.user)) return next();
   return res.status(403).json({ error: 'Alerts are managed by an administrator.', code: 'ALERTS_ADMIN_REQUIRED' });
 }
-// Per user, not per address: people behind one proxy must not share one budget.
-function perUser(scope, limit, windowMs, sentence) {
-  return (req, res, next) => {
-    const key = `${scope}:user:${req.user.id}`, now = Date.now(), previous = db.prepare('SELECT * FROM rate_limits WHERE key=?').get(key);
-    if (previous && previous.reset_at > now && previous.attempts >= limit) { res.set('Retry-After', String(Math.ceil((previous.reset_at - now) / 1000))); return res.status(429).json({ error: sentence }); }
-    db.prepare('INSERT INTO rate_limits VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET attempts=excluded.attempts,reset_at=excluded.reset_at').run(key, previous && previous.reset_at > now ? previous.attempts + 1 : 1, previous && previous.reset_at > now ? previous.reset_at : now + windowMs);
-    next();
-  };
-}
 export const alertRateLimits = Object.freeze({ tests: 10, testWindowMs: 10 * 60_000, writes: 120, writeWindowMs: 10 * 60_000 });
-const testLimit = perUser('alert-test', alertRateLimits.tests, alertRateLimits.testWindowMs, 'Too many tests. Try again in a few minutes.');
-const writeLimit = perUser('alert-write', alertRateLimits.writes, alertRateLimits.writeWindowMs, 'Too many changes. Try again in a few minutes.');
+const testLimit = userRateLimit('alert-test', alertRateLimits.tests, alertRateLimits.testWindowMs, 'Too many tests. Try again in a few minutes.');
+const writeLimit = userRateLimit('alert-write', alertRateLimits.writes, alertRateLimits.writeWindowMs, 'Too many changes. Try again in a few minutes.');
 // A test: administrators get the answer as it comes. An operator's failure, of any kind, answers one fixed sentence at a
 // fixed time after the request arrived. An operator test still running at that time (an SMTP relay has its own 20 second
 // limit) is answered as failed then too, so a slow or silent host is never told apart from a refused one.

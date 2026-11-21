@@ -32,6 +32,7 @@ remote/
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
 │   ├── move.py             app moves: facts, deploy, compose override, nginx, cut-over steps
+│   ├── routing.py          read-only proxy routes (nginx, Nginx Proxy Manager, Caddy, Traefik) for domain checks
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
 │   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
@@ -117,6 +118,7 @@ classDiagram
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
   class maintenance { maintenance() setup_maintenance() }
   class discovery { nginx_sites() configuration_paths() }
+  class routing { proxy_routes() match_upstream() }
   class runspec { run_spec() create_args() compose_document() describe_containers() }
   class paths { classify_source() protected_paths() source_archive() }
   class staging { install_boot_recovery() cleanup_staging() }
@@ -143,6 +145,8 @@ classDiagram
   edit --> maintenance
   move --> restore
   move --> runspec
+  backup --> routing
+  routing --> discovery
   backup --> runspec
   maintenance --> net
   databases --> net

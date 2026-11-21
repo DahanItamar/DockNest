@@ -68,6 +68,13 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key='emergency_kits'").get().count, 0);
   assert.deepEqual({ ...db.prepare('SELECT version,schema_version FROM release_history WHERE version=?').get(release.version) }, { version: release.version, schema_version: schemaVersion }, 'the started API records its release');
   db.close();
+  // Domain path (migration 23): the table starts empty, and a check of the released site's domain fits its limits and
+  // foreign keys. The released code never reads it, so the rollback below restores data from before the table.
+  const domains = new DatabaseSync(state);
+  assert.equal(domains.prepare('SELECT COUNT(*) AS count FROM domain_checks').get().count, 0);
+  domains.prepare("INSERT INTO domain_checks VALUES('site.example.invalid','server','site','{}',?,'discover')").run(new Date().toISOString());
+  assert.deepEqual(domains.prepare('PRAGMA foreign_key_check(domain_checks)').all(), []);
+  domains.close();
 
   // Downgrade guard: a schema newer than this code that needs newer code (compat floor above ours) refuses to start and leaves the database alone.
   const future = new DatabaseSync(state); future.exec(`PRAGMA user_version=${schemaVersion + 1}`); future.prepare("UPDATE settings SET value=? WHERE key='schema_compat_floor'").run(String(schemaVersion + 1)); future.close();

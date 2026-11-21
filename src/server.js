@@ -49,6 +49,7 @@ import { incrementalRoutes } from './incremental-routes.js';
 import { serverCleanupRoutes } from './server-cleanup.js';
 import { restoreDecisionRoutes } from './restore-decisions.js';
 import { coverageRoutes } from './server-coverage.js';
+import { domainRoutes } from './domains/routes.js';
 import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 import { hardeningView } from './hardening.js';
 import { serverLinksView } from './server-links.js';
@@ -97,6 +98,7 @@ app.use('/api', incrementalRoutes);
 app.use('/api', serverCleanupRoutes);
 app.use('/api', restoreDecisionRoutes);
 app.use('/api', coverageRoutes);
+app.use('/api', domainRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
@@ -174,13 +176,14 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type<>'self-heal' ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
 const historyQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: historyCursor.optional() });
-// Self-heal restarts are listed in their own history (GET /api/self-heal/events), not among site jobs.
-const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at', only: "type<>'self-heal'" }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
+// Self-heal restarts are listed in their own history (GET /api/self-heal/events) and domain checks on the domain path
+// (GET /api/domains), not among site jobs.
+const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at', only: "type NOT IN ('self-heal','domain-check')" }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
 for (const [name, { table, time, only }] of Object.entries(histories)) app.get('/api/' + name, (req, res) => {
   const { limit, cursor } = historyQuery.parse(req.query);
   const filters = [only, cursor && `(${time},id)<(?,?)`].filter(Boolean);
