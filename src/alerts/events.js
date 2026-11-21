@@ -5,7 +5,7 @@ import { classify } from './addresses.js';
 import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'launch.needs_you', 'selfbackup.kit_check_failed', 'config.changed''runbook.outdated']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'launch.needs_you', 'selfbackup.kit_check_failed', 'config.changed', 'runbook.outdated']);
 // Sent to every channel whatever the rules say (docs/emergency-kit.md): a new emergency key decides who can open future
 // kits, so no rule can silence it. Not in EVENTS, so no rule can select or drop it.
 export const EVERY_CHANNEL_EVENTS = Object.freeze(['emergency.key_changed']);

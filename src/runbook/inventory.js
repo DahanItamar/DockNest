@@ -9,6 +9,8 @@ import { selfBackupConfig } from '../self-backup.js';
 import { emergencyStatus } from '../emergency/keys.js';
 import { activeEmergencyKey, emergencyKits } from '../emergency/kits.js';
 import { appsWithLoginNotes, openLoginNotes } from './login-notes.js';
+import { serverLinksView } from '../server-links.js';
+import { keysView } from '../keys-safe/padlock.js';
 
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 // "sftp:<target id>:/path" or "s3:<target id>:key": the destination and the path inside it. A local or legacy path has none.
@@ -53,24 +55,30 @@ function newestBackup(siteId) {
     id: row.id, capturedAt: row.captured_at, location, fileName: location ? location.path.split('/').at(-1) : null,
     chain: chain?.every(Boolean) ? chain : null,
     containers: (manifest.containers ?? []).map(container => ({ name: String(container.name ?? '').replace(/^\//, ''), image: container.image, mounts: (container.mounts ?? []).map(mount => ({ type: mount.type, destination: mount.destination })) })),
-    // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date and source.
-    verified: evidence ? { at: evidence.checkedAt, source: evidence.sourceRole === 'copy' ? 'copy' : 'main' } : null,
+    // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. Restore tests read
+    // the main backup.
+    verified: evidence ? { at: evidence.checkedAt } : null,
   };
 }
 
-// Linked apps (docs/linked-apps.md), where this DockNest has them: the links of every server, else none.
-async function appLinks(servers) {
-  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='server_app_links'").get()) return [];
-  try {
-    const { serverLinksView } = await import('../server-links.js');
-    return servers.flatMap(server => serverLinksView(server.id)?.links ?? []);
-  } catch { return []; }
+// Linked apps (docs/linked-apps.md): the links of every server from its last scan.
+const appLinks = servers => servers.flatMap(server => serverLinksView(server.id).links ?? []);
+
+// Keys safe (docs/keys-safe.md): which app keys the newest backup holds, and the known gaps. Names and reasons only,
+// never a fingerprint.
+function appKeys(siteId) {
+  const view = keysView(siteId), name = key => (key.app ? `${key.name} (${key.app})` : key.name);
+  return {
+    keys: { inBackup: view.keys.filter(key => key.status === 'in-backup' || key.status === 'verified').length, verified: view.keys.filter(key => key.status === 'verified').length, total: view.keys.length },
+    keyGaps: [
+      ...view.keys.filter(key => key.status === 'missing').map(key => `the key ${name(key)} is not in the newest backup. ${key.reason}`),
+      ...view.keys.filter(key => key.status === 'changed').map(key => `the key ${name(key)} changed after the newest backup. Make a new backup.`),
+      ...(view.changed.length ? ['its Compose, env or settings files changed since they were marked known-good. Check them before you restore.'] : []),
+    ],
+  };
 }
 
-// Keys safe (docs/adr-3.0.0-keys-safe.md) records which keys a backup left out; until it is part of DockNest, no gap is known.
-const keyGaps = () => [];
-
-export async function loadInventory({ logins = false } = {}) {
+export function loadInventory({ logins = false } = {}) {
   const servers = db.prepare('SELECT id,name,host,port,note FROM servers ORDER BY created_at,id').all();
   const serverById = new Map(servers.map(server => [server.id, server]));
   const noted = appsWithLoginNotes(), notes = logins ? openLoginNotes() : new Map();
@@ -87,7 +95,7 @@ export async function loadInventory({ logins = false } = {}) {
       copyTargetIds: db.prepare('SELECT target_id FROM site_storage_copies WHERE site_id=? ORDER BY target_id').all(site.id).map(row => row.target_id),
       schedule: policy ? { enabled: Boolean(policy.enabled), schedule: policy.schedule, timezone: policy.timezone } : null,
       lastTest: test ? { result: test.result, finishedAt: test.finished_at } : null,
-      backup: newestBackup(site.id), keyGaps: keyGaps(),
+      backup: newestBackup(site.id), ...appKeys(site.id),
       hasLoginNote: noted.has(site.id), ...(logins && notes.has(site.id) ? { loginNote: notes.get(site.id) } : {}),
     };
   });
@@ -96,7 +104,7 @@ export async function loadInventory({ logins = false } = {}) {
   // The newest emergency kit of the active split on each destination (docs/emergency-kit.md), next to its offline tool.
   const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => locationOf(item.path)).filter(Boolean) : [];
   return {
-    servers, apps, links: await appLinks(servers), defaultTarget,
+    servers, apps, links: appLinks(servers), defaultTarget,
     storage: db.prepare('SELECT * FROM storage_targets ORDER BY created_at,id').all().map(row => storageTarget(row, logins)),
     selfBackup: { schedule: selfBackup ? { enabled: Boolean(selfBackup.enabled), schedule: selfBackup.schedule, timezone: selfBackup.timezone } : null, kit: kit ? { location: locationOf(kit.path), finishedAt: kit.finished_at } : null, emergencyKits: emergencyKitLocations },
     emergency: emergencyStatus(), notes: runbookState().notes,

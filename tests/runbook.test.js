@@ -23,7 +23,7 @@ const { db, id } = await import('../src/db.js');
 const { digest, seal } = await import('../src/crypto.js');
 const { recordVerification, recordTestVerification } = await import('../src/recovery-evidence.js');
 const { saveSelfBackupSettings, enqueueSelfBackup, claimSelfBackup, executeSelfBackup } = await import('../src/self-backup.js');
-const { splitEmergencyKit, retireEmergencyKit } = await import('../src/emergency/keys.js');
+const { splitEmergencyKit } = await import('../src/emergency/keys.js');
 const { noteInventoryChange } = await import('../src/runbook/state.js');
 const { loadInventory } = await import('../src/runbook/inventory.js');
 const { buildGuide, restoreOrder } = await import('../src/runbook/guide.js');
@@ -177,6 +177,21 @@ test('out of date: categories of what changed, the Overview line, and runbook.ou
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM runbook_state').all()).includes('198.51.100.9'), 'only hashes of the inventory are kept');
 });
 
+test('keys safe: how many app keys the newest backup holds, and each missing key as a known gap, never a fingerprint', async () => {
+  const fingerprint = 'a1b2c3d4'.repeat(4);
+  db.prepare("INSERT INTO app_keys(site_id,rule_id,location,fingerprint,in_backup,first_seen_at) VALUES(?,'laravel-app-key','env:shop-web',?,?,'2026-01-01T00:00:00.000Z')").run(shop, fingerprint, shopBackup.backupId);
+  db.prepare("INSERT INTO app_keys(site_id,rule_id,location,fingerprint,in_backup,first_seen_at) VALUES(?,'n8n-encryption-key','env:blog',?,NULL,'2026-01-01T00:00:00.000Z')").run(blog, fingerprint);
+  const guide = buildGuide(await loadInventory(), { version: '3.0.0' }), page = name => guide.apps.find(item => item.name === name);
+  assert.equal(page('Shop').keys, 'App keys: 1 of 1 in the newest backup.');
+  assert.deepEqual(page('Shop').keyGaps, []);
+  assert.equal(page('בלוג').keys, 'App keys: 0 of 1 in the newest backup.');
+  assert.match(page('בלוג').keyGaps[0], /^the key .+ is not in the newest backup\. /);
+  const text = readText((await pdf({ apps: allApps })).bytes);
+  assert.ok(text.includes('App keys: 1 of 1 in the newest backup.') && text.includes('Known gap: the key'));
+  assert.ok(!text.includes(fingerprint.slice(0, 8)) && !JSON.stringify(guide).includes(fingerprint.slice(0, 8)), 'never a fingerprint');
+  db.prepare('DELETE FROM app_keys').run();
+});
+
 test('the restore order puts the app that owns a shared database first', () => {
   const apps = [{ id: 'a', name: 'Shop', containers: ['shop-web'] }, { id: 'b', name: 'Database', containers: ['main-db'] }, { id: 'c', name: 'Docs', containers: [] }];
   assert.deepEqual(restoreOrder(apps, [{ appIds: ['a', 'b'], kind: 'database', via: 'main-db' }]).map(item => [item.name, item.reason]), [
@@ -196,7 +211,7 @@ test('the emergency kit section says K of N and the labels only when the split i
   const text = readText((await pdf({ apps: [shop] })).bytes);
   assert.ok(text.includes('any 2 of these 3 people') && text.includes('Lawyer'));
   for (const part of split.parts) assert.ok(!text.includes(part.words.split(' ').slice(0, 3).join(' ')), 'never a part');
-  retireEmergencyKit(administrator);
+  db.prepare('UPDATE emergency_keys SET retired_at=? WHERE retired_at IS NULL').run(now());
   assert.equal(buildGuide(await loadInventory(), { version: '3.0.0' }).fleet.kit.summary, 'One kit, opened with your recovery passphrase.');
 });
 

@@ -17,10 +17,12 @@ const docsLink = (version, file) => `https://github.com/DahanItamar/DockNest/blo
 const step = (text, command, include) => (include.commands && command ? { text, command } : { text });
 
 export function statusText(app) {
-  if (app.backup?.verified) return `Verified: a restore test passed on ${formatDate(app.backup.verified.at)}, from the ${app.backup.verified.source === 'copy' ? 'off-site copy' : 'main backup'}.`;
+  if (app.backup?.verified) return `Verified: a restore test passed on ${formatDate(app.backup.verified.at)}, from the main backup.`;
   return app.backup ? 'Backed up, not tested yet.' : 'Not backed up yet.';
 }
 const testText = test => (!test ? 'No restore test yet.' : test.result === 'passed' ? `Passed on ${formatDate(test.finishedAt)}.` : test.result === 'failed' ? `Failed on ${formatDate(test.finishedAt)}.` : `Could not run on ${formatDate(test.finishedAt)}.`);
+// Keys safe: how many of the app's keys the newest backup holds (docs/keys-safe.md).
+const keysText = keys => (keys.total ? `App keys: ${keys.inBackup} of ${keys.total} in the newest backup${keys.verified ? `, ${keys.verified} verified in a restore test` : ''}.` : null);
 const scheduleText = schedule => (schedule?.enabled ? `Backed up on a schedule: ${schedule.schedule} (${schedule.timezone}).` : 'Backed up only when someone starts a backup.');
 
 // Linked apps that own a shared database come first, then the apps that use them, then the rest.
@@ -75,7 +77,7 @@ function appPage(app, inventory, { include, version, reveal }) {
     lastBackup: backup ? formatDate(backup.capturedAt, { time: true }) : null,
     ...(include.tests ? { lastTest: testText(app.lastTest) } : {}),
     ...(include.schedules ? { schedule: scheduleText(app.schedule) } : {}),
-    keyGaps: app.keyGaps, hasLoginNote: app.hasLoginNote,
+    keys: keysText(app.keys), keyGaps: app.keyGaps, hasLoginNote: app.hasLoginNote,
     ...(include.logins && app.loginNote ? { loginNote: app.loginNote } : {}),
     works: { steps: works, ...(include.commands ? { command: checkCommands({ app }) } : {}) },
     down: ['Open DockNest and sign in.', `Open Apps and choose ${app.name}.`, 'Read its newest job under Jobs. It says what went wrong.', `Check under Servers that ${server.name} answers.`, 'If the server is lost, restore the app on a new server with the steps below.'],
@@ -157,6 +159,7 @@ export function guideBlocks(guide) {
     blocks.push({ type: 'heading', text: app.name, newPage: true }, { type: 'paragraph', text: app.about }, { type: 'paragraph', text: app.statusText, tone: app.status === 'verified' ? undefined : 'warning' });
     if (app.lastBackup) blocks.push({ type: 'paragraph', text: `Last good backup: ${app.lastBackup}.` });
     if (app.schedule) blocks.push({ type: 'paragraph', text: app.schedule });
+    if (app.keys) blocks.push({ type: 'paragraph', text: app.keys });
     for (const gap of app.keyGaps) blocks.push({ type: 'paragraph', text: `Known gap: ${gap}`, tone: 'warning' });
     if (app.loginNote) blocks.push({ type: 'heading', level: 2, text: 'How to sign in to it' }, { type: 'paragraph', text: app.loginNote, tone: 'warning' });
     blocks.push({ type: 'heading', level: 2, text: 'How to tell it works' }, list(app.works.steps));
