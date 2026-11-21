@@ -21,6 +21,7 @@ import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES
 import { resolveInvocation, storedInvocation, allowedRoots, invocationHash, helperInvocation } from './invocation.js';
 import { issueToken, takeToken } from './tokens.js';
 import { reviewDiff, inlineSecretKeys } from './diff.js';
+import { confirmKnownGood, safeEditItems } from '../keys-safe/scan.js';
 
 // Seconds; tests shrink them with `editTiming.scale`.
 export const editTiming = { scale: 1, pollSeconds: 10, retrySeconds: [30, 60, 120, 300, 600, 900], callSeconds: { 'edit-load': 120, 'edit-check': 180, 'edit-prepare': 1200, 'edit-apply': 600, 'edit-poll': 120, 'edit-rollback': 900, 'edit-finish': 300, 'edit-status': 120, discover: 120 } };
@@ -346,6 +347,8 @@ const RUNNERS = {
       if (p.outcome === 'rolled_back') setStep(edit.id, 'roll_back', 'done', p.dataRestored ? 'Previous version and data back.' : 'Previous version back.');
       conclude(edit, p.outcome, { failedStep: p.failedStep, reason: p.reasonPending });
     });
+    // Keys safe (docs/keys-safe.md): what an applied edit wrote is known-good. Best effort: the edit is done either way.
+    if (p.outcome === 'applied') await confirmKnownGood(edit.site_id, { source: 'safe-edit', actor: 'edit:' + edit.id, only: safeEditItems(p.keysTrust), remote: (server, request) => editTransport.remote(server, request) }).catch(() => {});
   },
   // After a restart or an unreachable server during prepare/apply: the journal on the server decides.
   async recover(edit, ctx) {
@@ -570,7 +573,10 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }, { un
   let keepUndo = undoFiles;
   if (Buffer.byteLength(JSON.stringify({ files: undoFiles }), 'utf8') > UNDO_MAX_BYTES) { keepUndo = []; warnings.push({ code: 'NO_UNDO', message: NO_UNDO }); }
   const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })), undoFiles: keepUndo };
-  const meta = { dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged, undoOf: undo?.edit.id }), imageChanged, undoOf: undo?.edit.id ?? null };
+  // Keys safe (docs/keys-safe.md): what this edit may mark known-good once applied. The full list of written files (the
+  // changes record can be truncated) and the services whose config changed, so they are recreated.
+  const keysTrust = { written: [...new Set([...hashes.map(item => item.path), ...envChanges.map(entry => entry.file).filter(file => file !== 'container')])], recreated: ctx.resolved.kind === 'compose' ? [...new Set(changed.map(path => /^services\.([^.[\]]+)/.exec(path)?.[1]).filter(Boolean))] : loaded.services.map(service => service.name), project: ctx.base.invocation?.project ?? null };
+  const meta = { keysTrust, dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged, undoOf: undo?.edit.id }), imageChanged, undoOf: undo?.edit.id ?? null };
   const { token, expiresAt } = issueToken({ userId, sessionHash, siteId, hashes, candidate, meta });
   return { token, expiresAt: iso(expiresAt), diff, summary, warnings };
 }
@@ -594,7 +600,7 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
       // An undo goes through only while the edit it reverts is still the newest applied one (the files' hashes are checked on the server).
       if (meta.undoOf && !undoStateOf(loadEdit(meta.undoOf))?.available) throw httpError(409, 'REVIEW_EXPIRED', 'The app changed since this review. Review the undo again.');
       db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,changes,progress,time_limit_seconds,data_rollback,created_by,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)")
-        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
+        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, keysTrust: meta.keysTrust, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
       for (const step of STEPS) db.prepare("INSERT INTO site_edit_steps(edit_id,step,state) VALUES(?,?,'pending')").run(editId, step);
       const details = { editId, step: 'backup', targetServerId: site.server_id, invocation: meta.invocation, allowedRoots: meta.allowedRoots, services: meta.services, payload: seal(JSON.stringify(candidate)) };
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-edit','edit_waiting','backup',?,?)").run(jobId, siteId, at, JSON.stringify(details));

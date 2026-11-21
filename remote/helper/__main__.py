@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     VERSION, diagnostic, docker, emit, inspect)
+from .keys import (
+    key_context, key_scan, key_scan_operation)
 from .backup import (
     backup_plan, capture, public_plan, readiness)
 from .incremental import (
@@ -82,6 +84,24 @@ def stop_after_stdin(read=None,limit=180):
         previous=current;time.sleep(2)
     os._exit(1)
 def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
+def readiness_keys(req):
+    """The app's key scan beside a readiness answer (docs/keys-safe.md); a scan that fails never changes readiness."""
+    context=key_context(req);cfg=req['config']
+    if context is None or cfg.get('kind')=='static':return {}
+    try:return {'keyScan':key_scan(context,cfg,inspect(cfg['containers']))}
+    except Exception:return {}
+def discover_keys(req,containers):
+    """Key scans of the apps DockNest names in a discover request (`keys.apps`: id and config), from the containers
+    discovery inspected. An app whose containers are not all found gets no scan."""
+    context=key_context(req);apps=(req.get('keys') or {}).get('apps')
+    if context is None or not isinstance(apps,list):return {}
+    by_ref={ref:c for c in containers for ref in (c['Id'],c['Name'].lstrip('/'))};scans={}
+    for app in apps[:200]:
+        try:
+            cfg=app['config'];selected=[by_ref[ref] for ref in cfg['containers']]
+            if selected:scans[str(app['id'])]=key_scan(context,cfg,selected)
+        except Exception:continue
+    return {'keyScans':scans}
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
     # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
@@ -113,7 +133,7 @@ def main(req):
     op=req['operation']
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
-    if op=='readiness':emit(result=readiness(req['config']))
+    if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
@@ -124,9 +144,10 @@ def main(req):
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
+        emit(result={**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='describe-containers':describe_containers(req)
+    elif op=='key-scan':key_scan_operation(req)
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

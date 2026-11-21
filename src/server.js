@@ -52,6 +52,8 @@ import { coverageRoutes } from './server-coverage.js';
 import { domainRoutes } from './domains/routes.js';
 import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 import { hardeningView } from './hardening.js';
+import { keysSafeRoutes } from './keys-safe/routes.js';
+import { keysView } from './keys-safe/padlock.js';
 import { serverLinksView } from './server-links.js';
 await clearInterruptedExports();
 
@@ -98,6 +100,7 @@ app.use('/api', incrementalRoutes);
 app.use('/api', serverCleanupRoutes);
 app.use('/api', restoreDecisionRoutes);
 app.use('/api', coverageRoutes);
+app.use('/api', keysSafeRoutes);
 app.use('/api', domainRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
@@ -112,6 +115,9 @@ const view = (row, verifications) => {
   for (const [name, value] of Object.entries(parsed)) converted[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
   if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=verifications instanceof Map&&verifications.has(converted.id)?verifications.get(converted.id):backupVerification(converted.id);}
   if (converted.manifest?.downtimeSeconds != null) converted.downtimeMs = converted.manifest.downtimeSeconds * 1000;
+  // Keys safe: a backup's key proof (full fingerprints and the key that made them) stays on the server; the padlock
+  // shows 8 characters of a fingerprint.
+  if (converted.manifest && typeof converted.manifest === 'object' && ['keys', 'keysCheck', 'keysServerId'].some(name => name in converted.manifest)) { const { keys: _keys, keysCheck: _check, keysServerId: _server, ...manifest } = converted.manifest; converted.manifest = manifest; }
   if (converted.detail) converted.details = converted.detail;
   if (converted.target) converted.targetId = converted.target;
   return converted;
@@ -176,7 +182,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), keys: keysView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
@@ -242,7 +248,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
   } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
-  const result = await discover(getServer(req.params.id), { record: req.user.role === 'admin' });
+  const result = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
   const containers = Array.isArray(result) ? result : result.containers || [];
   res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });

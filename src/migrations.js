@@ -301,6 +301,14 @@ CREATE INDEX IF NOT EXISTS kit_checks_created ON kit_checks(created_at);
 CREATE TABLE IF NOT EXISTS emergency_keys (id TEXT PRIMARY KEY,public_key TEXT NOT NULL CHECK (length(public_key) = 43),digest TEXT NOT NULL UNIQUE CHECK (length(digest) = 64),identifier INTEGER NOT NULL CHECK (identifier BETWEEN 0 AND 32767),k INTEGER NOT NULL CHECK (k BETWEEN 2 AND 16),n INTEGER NOT NULL CHECK (n BETWEEN k AND 16),labels TEXT NOT NULL CHECK (length(labels) <= 2048),created_by TEXT NOT NULL,created_at TEXT NOT NULL,retired_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS emergency_keys_active ON emergency_keys((1)) WHERE retired_at IS NULL;
 `;
+// Keys safe (docs/keys-safe.md, "Data"). Additive only: two new tables, no rows, nothing altered, so 2.16 code ignores
+// them. Rows hold rule ids, locations (`env:<container>` or `file:<path>`) and keyed fingerprints (32 hex characters),
+// never a key value. `in_backup` and `verified_test_id` name a backup and a restore test without a foreign key, so
+// retention and test clean-up never depend on them. A config_fingerprints item is a file path or `<rule>@<location>`.
+export const keysSafeSchema = `
+CREATE TABLE IF NOT EXISTS app_keys (site_id TEXT NOT NULL REFERENCES sites(id),rule_id TEXT NOT NULL,location TEXT NOT NULL CHECK (length(location) <= 4200),fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 32 AND fingerprint NOT GLOB '*[^0-9a-f]*'),in_backup TEXT,verified_test_id TEXT,first_seen_at TEXT NOT NULL,changed_at TEXT,PRIMARY KEY (site_id,rule_id,location));
+CREATE TABLE IF NOT EXISTS config_fingerprints (site_id TEXT NOT NULL REFERENCES sites(id),item TEXT NOT NULL CHECK (length(item) <= 4300),fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 32 AND fingerprint NOT GLOB '*[^0-9a-f]*'),known_good TEXT NOT NULL,known_good_source TEXT NOT NULL CHECK (known_good_source IN ('baseline','safe-edit','restore','admin')),known_good_at TEXT NOT NULL,first_seen_changed_at TEXT,alerted_fingerprint TEXT,PRIMARY KEY (site_id,item));
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -436,6 +444,8 @@ export const migrations = [
   // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Provisional number: the
   // next free one; renumbered at merge if another migration lands first.
   { version: 23, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
+  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them.
+  { version: 24, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

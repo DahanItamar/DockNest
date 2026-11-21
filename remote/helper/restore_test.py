@@ -7,8 +7,10 @@ from .common import (
     NOFOLLOW, atomic_json, docker, emit, hardening_args, inspect, mount_field, run, verify_hardening)
 from .databases import (
     cached_sqlite_file_proof, data_checks, restart_services)
+from .keys import (
+    env_map, key_context, read_small, restored_keys)
 from .backup import (
-    tree_digest)
+    archive_scan, tree_digest)
 from .discovery import (
     temporary_mounts, tmpfs_argument)
 from .restore import (
@@ -449,9 +451,34 @@ def restore_test_restore(req):
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
     if any(containers[i]['State'].get('Running') and not containers[j]['State'].get('Running') for i,j in peers.items()):raise TestOutcome('couldnt_run','A container shares the network of one that was stopped in the backup.',checks)
+    keys=restored_test_keys(req,manifest,unpacked,sources,created)
     state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet,'egress':egress}
     save_state(d,state)
-    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks})
+    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks,**({'keys':keys} if keys is not None else {})})
+def restored_test_keys(req,manifest,unpacked,sources,created):
+    """Fingerprints of the app keys DockNest expects (docs/keys-safe.md) in the restored copy: each container's env as
+    created from its snapshot image, configuration files from their restored archives, key files from the restored
+    mounts. None when the request has no keys or they cannot be read; DockNest compares the fingerprints."""
+    context=key_context(req);expected=(req.get('keys') or {}).get('expect')
+    if context is None or not isinstance(expected,list):return None
+    containers=manifest['containers'];names=[(c.get('Name') or '').lstrip('/') for c in containers];files=manifest.get('configurationFiles',[]);envs={}
+    def env_of(service):
+        if service not in names:return None
+        i=names.index(service)
+        if i not in envs:envs[i]=env_map(inspect([created[i]])[0])
+        return envs[i]
+    def file_of(path):
+        if path in files:
+            name=posixpath.basename(path)
+            with open(unpacked/('config-%d.tar'%files.index(path)),'rb') as handle:return archive_scan(handle,[name],stream=False)[1].get(name)
+        for c in containers:
+            for m in c['Mounts']:
+                source=m['Source'];restored=sources.get((m['Type'],source))
+                if restored is not None and (path==source or path.startswith(source.rstrip('/')+'/')):
+                    return read_small(str(restored) if path==source else os.path.join(str(restored),posixpath.relpath(path,source)),str(restored))
+        return None
+    try:return restored_keys(context,expected,env_of,file_of)
+    except Exception:return None  # no comparison means no "verified"; the test itself goes on
 def cgroup_counter(cid,filename,key):
     for base in ['/sys/fs/cgroup/system.slice/docker-%s.scope'%cid,'/sys/fs/cgroup/docker/%s'%cid]:
         try:

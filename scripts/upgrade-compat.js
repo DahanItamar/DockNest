@@ -66,6 +66,10 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare("SELECT status FROM manager_backups WHERE id='kit'").get().status, 'completed');
   for (const table of ['kit_checks', 'emergency_keys']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, `${table} starts empty`);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key='emergency_kits'").get().count, 0);
+  // Keys safe (migration 24): the tables arrive empty, so the first scan of each app is a silent baseline and an upgrade
+  // raises no config.changed alert.
+  for (const table of ['app_keys', 'config_fingerprints']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, `${table} starts empty`);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action='config.changed'").get().count, 0, 'no configuration alert after the upgrade');
   assert.deepEqual({ ...db.prepare('SELECT version,schema_version FROM release_history WHERE version=?').get(release.version) }, { version: release.version, schema_version: schemaVersion }, 'the started API records its release');
   db.close();
   // Domain path (migration 23): the table starts empty, and a check of the released site's domain fits its limits and

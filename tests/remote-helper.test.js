@@ -89,6 +89,11 @@ test('launch steps run git under env -i with a pinned address, keep the deploy k
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for launch helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('app keys: env, ini, php-array and file detection, the proof from packaged bytes, restored fingerprints, and no key value on stdout',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_keys.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for key helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('restore check finds host schedules, Docker objects and files outside the app folder without exposing commands',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_restore_gaps.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for restore check helper verification');

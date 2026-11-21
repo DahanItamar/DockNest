@@ -6,7 +6,7 @@
 # These imports exist only so editors and linters can resolve names.
 # </build:header>
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno,hmac,base64,configparser
 VERSION=1
 
 EVENT_STREAM=sys.stdout

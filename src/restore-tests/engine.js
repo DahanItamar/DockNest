@@ -20,6 +20,8 @@ import { validateLimits, cpuProblem } from './limits.js';
 import { heldBy } from './hold.js';
 import { cleanupHeld } from '../cleanup-hold.js';
 import { launchHeld } from '../launches/hold.js';
+import { provenKeys, restoredKeysRequest, compareRestoredKeys, KEY_CHANGED_CHECK } from '../keys-safe/restored.js';
+import { markVerified } from '../keys-safe/store.js';
 
 export const STEPS = Object.freeze(['check_space', 'copy_backup', 'restore_copy', 'start_containers', 'check_health', 'clean_up']);
 export const LABELS = Object.freeze({ check_space: 'Check space', copy_backup: 'Copy backup', restore_copy: 'Restore copy', start_containers: 'Start containers', check_health: 'Check health', clean_up: 'Clean up' });
@@ -49,7 +51,7 @@ export function plainReason(text, fallback = 'The test could not finish.') {
   value = value.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[address]').replace(/(?:\/[\w.@%+-]+){2,}\/?/g, '[path]');
   return value.length > 300 ? value.slice(0, 297) + '...' : value;
 }
-const CHECK_KINDS = new Set(['package', 'authentic', 'running', 'health', 'stable', 'database', 'sqlite', 'http', 'static-files']);
+const CHECK_KINDS = new Set(['package', 'authentic', 'running', 'health', 'stable', 'database', 'sqlite', 'http', 'static-files', 'keys']);
 const CHECK_STATUS = new Set(['passed', 'failed', 'skipped', 'not-configured']);
 function cleanChecks(list) {
   const checks = [];
@@ -149,6 +151,8 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
     const cleanup = db.prepare('SELECT cleanup FROM restore_tests WHERE id=?').get(test.id).cleanup;
     if (cleanup === 'done') setStep(test.id, 'clean_up', 'skipped', 'Nothing reached the test server.');
     if (['passed', 'failed'].includes(result) && test.backup_id) for (const [kind, evidence] of evidenceFor(test, result, failedStep, all)) recordTestVerification(test.backup_id, kind, evidence, test.job_id);
+    // Keys safe (docs/keys-safe.md): only a passed test whose restored keys matched may say "Verified in a restore test".
+    if (result === 'passed' && test.progress.keysVerified?.length) markVerified(test.site_id, test.id, test.progress.keysVerified);
     audit('worker', 'restore_test.' + result, test.site_id, { test: test.id, ...(failedStep ? { step: failedStep } : {}), server: test.server_id });
     return true;
   });
@@ -332,15 +336,23 @@ const STEP_RUNNERS = {
     advanceTo(test, 'copy_backup', null, { plaintextChecksum: upload.plaintextChecksum, ...(upload.chain ? { chain: upload.chain } : {}) });
   },
   async restore_copy(test, signal) {
-    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test) }, signal);
+    const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id)?.manifest), proven = proof.comparable ? proof.keys : [];
+    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test), ...(proven.length ? { keys: restoredKeysRequest(proven, proof.serverId) } : {}) }, signal);
     if (!verdict(test, 'restore_copy', answer)) return;
+    let keysVerified = [];
+    if (proof.keys.length && !proof.comparable && answer.kind !== 'static') addChecks(test, [KEY_CHANGED_CHECK]);
+    if (proven.length && answer.kind !== 'static') {
+      const { check, verified, failed } = compareRestoredKeys(proven, answer.keys);
+      if (failed) { conclude(loadTest(test.id), 'failed', { step: 'restore_copy', reason: 'An app key in the restored copy is missing or differs from the backup, so the restored app could not read its own data.', checks: [check] }); return; }
+      addChecks(test, [check]); keysVerified = verified;
+    }
     if (answer.kind === 'static') {
       advanceTo(test, 'restore_copy', null, { kind: 'static' });
       transaction(() => { for (const step of ['start_containers', 'check_health']) setStep(test.id, step, 'skipped', 'A static site has no containers.'); });
       conclude(loadTest(test.id), 'passed');
       return;
     }
-    advanceTo(test, 'restore_copy', `${answer.containers} container${answer.containers === 1 ? '' : 's'}, ${answer.networkMode === 'internet' ? 'with internet, mail blocked' : 'no internet'}`, { kind: 'docker', running: answer.running, internet: answer.networkMode === 'internet' });
+    advanceTo(test, 'restore_copy', `${answer.containers} container${answer.containers === 1 ? '' : 's'}, ${answer.networkMode === 'internet' ? 'with internet, mail blocked' : 'no internet'}`, { kind: 'docker', running: answer.running, internet: answer.networkMode === 'internet', ...(keysVerified.length ? { keysVerified } : {}) });
   },
   async start_containers(test, signal) {
     const answer = await call(test, { operation: 'restore-test-run', phase: 'start', testId: test.id }, signal);

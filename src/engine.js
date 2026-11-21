@@ -25,6 +25,8 @@ import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 import { takeCertificates } from './alerts/certificates.js';
+import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
+import { recordScan, cleanScan } from './keys-safe/store.js';
 import { takeRouting, withoutRouting } from './domains/check.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
@@ -33,14 +35,24 @@ const now=()=>new Date().toISOString();
 // facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
 // other roles only read.
 export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
-export const discover=async(server,{record=false}={})=>{
+// App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
+// configuration files of the apps on that server. The scans are recorded here and never returned.
+const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);}catch(error){console.error(`Key scan of an app could not be recorded: ${error.code??error.name}`);}};
+// An app with work that may be changing it (a backup, restore, move, Safe Edit or restore test) is not scanned now, so
+// its own work never reads as a change made outside DockNest.
+export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
+const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
+export const discover=async(server,{record=false,scanKeys=false}={})=>{
+  const apps=scanKeys?keyApps(server.id):[];
   // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
-  const answer=await transport.remote(server,{operation:'discover'});
+  let answer=await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})}),scans=null;
+  if(answer&&typeof answer==='object'&&!Array.isArray(answer)&&'keyScans' in answer)({keyScans:scans,...answer}=answer);
   const result=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
   if(record){
     try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
     try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}
   }
+  for(const app of apps)if(scans?.[app.id])recordKeyScan(app.id,scans[app.id]);
   return result;
 };
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
@@ -63,7 +75,8 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const result=takeCertificates({serverId:server.id,siteId},takeRouting({serverId:server.id},await transport.remote(server,{operation:'readiness',config:site.config}),'readiness'));
+ const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},takeRouting({serverId:server.id},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})}),'readiness'));
+ if(keyScan)recordKeyScan(siteId,keyScan);
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
@@ -401,18 +414,18 @@ async function executeRestoreJob(job){
   let result;
   const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint};
   if(!chained){
-   const staging=await remote(server,{operation:'prepare-restore',job:job.id});
+   const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id});
    stage(job.id,'transferring');
-   await sendPackage(server,chain[0],staging.remotePath,{upload:uploadStream});
+   await sendPackage(server,chain[0],staging.remotePath,{upload:transport.uploadStream});
    // Only invoke extraction after the complete GCM-authenticated stream finishes.
-   stage(job.id,'restoring');result=await remote(server,restoreRequest);
+   stage(job.id,'restoring');result=await transport.remote(server,restoreRequest);
   }else{
-   const staging=await remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
+   const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
    const paths=chainPaths(staging,chain.length);
    stage(job.id,'transferring');
-   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:uploadStream});
+   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:transport.uploadStream});
    // The helper checks every package's checksum and link again before it extracts the full package, then each increment.
-   stage(job.id,'restoring');result=await remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
+   stage(job.id,'restoring');result=await transport.remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
   }
   // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
   if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
@@ -494,7 +507,7 @@ export async function executeJob(job){
   // Without the option the request and the package are exactly as before.
   const decision=decideCapture({site,plan,directory,jobDetails});
   // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{})};
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -513,6 +526,9 @@ export async function executeJob(job){
   }
   captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
   result=takeCertificates({serverId:site.server_id,siteId:site.id},takeRouting({serverId:site.server_id},result,'backup'));
+  // The key proof (docs/keys-safe.md): rule ids, locations and fingerprints only, kept with the backup so a restore test
+  // can compare the restored copy with what this package holds.
+  const keyProof=cleanScan(result.keys);
   try{recordHardening(site.id,result.hardening);}catch{/* A grade is never worth failing a backup. */}
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
@@ -522,6 +538,8 @@ export async function executeJob(job){
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
+  // keysCheck: which fingerprint key made the proof, so a restore test after a key change does not compare across keys.
+  if(keyProof){manifest.keys=keyProof.keys;manifest.keysServerId=server.id;manifest.keysCheck=fingerprintKeyCheck(server.id);}
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
   // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
   const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});
@@ -551,6 +569,7 @@ export async function executeJob(job){
   // Its snapshot files are not committed, so the next backup of the site is full.
   if(!owned){if(chain)setForceFull(site.id,FORCE.uncommitted);console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size,...(chain?{backupKind:chain.backupKind}:{})});
+  if(keyProof)recordKeyScan(site.id,keyProof,{backup:{id:backupId,backupKind:chain?.backupKind??'full',chainId:chain?.chain?.id??null}});
   if(chain){
    if(chain.incremental.fallback)audit('worker','backup.incremental_fallback',site.id,{job:job.id,backupId,reason:chain.incremental.fallback});
    clearForceFull(site.id,decision.force);

@@ -43,6 +43,8 @@ const catalogue = Object.freeze({
   'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this app.',
   // Launches (docs/launch-site.md): the teardown of a failed launch did not finish, so the server stays held.
   'launch.needs_you': 'A failed launch could not remove everything it made. Open DockNest and press Try again.',
+  // Keys safe (docs/keys-safe.md). Never a file name, a value or a diff.
+  'config.changed': 'The Compose or env files changed outside Safe Edit. Open DockNest to review them.',
   // Self Backup and the emergency kit (docs/emergency-kit.md). The code is the kit check's reason; never a key or an error.
   'selfbackup.kit_check_failed': 'The newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.',
   'selfbackup.kit_check_failed:key_mismatch': 'The newest recovery kit holds a different master key than this DockNest. Run a new Self Backup and check again.',
