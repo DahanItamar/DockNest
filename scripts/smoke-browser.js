@@ -290,10 +290,10 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
   await page.route('**/api/storage-targets/connect',route=>{
     const body=route.request().postDataJSON();
-    assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,1e12);
+    assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,undefined);
     assert.equal(body.host,'u000000.your-storagebox.de');assert.equal(body.username,'u000000');
     assert.ok(!body.privateKey);
-    storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:body.capacityBytes,hasCredential:true}];
+    storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:1e12,hasCredential:true}];
     return route.fulfill({status:201,json:storageFixture[0]});
   });
   await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
