@@ -16,7 +16,7 @@ from .net import (
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
-    configuration_paths, discovered_volumes, hardening_report, inspect_each, link_report, list_project_files, nginx_sites, user_networks, web_hints)
+    configuration_paths, discovered_volumes, hardening_report, inspect_each, link_report, list_project_files, nginx_sites, stack_managers, user_networks, web_hints)
 from .runspec import (
     describe_containers)
 from .restore import (
@@ -143,8 +143,8 @@ def main(req):
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
-        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs)
-        emit(result={**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
+        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs);managers=stack_managers(cs)
+        emit(result={**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='describe-containers':describe_containers(req)
     elif op=='key-scan':key_scan_operation(req)

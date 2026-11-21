@@ -104,6 +104,11 @@ test('linked apps facts: Compose project and depends_on, user-defined networks, 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for linked apps helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Portainer and Dockge stacks map to their Compose folder on the host and are marked with their manager',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_stack_managers.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for stack manager helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('a plain container gets one run spec: docker create flags for Move, a Compose file and env files for its backup, a preview without env values',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_runspec.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for run spec helper verification');
