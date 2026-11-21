@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db, audit } from '../db.js';
 import { validateLimits, LIMIT_DEFAULTS } from './limits.js';
 import { testTransport } from './engine.js';
+import { siteCopyTargets, targetSummary } from '../site-storage.js';
 
 export const CADENCE_DAYS = Object.freeze({ daily: 1, weekly: 7, monthly: 30 });
 // Tests run this long after the site's next scheduled backup, so they normally check a fresh backup.
@@ -23,13 +24,16 @@ export const settingsInput = z.object({
   allowLiveServer: z.boolean().default(false), allowInternet: z.boolean().default(false),
   timeLimitMinutes: z.number().default(LIMIT_DEFAULTS.timeLimitMinutes), memoryMb: z.number().default(LIMIT_DEFAULTS.memoryMb), cpus: z.number().default(LIMIT_DEFAULTS.cpus),
   probe: probeSchema.nullable().default(null),
+  // Testing a copy (docs/restore-tests.md, "Testing a copy"): null tests the main package. Left out (a client from
+  // before 3.0.0), the saved choice is kept.
+  sourceTargetId: z.string().min(1).max(64).nullable().optional(),
 }).strict();
 
 const parseProbe = text => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
 export const settingsRow = siteId => db.prepare('SELECT * FROM restore_test_settings WHERE site_id=?').get(siteId) ?? null;
 export function settingsView(row) {
-  if (!row) return { enabled: false, cadence: 'weekly', serverId: null, allowLiveServer: false, allowInternet: false, ...LIMIT_DEFAULTS, probe: null, nextDueAt: null, skipReason: null };
-  return { enabled: row.enabled === 1, cadence: row.cadence, serverId: row.server_id, allowLiveServer: row.allow_live_server === 1, allowInternet: row.allow_internet === 1, timeLimitMinutes: row.time_limit_minutes, memoryMb: row.memory_mb, cpus: row.cpus, probe: parseProbe(row.probe), nextDueAt: row.next_due_at, skipReason: row.skip_reason };
+  if (!row) return { enabled: false, cadence: 'weekly', serverId: null, allowLiveServer: false, allowInternet: false, ...LIMIT_DEFAULTS, probe: null, sourceTargetId: null, nextDueAt: null, skipReason: null };
+  return { enabled: row.enabled === 1, cadence: row.cadence, serverId: row.server_id, allowLiveServer: row.allow_live_server === 1, allowInternet: row.allow_internet === 1, timeLimitMinutes: row.time_limit_minutes, memoryMb: row.memory_mb, cpus: row.cpus, probe: parseProbe(row.probe), sourceTargetId: row.source_target_id ?? null, nextDueAt: row.next_due_at, skipReason: row.skip_reason };
 }
 
 // The CPU count DockNest knows for a server: from its facts, recorded by "Check space" (src/restore-tests/engine.js).
@@ -79,14 +83,18 @@ export function saveSettings(site, input, { actor, recentlyVerified }) {
   if (cpus && limits.cpus > cpus) throw httpError(409, 'CPUS_ABOVE_SERVER', `The test server has ${cpus} CPU${cpus === 1 ? '' : 's'}, so it cannot give each container ${limits.cpus}. Lower the CPU limit.`);
   const probe = data.probe ? JSON.stringify(data.probe) : null;
   if (probe && probe.length > 512) throw httpError(400, 'INVALID', 'The web check settings are too long.');
+  // One of the app's copy destinations, or the saved one kept while its destination still exists.
+  const sourceTargetId = data.sourceTargetId === undefined ? before.sourceTargetId : data.sourceTargetId;
+  if (sourceTargetId && !(siteCopyTargets(site.id).some(row => row.target_id === sourceTargetId) || (sourceTargetId === before.sourceTargetId && targetSummary(sourceTargetId))))
+    throw httpError(400, 'INVALID', 'Choose one of this app’s copy destinations, or the main storage.', { field: 'sourceTargetId' });
   const nowMs = testTransport.now();
   // A new due time when tests are turned on or the cadence changes; none while off.
   const nextDueAt = !data.enabled ? null : before.enabled && before.cadence === data.cadence && previous?.next_due_at ? previous.next_due_at : firstDueAt(site.id, data.cadence, nowMs);
-  const next = { enabled: data.enabled, cadence: data.cadence, serverId: server?.id ?? null, allowLiveServer, allowInternet: data.allowInternet, ...limits, probe: data.probe };
+  const next = { enabled: data.enabled, cadence: data.cadence, serverId: server?.id ?? null, allowLiveServer, allowInternet: data.allowInternet, ...limits, probe: data.probe, sourceTargetId: sourceTargetId ?? null };
   const changed = Object.keys(next).filter(field => JSON.stringify(next[field]) !== JSON.stringify(before[field]));
-  db.prepare(`INSERT INTO restore_test_settings(site_id,enabled,cadence,server_id,allow_live_server,allow_internet,time_limit_minutes,memory_mb,cpus,probe,next_due_at,skip_reason,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)
-    ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,cadence=excluded.cadence,server_id=excluded.server_id,allow_live_server=excluded.allow_live_server,allow_internet=excluded.allow_internet,time_limit_minutes=excluded.time_limit_minutes,memory_mb=excluded.memory_mb,cpus=excluded.cpus,probe=excluded.probe,next_due_at=excluded.next_due_at,skip_reason=NULL,updated_at=excluded.updated_at,updated_by=excluded.updated_by`)
-    .run(site.id, data.enabled ? 1 : 0, data.cadence, next.serverId, allowLiveServer ? 1 : 0, data.allowInternet ? 1 : 0, limits.timeLimitMinutes, limits.memoryMb, limits.cpus, probe, nextDueAt, iso(nowMs), actor);
+  db.prepare(`INSERT INTO restore_test_settings(site_id,enabled,cadence,server_id,allow_live_server,allow_internet,time_limit_minutes,memory_mb,cpus,probe,source_target_id,next_due_at,skip_reason,updated_at,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)
+    ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,cadence=excluded.cadence,server_id=excluded.server_id,allow_live_server=excluded.allow_live_server,allow_internet=excluded.allow_internet,time_limit_minutes=excluded.time_limit_minutes,memory_mb=excluded.memory_mb,cpus=excluded.cpus,probe=excluded.probe,source_target_id=excluded.source_target_id,next_due_at=excluded.next_due_at,skip_reason=NULL,updated_at=excluded.updated_at,updated_by=excluded.updated_by`)
+    .run(site.id, data.enabled ? 1 : 0, data.cadence, next.serverId, allowLiveServer ? 1 : 0, data.allowInternet ? 1 : 0, limits.timeLimitMinutes, limits.memoryMb, limits.cpus, probe, next.sourceTargetId, nextDueAt, iso(nowMs), actor);
   // Field names only, plus the two risky switches: settings hold no secrets, and values stay out of the audit log.
   audit(actor, 'restore_test.settings', site.id, { changed, ...(changed.includes('allowLiveServer') ? { allowLiveServer } : {}), ...(changed.includes('allowInternet') ? { allowInternet: data.allowInternet } : {}) });
   return settingsView(settingsRow(site.id));

@@ -317,6 +317,13 @@ export const runbookStateSchema = `
 CREATE TABLE IF NOT EXISTS runbook_state (id INTEGER PRIMARY KEY CHECK (id = 1),digest TEXT CHECK (digest IS NULL OR length(digest) = 64),parts TEXT CHECK (parts IS NULL OR length(parts) <= 1048576),made_at TEXT,made_by TEXT CHECK (made_by IS NULL OR length(made_by) <= 64),notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000));
 CREATE TABLE IF NOT EXISTS app_login_notes (site_id TEXT PRIMARY KEY REFERENCES sites(id),sealed TEXT NOT NULL CHECK (length(sealed) <= 16384),updated_at TEXT NOT NULL,updated_by TEXT NOT NULL CHECK (length(updated_by) <= 64));
 `;
+// Restore test source (docs/restore-tests.md, "Testing a copy"): the copy destination a site's restore tests read from.
+// Additive only: one nullable column. NULL, the value of every existing row, means the main package, exactly as before,
+// and older releases never read or write the column.
+function restoreTestSource(db) {
+  const existing = new Set(db.prepare('PRAGMA table_info(restore_test_settings)').all().map(column => column.name));
+  if (!existing.has('source_target_id')) db.exec('ALTER TABLE restore_test_settings ADD COLUMN source_target_id TEXT CHECK (source_target_id IS NULL OR length(source_target_id) <= 64)');
+}
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -456,6 +463,7 @@ export const migrations = [
   { version: 24, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
   // Recovery Guide (docs/recovery-guide.md): two new tables, so 2.16 code ignores them.
   { version: 25, name: 'runbook-state', compatible: true, up: db => db.exec(runbookStateSchema) },
+  { version: 26, name: 'restore-test-source', compatible: true, up: restoreTestSource },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

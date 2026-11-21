@@ -12,8 +12,9 @@
 import { helperSource } from '../helper-bundle.js';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
-import { transport, uploadBackupTo, jobRunners } from '../engine.js';
-import { chainSize } from '../incremental.js';
+import { transport, uploadBackupTo, jobRunners, restoreSources } from '../engine.js';
+import { chainSize, loadChain, verifyChainLinks } from '../incremental.js';
+import { targetSummary } from '../site-storage.js';
 import { recordTestVerification, recordVerification } from '../recovery-evidence.js';
 import { secretValue } from '../moves/state.js';
 import { validateLimits, cpuProblem } from './limits.js';
@@ -84,11 +85,48 @@ const stepSeconds = (testId, names) => names.reduce((sum, name) => {
 
 // ---------- creating a test ----------
 // The newest verified backup that retention is not removing. (The scheduler and "Run test now" call this; PR C.)
-export function latestTestableBackup(siteId) {
+// With `sourceTargetId` (testing a copy): the newest backup with a verified copy on that destination.
+export function latestTestableBackup(siteId, sourceTargetId = null) {
+  if (sourceTargetId) return db.prepare("SELECT b.* FROM backups b JOIN backup_copies c ON c.backup_id=b.id AND c.target_id=? AND c.status='verified' AND c.delete_state IS NULL WHERE b.site_id=? AND NOT EXISTS (SELECT 1 FROM retention_operations r WHERE r.backup_id=b.id) ORDER BY b.captured_at DESC,b.id DESC LIMIT 1").get(sourceTargetId, siteId) ?? null;
   return db.prepare('SELECT * FROM backups b WHERE b.site_id=? AND b.verified=1 AND NOT EXISTS (SELECT 1 FROM retention_operations r WHERE r.backup_id=b.id) ORDER BY b.captured_at DESC,b.id DESC LIMIT 1').get(siteId) ?? null;
 }
+// The backup a new test checks: the one asked for, or the newest testable one. Throws the contract's 409s.
+export function testableBackup(siteId, backupId = null, sourceTargetId = null) {
+  if (sourceTargetId && !targetSummary(sourceTargetId)) throw httpError(409, 'SOURCE_UNAVAILABLE', 'The copy storage chosen for restore tests was removed. Choose another one.');
+  // A copy can be tested while the main package is unverified or gone; whether every package is on that storage is
+  // checked by Check space and Copy backup, which end the test as "couldn't run".
+  const backup = backupId ? db.prepare(`SELECT * FROM backups WHERE id=? AND site_id=?${sourceTargetId ? '' : ' AND verified=1'}`).get(backupId, siteId) : latestTestableBackup(siteId, sourceTargetId);
+  if (!backup && sourceTargetId && !backupId) throw httpError(409, 'NO_VERIFIED_COPY', `Not tested: no verified copy on ${targetSummary(sourceTargetId).name} yet.`);
+  if (!backup || db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backup.id)) throw httpError(409, 'NO_VERIFIED_BACKUP', 'Not tested: no verified backup yet.');
+  return backup;
+}
+
+// ---------- testing a copy (docs/restore-tests.md, "Testing a copy") ----------
+// Fail closed: a test from a copy reads every package of the chain from that storage, or it does not run. It never
+// falls back to the main package, so a pass always means the copy itself restores.
+const NO_FALLBACK = 'It never falls back to the main storage.';
+const storageName = targetId => targetSummary(targetId)?.name ?? 'the chosen storage';
+const verifiedOn = (backup, targetId) => restoreSources(backup).some(source => source.targetId === targetId && source.status === 'verified' && source.path);
+// Before anything reaches the test server: the backup and each package it builds on have a verified copy there.
+// A broken chain itself is the backup's fault, not the storage's: Copy backup reports it as a failed test.
+export function copyChainProblem(backupId, targetId) {
+  if (!targetSummary(targetId)) return 'The copy storage chosen for this test was removed, so the test did not run. Choose another one in the restore test settings.';
+  let members;
+  try { members = verifyChainLinks(loadChain(backupId)); } catch { return null; }
+  const name = storageName(targetId);
+  for (const member of members) {
+    if (verifiedOn(member, targetId)) continue;
+    return member.id === backupId ? `This backup has no verified copy on ${name}, so the test did not run. ${NO_FALLBACK}` : `Backup ${member.id}, which this backup builds on, has no verified copy on ${name}, so the test did not run. ${NO_FALLBACK}`;
+  }
+  return null;
+}
+const copyUnavailableReason = (error, targetId) => error.own
+  ? `The copy on ${storageName(targetId)} could not be read or did not pass authentication, so the test did not run. ${NO_FALLBACK}`
+  : `Backup ${error.backupId}, which this backup builds on, could not be read from ${storageName(targetId)} or did not pass authentication, so the test did not run. ${NO_FALLBACK}`;
+// What the test read, for the result: the main package or the named copy (names and roles only, never paths).
+const sourceRecord = source => source ? { role: source.role === 'copy' ? 'copy' : 'main', targetId: source.targetId ? String(source.targetId).slice(0, 64) : null, name: String(source.name ?? '').slice(0, 80) } : null;
 export const needsExternalStorage = manifest => (manifest?.excludedPaths || manifest?.backupPlan?.coverage?.excludedPaths || []).some(item => item?.requiredForRestore);
-export function createRestoreTest({ siteId, serverId, backupId = null, trigger = 'manual', limits = {}, internet = false, liveServer = false, probe = null, actor }) {
+export function createRestoreTest({ siteId, serverId, backupId = null, trigger = 'manual', limits = {}, internet = false, liveServer = false, probe = null, sourceTargetId = null, actor }) {
   if (!['schedule', 'manual'].includes(trigger)) throw httpError(400, 'INVALID', 'Unknown trigger.');
   const checked = validateLimits(limits);
   const site = db.prepare('SELECT * FROM sites WHERE id=?').get(siteId);
@@ -97,19 +135,18 @@ export function createRestoreTest({ siteId, serverId, backupId = null, trigger =
   const target = server(serverId);
   if (!target) throw httpError(409, 'NO_TEST_SERVER', 'Choose a test server first.');
   if (target.id === site.server_id && !liveServer) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'Testing on the live server needs the live-server opt-in.');
-  const backup = backupId ? db.prepare('SELECT * FROM backups WHERE id=? AND site_id=? AND verified=1').get(backupId, siteId) : latestTestableBackup(siteId);
-  if (!backup || db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backup.id)) throw httpError(409, 'NO_VERIFIED_BACKUP', 'Not tested: no verified backup yet.');
+  const backup = testableBackup(siteId, backupId, sourceTargetId);
   const manifest = JSON.parse(backup.manifest || '{}');
   if (needsExternalStorage(manifest)) throw httpError(409, 'EXTERNAL_STORAGE', 'This app needs external storage that a restore test cannot attach.');
   if (probe !== null && manifest.kind === 'static') throw httpError(409, 'PROBE_STATIC', 'A static site has no container for a web check.');
   const testId = id(), at = iso(clock());
-  const record = { ...checked, internet: internet === true, liveServer: target.id === site.server_id, ...(probe ? { probe } : {}) };
+  const record = { ...checked, internet: internet === true, liveServer: target.id === site.server_id, ...(probe ? { probe } : {}), ...(sourceTargetId ? { sourceTargetId } : {}) };
   try {
     transaction(() => {
       db.prepare("INSERT INTO restore_tests(id,site_id,backup_id,backup_captured_at,server_id,trigger,limits,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
         .run(testId, siteId, backup.id, backup.captured_at, target.id, trigger, JSON.stringify(record), actor, at);
       for (const step of STEPS) db.prepare("INSERT INTO restore_test_steps(test_id,step,state) VALUES(?,?,'pending')").run(testId, step);
-      audit(actor, 'restore_test.enqueue', siteId, { test: testId, trigger, backup: backup.id, server: target.id });
+      audit(actor, 'restore_test.enqueue', siteId, { test: testId, trigger, backup: backup.id, server: target.id, ...(sourceTargetId ? { sourceTargetId } : {}) });
     });
   } catch (error) {
     if (/UNIQUE constraint failed: restore_tests\.site_id/.test(error.message)) throw httpError(409, 'TEST_ACTIVE', 'This app already has a restore test that has not finished.');
@@ -125,7 +162,7 @@ export function cancelRestoreTest(testId, actor) {
 
 // ---------- verdicts and evidence ----------
 function evidenceFor(test, result, failedStep, checks) {
-  const base = { testId: test.id, internet: !!test.limits.internet, checks: checks.length };
+  const base = { testId: test.id, internet: !!test.limits.internet, checks: checks.length, ...(test.limits.sourceTargetId ? { sourceTargetId: test.limits.sourceTargetId } : {}) };
   const evidence = [];
   const authentic = checks.find(item => item.kind === 'authentic');
   // A failed authentication is recorded at once like a scrub does (copy_backup), so only a pass is added here.
@@ -299,6 +336,8 @@ const STEP_RUNNERS = {
   async check_space(test, signal) {
     const backup = test.backup_id && db.prepare('SELECT * FROM backups WHERE id=?').get(test.backup_id);
     if (!backup) { conclude(test, 'couldnt_run', { step: 'check_space', reason: 'The backup was removed before the test started.' }); return; }
+    const missing = test.limits.sourceTargetId ? copyChainProblem(backup.id, test.limits.sourceTargetId) : null;
+    if (missing) { conclude(test, 'couldnt_run', { step: 'check_space', reason: missing }); return; }
     const manifest = JSON.parse(backup.manifest || '{}');
     // An increment restores its whole chain, so the space needed is the chain's sum (docs/incremental-backups.md).
     const need = { bytes: chainSize(backup.id), kind: manifest.kind === 'static' ? 'static' : 'docker', containers: manifest.containers?.length || 1, grouped: (manifest.containers?.length || 0) > 1, architecture: manifest.kind === 'static' ? null : manifest.architecture ?? null, liveServer: !!test.limits.liveServer };
@@ -314,10 +353,16 @@ const STEP_RUNNERS = {
     const target = server(test.server_id);
     // An increment asks for room for its whole chain (`chainLength`) and the helper answers one path per package.
     const prepare = ({ chainLength } = {}) => call(test, { operation: 'restore-test-prepare', testId: test.id, deadline: Date.parse(test.deadline_at) / 1000, grace: Math.min(3600, Math.max(60, Math.round(testTiming.cleanupSeconds * testTiming.scale))), reaper: reaperSource, ...(chainLength ? { chainLength } : {}) }, signal);
+    const sourceTargetId = test.limits.sourceTargetId ?? null;
     let upload;
-    try { upload = await testTransport.upload(target, test.backup_id, null, { prepare, signal }); }
+    try { upload = await testTransport.upload(target, test.backup_id, null, { prepare, signal, ...(sourceTargetId ? { sourceTargetId } : {}) }); }
     catch (error) {
       if (signal.aborted) throw error;
+      // Testing a copy: a package missing from that storage or failing there says nothing about the main package.
+      if (sourceTargetId && error?.code === 'copy_unavailable') {
+        conclude(loadTest(test.id), 'couldnt_run', { step: 'copy_backup', reason: copyUnavailableReason(error, sourceTargetId) });
+        return;
+      }
       // A package the tested backup builds on is missing or damaged: the backup cannot be restored as it is.
       if (error?.code === 'chain_broken') {
         conclude(loadTest(test.id), 'failed', { step: 'copy_backup', reason: error.message, checks: [{ name: 'Backup authentic', kind: 'authentic', target: null, status: 'failed', detail: null }] });
@@ -337,7 +382,8 @@ const STEP_RUNNERS = {
       return;
     }
     addChecks(test, [{ name: 'Backup authentic', kind: 'authentic', target: null, status: 'passed', detail: 'AES-256-GCM and SHA256' }]);
-    advanceTo(test, 'copy_backup', null, { plaintextChecksum: upload.plaintextChecksum, ...(upload.chain ? { chain: upload.chain } : {}) });
+    const source = sourceRecord(upload.source);
+    advanceTo(test, 'copy_backup', source?.role === 'copy' ? `From the copy on ${source.name}` : null, { plaintextChecksum: upload.plaintextChecksum, ...(upload.chain ? { chain: upload.chain } : {}), ...(source ? { source } : {}) });
   },
   async restore_copy(test, signal) {
     const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id)?.manifest), proven = proof.comparable ? proof.keys : [];

@@ -183,8 +183,20 @@ async function authenticatedSource(backup,sourceTargetId=null){
 // from its first readable source after every chain link was checked. Nothing is sent before all of them pass. A backup
 // outside a chain is one package, read exactly as before. With `sourceTargetId` the chosen copy is used for the backup
 // itself; the packages it builds on prefer that destination and fall back to any verified source (the bytes are the same).
-async function authenticatedChain(backup,sourceTargetId=null){
+// `strict` (a restore test from a copy, docs/restore-tests.md "Testing a copy"): every package is read from that
+// destination only, and one that is not there, not verified or does not authenticate stops it with `copy_unavailable`.
+export class CopyUnavailableError extends Error{
+ constructor(backupId,own){super(own?'The chosen copy could not be read or did not authenticate':`Backup ${backupId}, which this backup builds on, has no readable verified copy on the chosen storage`);this.code='copy_unavailable';this.backupId=backupId;this.own=own;}
+}
+async function authenticatedChain(backup,sourceTargetId=null,{strict=false}={}){
  const members=verifyChainLinks(loadChain(backup.id));
+ const strictly=async member=>{
+  const own=member.id===backup.id;let found;
+  try{found=await authenticatedSource(member,sourceTargetId);}catch{throw new CopyUnavailableError(member.id,own);}
+  if(inChain(members)&&found.size!==member.size)throw new CopyUnavailableError(member.id,own);
+  return {member,...found};
+ };
+ if(strict&&sourceTargetId){const chain=[];for(const member of members)chain.push(await strictly(member));return chain;}
  if(!inChain(members))return [{member:members[0],...await authenticatedSource(backup,sourceTargetId)}];
  const chain=[];
  for(const member of members){
@@ -379,11 +391,12 @@ export async function discardIncrementalState(siteId,{server=null}={}){
 // Restore tests pass `prepare` (their own journalled staging) and `signal` (cancel and time limit stop the transfer).
 // An increment sends its whole chain (full first) after every package and link passed: `prepare` (or prepare-restore)
 // gets `chainLength` and answers `remotePaths`, and the result carries `chain` for the helper's own link check.
-export async function uploadBackupTo(server,backupId,jobId,{prepare,signal}={}){
+// `sourceTargetId` (a restore test from a copy): every package comes from that destination or nothing is sent.
+export async function uploadBackupTo(server,backupId,jobId,{prepare,signal,sourceTargetId=null}={}){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  if(!backup||!(backup.verified||db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(backupId)))throw new Error('Verified backup not found');
  // The main copy, or a verified copy when the main one is missing or fails authentication.
- const chain=await authenticatedChain(backup),last=chain.at(-1);
+ const chain=await authenticatedChain(backup,sourceTargetId,{strict:Boolean(sourceTargetId)}),last=chain.at(-1);
  if(!inChain(chain.map(item=>item.member))){
   const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
   await sendPackage(server,last,staging.remotePath,{signal});
