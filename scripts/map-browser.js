@@ -719,6 +719,8 @@ async function alertsFlow(scheme){
  alertsDb.needReauth=true;await d.getByRole('button',{name:'Save'}).click();await d.getByText('Please confirm it is you').waitFor();
  await shot(page,scheme,'1440-alerts-reauth');
  await d.getByLabel('Password').fill('pw');await d.getByLabel('Authenticator code').fill('123456');await d.getByRole('button',{name:'Verify and continue'}).click();await d.waitFor({state:'detached'});
+ // The dialog closes first; the panel picks the new Connection once its list has reloaded (web/map/Alerts.jsx onSaved).
+ await combo(panel,'Connection').filter({hasText:/My WhatsApp/}).waitFor({timeout:10000}).catch(()=>{});
  assert.match(await combo(panel,'Connection').textContent(),/My WhatsApp/,'the new Connection is chosen');
  await panel.getByLabel('Name',{exact:true}).fill('Ops WhatsApp');
  await panel.getByRole('button',{name:'Save'}).click();await panel.waitFor({state:'detached'});
