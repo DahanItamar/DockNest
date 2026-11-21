@@ -128,8 +128,10 @@ class RedisEngine(DatabaseEngine):
     def validate(self,service,c):
         cid=c['Id'];server=redis_info(cid,service,'server');replication=redis_info(cid,service,'replication');persistence=redis_info(cid,service,'persistence')
         # Valkey keeps redis_version at its compatibility level and reports its own number as valkey_version.
-        flavor='valkey' if 'valkey_version' in server else 'redis'
-        native=server.get('valkey_version') if flavor=='valkey' else server.get('redis_version')
+        flavor='valkey' if 'valkey_version' in server or server.get('server_name')=='valkey' or service['version'].startswith('8.') else 'redis'
+        # The binary may report either number (Valkey answers to both names), so either one identifies the same server.
+        reported=[server.get('valkey_version'),server.get('redis_version')] if flavor=='valkey' else [server.get('redis_version')]
+        native=service['version'] if service['version'] in reported or (flavor=='valkey' and 'valkey_version' not in server) else None
         if not re.fullmatch(REDIS_SUPPORTED[flavor],service['version']):raise ValueError('Redis native capture is limited to tested Redis 7 and Valkey 8 versions')
         if native!=service['version'] or server.get('redis_mode')!='standalone':raise ValueError('Redis native version/mode does not match the standalone contract')
         if replication.get('role')!='master' or replication.get('connected_slaves')!='0':raise ValueError('Redis replication requires a reviewed adapter')
