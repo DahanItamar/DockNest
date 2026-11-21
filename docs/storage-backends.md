@@ -32,6 +32,99 @@ Recovery after a crash re-authenticates whichever file exists before adopting it
 - Publication is an atomic SFTP rename. SFTP cannot sync directories, so whether a rename survives power loss depends on the storage server.
 - Host keys are pinned by SHA256 fingerprint. Capacity comes from `statvfs@openssh.com` when the server offers it.
 
+### Append-only SFTP (since 3.0.0)
+
+An append-only SFTP account lets DockNest add new backups but not delete or change them. If ransomware or an intruder
+takes over the DockNest server, it holds the same SFTP credential, so it can't delete or overwrite the backups either.
+The storage server enforces this, not DockNest.
+
+**Detection.** Every connection test (adding a destination, **Test**, **Use for backups**) checks the write mode. The
+test writes a throwaway probe file under a fresh random name in the DockNest-owned folder `<root>/.docknest-probe/`,
+created read-only (0400). It renames the file, reads it back and writes a second probe. Then it tries each way of
+changing the first probe: opening it for writing, changing its permissions (`setstat`), renaming the second probe over it
+(`rename` and, when offered, `posix-rename@openssh.com`). Last, it tries to delete the probe. Files outside the probe
+folder are never opened, renamed or removed.
+
+| Result | Meaning |
+| --- | --- |
+| Normal | The probe can be deleted. DockNest deletes the probe files and works as before. |
+| Append-only | The delete is refused with "permission denied" or "unsupported", and every way to change the file is refused too. The destination shows **Append-only**. |
+| Refused (test fails) | Deletes are refused but a file can still be changed, the publishing rename is refused, or the delete failed for another reason. Nothing is saved, so DockNest never claims a protection it did not verify. |
+
+Probe files that the storage keeps are listed for the owner. They are never retried. When adding a destination fails,
+the error names the probe folder. Remove those files on the server.
+
+Upgrade safety: destinations saved by an earlier release have no write-mode record and stay **normal**. Only a test
+sets or clears append-only. The mode is stored in `storage_target_settings` (kind `sftp`, no migration). Earlier
+releases ignore it.
+
+**Publishing.** Rename-based publishing is kept. DockNest writes `<name>.partial` with exclusive create, syncs it,
+authenticates it, then renames it to the final name. The SFTP v3 rename that DockNest uses never replaces an existing
+file. OpenSSH implements it as link plus unlink, and a request denylist does not block the internal unlink. So a file
+at a final name is always complete and checked, and nothing already published can be replaced. DockNest did not build a
+separate no-rename publishing path, for three reasons:
+
+- Every writer (backups, copies, Self Backup kits, emergency kits, Recovery Guide copies, storage migration and journal
+  recovery) relies on one rule: a file at its final name is finished.
+- A second path would split that rule.
+- Writing straight to the final name would leave a half-written file under that name after a crash.
+
+Servers that refuse rename are therefore refused at test time. Examples are `chattr +a` folders and rrsync-style
+wrappers. On an append-only destination, new files are created 0400, so the account can't open them for writing again.
+
+**Deleting and retention.** DockNest never sends a delete to an append-only destination.
+
+- **Retention.** An aged-out backup stays listed and restorable, and it still counts toward the space used. It is
+  marked **kept by the storage** and audited once (`retention.kept_by_storage`, or `backup.copy_kept_by_storage` for a
+  copy). It is never retried and never reported as freed. The Storage page shows "N backups (size) kept by the storage
+  past retention". The **By destination** report adds a **Kept by storage** column.
+- **Other kept files.** Older recovery kits, emergency kits and Recovery Guide copies stay recorded. Interrupted
+  `.partial` files are listed as leftovers.
+- **Emergency tool.** A changed emergency tool is published beside the old one as `emergency-open-<sha256 prefix>.js`.
+- **Copy deletion.** "Delete these copies" is refused with `kept_by_storage`.
+- **Restores.** Restores, restore tests, downloads, scrubs, copies from or to the destination, incremental chains and
+  capacity checks only read or add files, so they work unchanged.
+
+**Mode changes are detected again, never assumed.**
+
+- **A normal destination starts refusing deletes.** If a normal destination answers a delete with "permission denied",
+  DockNest records the refusal (`storage.delete_refused`) and keeps everything there from then on. The card asks the
+  owner to test the destination again.
+- **An append-only destination allows deletes again.** DockNest keeps skipping deletes until a test finds it normal. That
+  test releases what retention kept, so the next retention run deletes it. It also tries each listed leftover file once.
+- **A test fails.** The previously detected mode is unchanged.
+
+**Example server setup (OpenSSH).** This uses a dedicated account, here `docknest`, whose files live in its own folder:
+
+```
+# /etc/ssh/sshd_config on backup.example.com
+Match User docknest
+    ForceCommand internal-sftp -P remove,rmdir,posix-rename,setstat,fsetstat,lsetstat,hardlink,symlink
+    AllowTcpForwarding no
+    X11Forwarding no
+```
+
+Reload sshd, then add the destination in DockNest with this account. Notes:
+
+- **Do not use root.** The account must not be root, because root can write to read-only files.
+- **Protect older files.** Files written before the destination was append-only keep mode 0600. To protect them, run
+  `chmod -R a-w` on the server.
+- **Optional hardening.** You can add `ChrootDirectory` and a disk quota. A root-owned job on the storage server can
+  also add `chattr +i` to finished files.
+- **Expiring old backups.** Do it on the server, with an account DockNest does not hold. For example, a root cron job can
+  delete `*.enc` files older than your retention in the DockNest folder. Then test the destination in DockNest. Backups
+  whose files are gone fail the startup size check and are marked for review, so delete them in DockNest too.
+
+**Threat model.**
+
+| Protects against | Does not protect against |
+| --- | --- |
+| Ransomware or an intruder on the DockNest server deleting, truncating, renaming over or re-encrypting backups that are already stored. | Someone holding the storage server's root, or another account that can delete in that folder. |
+| A bug or wrong retention setting in DockNest deleting backups. | Filling the disk with new files (denial of service). Use a quota. |
+| A stolen SFTP credential being used to destroy history. | An attacker renaming a package to another free name. OpenSSH allows that rename, which hides the file but keeps its bytes. DockNest checks every package's SHA-256 and authentication tag before a restore, so a moved or substituted file is detected, never trusted. |
+| | New backups made after the compromise. The attacker controls what DockNest writes from then on. |
+| | Files written before append-only was set up, unless they were made read-only on the server. |
+
 ## S3-compatible storage
 
 ### Connection
@@ -148,6 +241,8 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   those backups.
 
 ## Verification status
+
+- **Append-only SFTP:** `tests/append-only-sftp.test.js` covers detection (normal, append-only, broken, refused rename, failing delete), 0400 publication, retention and copy retention keeping files, a normal destination that starts refusing deletes, re-testing, the API, Self Backup and emergency kits against the loopback fixture. The Linux integration suite (`scripts/integration-append-only.js`) runs real OpenSSH `internal-sftp -P` accounts: detection, a real backup, retention keeping the aged-out package while OpenSSH refuses delete and rename-over, and a second-host restore from the kept package.
 
 - **Unit tests:** `tests/s3-storage.test.js` runs against `tests/s3-fixture.js`, an in-process fake S3 endpoint on loopback. The fake checks SigV4 signatures and payload hashes independently. The tests cover multipart streaming and abort, ranged reads, part copies, journal publication and reconciliation, the connect and test API without credential disclosure, and Object Lock application, deletion refusal and expiry.
 - **S3 integration job (CI, required):** `npm run test:s3` (`scripts/s3-integration.js`) runs in the `s3-integration` workflow job against a MinIO-compatible server with throwaway credentials. Upstream MinIO images and binaries are archived, so the job pins the maintained Pigsty fork (`pgsty/minio`) by digest. It covers bucket creation with Object Lock, a 40 MiB streamed multipart upload, ranged reads, conditional copy publication (existing destination and stale ETag refused), the readiness probe with and without Object Lock, retention applied on publish, refused deletes, and removal after a short lock expires. It is a required check and does not cover virtual-hosted addressing.
