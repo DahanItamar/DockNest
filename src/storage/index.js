@@ -13,6 +13,8 @@ import { backupLayout,backupRoot } from '../backup-layout.js';
 import * as local from './local.js';
 import * as sftp from './sftp.js';
 import * as s3 from './s3.js';
+import { writeMode,keptError,markDeletesRefused,recordLeftovers } from './write-mode.js';
+export { keptByStorage,KEPT_BY_STORAGE,KEPT_UNTIL_RETEST } from './write-mode.js';
 
 export const adapters={sftp,s3};
 const schemes=Object.keys(adapters);
@@ -31,7 +33,14 @@ export function targetOptions(id){
   const {accessKeyId,secretAccessKey}=JSON.parse(open(row.credential));
   return {id:row.id,mode:'s3',name:row.name,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,capacity:null,accessKeyId,secretAccessKey};
  }
- return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
+ const {writeMode:mode,keepsFiles}=writeMode(row.id);
+ return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,writeMode:mode,keepsFiles,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
+}
+// True when `file` is on a destination that keeps what it stores (append-only, or it refused a delete since its last
+// test): callers skip the delete instead of trying it again.
+export function storageKeepsFiles(file){
+ if(!isRemoteFile(file))return false;
+ try{return Boolean(parseRemote(file).options.keepsFiles);}catch{return false;}
 }
 export function activeStorage(){
  const selected=db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get();
@@ -86,8 +95,32 @@ export const statFile=route('statFile');
 export const openRead=route('openRead');
 export const openWrite=route('openWrite');
 export const syncFile=route('syncFile');
-export const removeFile=route('removeFile');
-export const removeDirectory=route('removeDirectory');
+// Append-only destinations (src/storage/write-mode.js): a delete never reaches the server. A missing file still reports
+// missing (callers treat that as gone); a present one throws KEPT_BY_STORAGE and nothing counts as freed. A normal SFTP
+// destination that answers a delete with "permission denied" is marked for a new test and treated the same way.
+// Kept .partial files are listed as leftovers.
+const temporaryName=value=>/\.(?:migration-)?partial$/.test(value);
+export async function removeFile(file){
+ if(!isRemoteFile(file))return local.removeFile(file);
+ const {adapter,options,value}=parseRemote(file);
+ if(options.keepsFiles){
+  await adapter.statFile(options,value);
+  if(temporaryName(value))recordLeftovers(options.id,[file]);
+  throw keptError();
+ }
+ try{return await adapter.removeFile(options,value);}
+ catch(error){
+  if(options.mode!=='sftp'||options.id==='env'||error?.code!==3)throw error;
+  markDeletesRefused(options.id);if(temporaryName(value))recordLeftovers(options.id,[file]);
+  throw keptError();
+ }
+}
+export async function removeDirectory(directory){
+ if(!isRemoteFile(directory))return local.removeDirectory(directory);
+ const {adapter,options,value}=parseRemote(directory);
+ if(options.keepsFiles)throw keptError();
+ return adapter.removeDirectory(options,value);
+}
 export async function renameFile(from,to){
  if(!isRemoteFile(from)&&!isRemoteFile(to))return local.renameFile(from,to);
  const a=parseRemote(from),b=parseRemote(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');

@@ -1,4 +1,5 @@
-// SFTP adapter: pinned host keys, fsync@openssh.com and atomic rename publication.
+// SFTP adapter: pinned host keys, fsync@openssh.com and atomic rename publication. On an append-only destination
+// (options.writeMode) new files are created read-only (0400); deletes never reach this adapter (src/storage/index.js).
 import { Client } from 'ssh2';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -48,21 +49,76 @@ async function makeRemoteDirectory(sftp,value){
   if(!attrs.isDirectory()||attrs.isSymbolicLink())throw new Error('Storage path must contain only directories without symlinks');
  }
 }
+// Connection test and write-mode detection (docs/storage-backends.md, "Append-only SFTP"). The probe files live in the
+// DockNest-owned .docknest-probe folder under fresh random names; nothing else on the destination is opened, renamed or
+// removed. normal: the probe can be deleted. append-only: deletes are refused and so is every way to change a finished
+// file (open it for writing, change its permissions, rename or posix-rename another file over it). Anything in between
+// fails the test. Probe files the storage keeps are returned (probeLeftovers) for the caller to record; they are never
+// retried here.
+export const PROBE_FOLDER='.docknest-probe';
+const PROBE=Buffer.from('DockNest storage probe');
+// SSH_FX_PERMISSION_DENIED, SSH_FX_FAILURE and SSH_FX_OP_UNSUPPORTED: the server said no to a change. Anything else (a
+// dropped connection, a missing file) is not an answer and fails the test. A delete, and the publishing rename, count as
+// refused only on an explicit "permission denied" or "unsupported": a generic failure could be a passing fault, and
+// calling such a destination append-only would promise a protection nobody verified.
+const REFUSED=new Set([3,4,8]),EXPLICITLY_REFUSED=new Set([3,8]);
+const CHANGE_NAMES={reopen:'open for writing',permissions:'permission changes',rename:'rename over a file',posixRename:'posix-rename over a file'};
+async function allowed(operation,refused=REFUSED){try{await operation();return true;}catch(error){if(refused.has(error?.code))return false;throw error;}}
+async function writeProbe(sftp,file){
+ const handle=await call(sftp,'open',file,'wx',0o400);
+ try{await call(sftp,'write',handle,PROBE,0,PROBE.length,0);try{await call(sftp,'ext_openssh_fsync',handle);}catch{throw new Error('Storage requires working fsync@openssh.com support for durable backup files');}}
+ finally{await call(sftp,'close',handle);}
+}
+async function probeMatches(sftp,file){
+ if((await call(sftp,'stat',file)).size!==PROBE.length)return false;
+ const handle=await call(sftp,'open',file,'r'),buffer=Buffer.alloc(PROBE.length);
+ try{await call(sftp,'read',handle,buffer,0,PROBE.length,0);}finally{await call(sftp,'close',handle);}
+ return buffer.equals(PROBE);
+}
+const exists=async(sftp,file)=>{try{await call(sftp,'lstat',file);return true;}catch(error){if(error.code===2)return false;throw error;}};
+// posix-rename@openssh.com replaces an existing file; a server that does not offer it cannot be asked.
+async function posixRenameAllowed(sftp,from,to){
+ if(sftp._extensions?.['posix-rename@openssh.com']!=='1')return false;
+ return allowed(()=>call(sftp,'ext_openssh_rename',from,to));
+}
 export async function test(options){
  return withSession(options,async sftp=>{
   await makeRemoteDirectory(sftp,options.root);
-  const temporary=options.root+'/.docknest-probe-'+randomUUID(),published=temporary+'.verified';
+  const folder=options.root+'/'+PROBE_FOLDER;await makeRemoteDirectory(sftp,folder);
+  const token=randomUUID(),written=folder+'/'+token,published=written+'.verified',other=written+'.other';
+  let classified=false;
   try{
-   const handle=await call(sftp,'open',temporary,'wx',0o600);
-   try{await call(sftp,'write',handle,Buffer.from('DockNest storage probe'),0,22,0);try{await call(sftp,'ext_openssh_fsync',handle);}catch{throw new Error('Storage requires working fsync@openssh.com support for durable backup files');}}finally{await call(sftp,'close',handle);}
-   await call(sftp,'rename',temporary,published);
-   const attrs=await call(sftp,'stat',published);if(attrs.size!==22)throw new Error('Storage write verification failed');
-   const readHandle=await call(sftp,'open',published,'r');
-   const buffer=Buffer.alloc(22);
-   try{await call(sftp,'read',readHandle,buffer,0,22,0);}finally{await call(sftp,'close',readHandle);}
-   if(buffer.toString()!=='DockNest storage probe')throw new Error('Storage read verification failed');
-   return {connected:true,writeVerified:true,readVerified:true,renameVerified:true,fileFsyncVerified:true};
-  }finally{for(const file of [temporary,published]){try{await call(sftp,'unlink',file);}catch(error){if(error.code!==2)throw error;}}}
+   await writeProbe(sftp,written);
+   try{await call(sftp,'rename',written,published);}
+   catch(error){if(EXPLICITLY_REFUSED.has(error?.code))throw Object.assign(new Error('This storage refuses to rename files. DockNest publishes each backup by renaming a checked file into place, so rename must be allowed (it never replaces an existing file). See docs/storage-backends.md.'),{status:400});throw error;}
+   if(!await probeMatches(sftp,published))throw new Error('Storage read verification failed');
+   await writeProbe(sftp,other);
+   // Each attempt targets the published probe only. A refused attempt changes nothing; an allowed one is recorded.
+   const overwrite={reopen:await allowed(async()=>{const handle=await call(sftp,'open',published,'r+');await call(sftp,'close',handle);}),
+    permissions:await allowed(()=>call(sftp,'setstat',published,{mode:0o600})),
+    rename:await allowed(()=>call(sftp,'rename',other,published))};
+   overwrite.posixRename=!overwrite.rename&&await posixRenameAllowed(sftp,other,published);
+   if(!await probeMatches(sftp,published))throw new Error('Storage read verification failed');
+   const checks={connected:true,writeVerified:true,readVerified:true,renameVerified:true,fileFsyncVerified:true};
+   if(await allowed(()=>call(sftp,'unlink',published),EXPLICITLY_REFUSED)){
+    if(await exists(sftp,other))await call(sftp,'unlink',other);
+    try{await call(sftp,'rmdir',folder);}catch{/* Another probe may be running, or the folder is kept: harmless. */}
+    classified=true;return {...checks,writeMode:'normal'};
+   }
+   classified=true;
+   const probeLeftovers=[];for(const file of [published,other])if(await exists(sftp,file))probeLeftovers.push(file);
+   const changeable=Object.entries(overwrite).filter(([,value])=>value).map(([name])=>CHANGE_NAMES[name]);
+   if(changeable.length)throw Object.assign(new Error('This storage refuses deletes but still lets DockNest change files it has written ('+changeable.join(', ')+'), so it is not safely append-only. Deny setstat, fsetstat, lsetstat and posix-rename on the server too (docs/storage-backends.md), then test again.'),{status:400,probeLeftovers,writeMode:'broken'});
+   return {...checks,writeMode:'append-only',deleteRefused:true,overwriteRefused:true,probeLeftovers};
+  }catch(error){
+   // A test that stopped before it could classify the storage: one removal attempt each, then report what stayed.
+   if(!classified&&error&&typeof error==='object'){
+    const kept=[];
+    for(const file of [written,published,other]){try{await call(sftp,'unlink',file);}catch(failure){if(failure?.code!==2&&await exists(sftp,file).catch(()=>false))kept.push(file);}}
+    if(kept.length)error.probeLeftovers=kept;
+   }
+   throw error;
+  }
  });
 }
 export const readiness=options=>withSession(options,async sftp=>{const attrs=await call(sftp,'stat',options.root);if(!attrs.isDirectory())throw new Error('Storage directory missing');});
@@ -78,7 +134,7 @@ export async function openWrite(options,value){
  try{
   const root=(await call(sftp,'realpath',options.root)).replace(/\/$/,''),parent=await call(sftp,'realpath',path.posix.dirname(value));
   if(parent!==root&&!parent.startsWith(root+'/'))throw new Error('Storage output path escapes the configured root');
-  const stream=sftpWriteStream(sftp,value);stream.once('close',()=>client.end());stream.once('error',()=>client.end());return stream;
+  const stream=sftpWriteStream(sftp,value,{mode:options.writeMode==='append-only'?0o400:0o600});stream.once('close',()=>client.end());stream.once('error',()=>client.end());return stream;
  }catch(error){client.end();throw error;}
 }
 export function syncFile(options,value){
