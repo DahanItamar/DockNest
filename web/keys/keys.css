@@ -1,0 +1,18 @@
+/* Keys safe (3.0.0): padlock on Map nodes, the Keys row on app cards, the Keys section of the Map panel. Tokens only. */
+.keys-word{display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;font-weight:500;text-align:right}
+.keys-word svg{flex:none}
+.keys-ok{color:var(--success)}.keys-changed{color:var(--warning)}.keys-missing{color:var(--error)}
+.map-root .map-lock{position:absolute;right:-6px;bottom:-6px;width:20px;height:20px;box-sizing:border-box;border-radius:50%;background:var(--surface);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center}
+.map-root .map-lock.lock-ok{color:var(--success)}.map-root .map-lock.lock-changed{color:var(--warning)}.map-root .map-lock.lock-missing{color:var(--error)}
+.keys-section{display:flex;flex-direction:column;gap:12px}
+.keys-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.keys-list li{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 0;border-bottom:1px solid var(--border-subtle);min-width:0;max-width:100%}
+.keys-list li:first-child{padding-top:4px}.keys-list li:last-child{border-bottom:0}
+.keys-name{font-weight:500;color:var(--heading);overflow-wrap:anywhere;font-size:var(--fs-body);line-height:var(--lh-body)}
+.keys-list code{font-family:var(--font-mono,ui-monospace,monospace)}
+.keys-list .map-caption{overflow-wrap:anywhere}
+.keys-list .map-caption code{font-size:var(--fs-caption);color:var(--text-secondary)}
+.keys-list .status{white-space:normal}
+.keys-reason{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-primary);overflow-wrap:anywhere}
+.keys-mark{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+@media(max-width:767px){.keys-section button{min-height:44px}}

@@ -16,6 +16,7 @@ import {isIncremental,toBackups} from './incremental/model.js';
 import {chainDownloadUrl} from './incremental/incremental-client.js';
 import {Download} from './icons.jsx';
 import {HardeningRow} from './hardening.jsx';
+import {KeysRow} from './keys/keys.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
@@ -46,6 +47,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Server</dt><dd>{name(site.serverId,'servers')}</dd></div>
      <div className="def-row"><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
+     <KeysRow site={site}/>
      <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
      {(summary=>summary&&<div className="def-row"><dt>Storage</dt><dd>{summary.main}<span className="t-caption">{summary.copies}</span>{summary.missing&&<StatusLabel state="needs-review">Copy missing</StatusLabel>}{user?.role==='admin'&&onStorage&&<button type="button" className="cp-link" aria-label={`Change storage for ${site.name}`} onClick={()=>onStorage(site)}>Change</button>}</dd></div>)(siteStorageSummary(site))}
      <HardeningRow site={site} checking={checking?.has(site.id)}/>
