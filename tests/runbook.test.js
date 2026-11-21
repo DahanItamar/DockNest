@@ -41,7 +41,9 @@ for (const [index, user] of [administrator, operator, stale].entries()) {
 }
 const server = id();
 db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,created_at,note) VALUES(?,?,?,22,'root',?,?,'connected',?,?)").run(server, 'web-1', SERVER_ADDRESS, seal('fixture-private-key'), 'ab'.repeat(32), now(), 'The rented server');
-const site = (name, config) => { const siteId = id(); db.prepare('INSERT INTO sites(id,server_id,name,config,created_at) VALUES(?,?,?,?,?)').run(siteId, server, name, JSON.stringify(config), now()); return siteId; };
+// Apps are made one millisecond apart, so the guide lists them in the order they were added.
+let added = Date.parse('2026-11-01T00:00:00.000Z');
+const site = (name, config) => { const siteId = id(); db.prepare('INSERT INTO sites(id,server_id,name,config,created_at) VALUES(?,?,?,?,?)').run(siteId, server, name, JSON.stringify(config), new Date(added++).toISOString()); return siteId; };
 const shop = site('Shop', { kind: 'docker', containers: ['shop-web', 'shop-db'], composeFiles: ['/srv/shop/compose.yaml'], domains: ['shop.example.com'], services: [{ container: 'shop-db', engine: 'postgres' }] });
 const blog = site('בלוג', { kind: 'docker', containers: ['blog'], domains: ['blog.example.net'], services: [{ container: 'blog', engine: 'generic', sqliteFiles: ['/data/blog.sqlite'] }] });
 const docs = site('Docs', { kind: 'static', containers: [], documentRoot: '/var/www/docs', configFiles: ['/etc/nginx/sites-enabled/docs'], domains: ['docs.example.com'] });

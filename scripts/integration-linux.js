@@ -306,6 +306,9 @@ try {
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
   const {runEmergencyScenario}=await import('./integration-emergency.js');
   await runEmergencyScenario({run,hosts,db,record,directory});
+  // Before the capture failure cases below, which leave the source server waiting for a recovery review.
+  const {runRunbookScenario}=await import('./integration-runbook.js');
+  await runRunbookScenario({run,until,hosts,servers,db,record,directory,storagePassword});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
   const {runDomainsScenario}=await import('./integration-domains.js');
@@ -333,8 +336,6 @@ try {
   await until(async()=>Boolean((await verifyRecovery({...interrupted,status:'recovery_required'})).healthVerified),'Watchdog did not restore health and maintenance state',30);
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-b'),'true');
   record('Detached Linux watchdog terminates a stuck capture, restarts the original site and clears maintenance after health; central job remains locked until verified recovery');
-  const {runRunbookScenario}=await import('./integration-runbook.js');
-  await runRunbookScenario({run,until,hosts,servers,db,record,directory,storagePassword});
   // Last: its Docker daemon restart case stops every container on the source host.
   const {runSelfHealScenario}=await import('./integration-self-heal.js');
   await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});

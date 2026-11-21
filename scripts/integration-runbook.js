@@ -95,5 +95,6 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
       await sh(source, `cd ${demo.folder} && docker compose -f ${demo.folder}/compose.yaml down -v`).catch(() => {});
       db.prepare('INSERT OR IGNORE INTO site_archives VALUES(?,?)').run(demo.siteId, new Date().toISOString());
     }
+    await sh(source, 'docker image rm docknest-fixture:nonroot').catch(() => {});
   }
 }
