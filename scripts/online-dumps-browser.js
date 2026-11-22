@@ -113,7 +113,7 @@ for(const [key,sc] of Object.entries(SCENARIOS))for(const width of [1280,390])fo
   else if(sc.incremental)assert.match(text,/Stopped for a file copy \(see below\)/,label+' '+container);
   else if(sc.check!=='blocked')assert.match(text,/Online copy, stays running/,label+' '+container);
  }
- if(key==='g4')assert.match(caption,/This switch covers PostgreSQL, MySQL and MariaDB\./,'G4 names what the switch covers');
+ if(key==='g4')assert.match(caption,/This switch covers PostgreSQL, MySQL, MariaDB and Redis./,'G4 names what the switch covers');
  if(key==='g6')await block(page).getByText('Incremental backups are on for Shop').waitFor();
  // The readiness action: a text link, no border or background; it answers from the saved settings.
  const link=block(page).getByRole('button',{name:'Check readiness to see which databases will use it'});

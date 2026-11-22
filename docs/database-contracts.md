@@ -1,6 +1,6 @@
 # Cold database consistency contracts
 
-Since 3.0.0 an app can opt in to [online dumps](online-dumps.md) for PostgreSQL, MySQL and MariaDB; everything below
+Since 3.0.0 an app can opt in to [online dumps](online-dumps.md) for PostgreSQL, MySQL, MariaDB, Redis and Valkey; everything below
 stays the default and the fallback.
 
 Each `config.services` entry names a selected container, `engine` (`auto`, `generic`, `postgres`, `mysql`, `mariadb`, `redis`, `mongo`), optional exact `version`, local `database` and `user`, and `dependsOn` selected services. Empty contracts use native detection automatically; adding a standard supported service needs no manually maintained engine list. Versions come from native binaries, not image tags. Database services must be running for planning; previously stopped databases require an offline adapter and are never started automatically for capture. Known unsupported stateful images cannot silently pass as generic applications.
