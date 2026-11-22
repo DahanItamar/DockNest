@@ -73,7 +73,7 @@ export function ZipDialog({backupId,onClose}){
    {status==='cancelled'&&<p>This ZIP was cancelled from another window. Prepare it again to download.</p>}
   </div>
   <div className="modal-foot zip-foot">
-   <button type="button" onClick={cancel}>Cancel</button>
+   <button type="button" className="link-action" onClick={cancel}>Cancel</button>
    {retry?<button type="button" className="primary" onClick={()=>{setState(null);begin();}}>Try again</button>
    :<button type="button" className="primary" disabled={status!=='ready'} onClick={download}>Download ZIP</button>}
   </div>

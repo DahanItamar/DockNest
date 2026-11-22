@@ -11,7 +11,7 @@ import '../restore-tests/restore-tests.css';
 import './site-edit.css';
 
 const Shell=props=><div className="map-root se-root"><Sheet className="dialog-edge" labelId="safe-edit-title" {...props}/></div>;
-const Foot=({a,onA,b,onB,disabled})=><>{a&&<button type="button" onClick={onA}>{a}</button>}{b&&<button type="button" className={disabled?undefined:'primary'} disabled={disabled} onClick={onB}>{b}</button>}</>;
+const Foot=({a,onA,b,onB,disabled})=><>{a&&<button type="button" className={b?'link-action':undefined} onClick={onA}>{a}</button>}{b&&<button type="button" className={disabled?undefined:'primary'} disabled={disabled} onClick={onB}>{b}</button>}</>;
 const FROZEN='This service has host access. Change it by hand.';
 const size=n=>n>=1024**3?(n/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(n/1024**2))+' MB';
 const envKey=(file,key)=>file+'\n'+key;
@@ -242,7 +242,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   </Shell>;
  }
  if(stage==='undo'){
-  const u=undoing||{},rv=u.review,back=()=>{setStage('progress');setUndoing(null)},cancel=<button type="button" onClick={back}>Cancel</button>;
+  const u=undoing||{},rv=u.review,back=()=>{setStage('progress');setUndoing(null)},cancel=<button type="button" className="link-action" onClick={back}>Cancel</button>;
   if(u.failure)return <Shell onClose={onClose} title="Undo this change?" actions={<>{cancel}<button type="button" disabled>Undo change</button></>}>
    <AlertPanel variant="error" action={u.failure.code==='UNDO_CHANGED'&&<div className="rp-actions"><button type="button" disabled={busy} onClick={startUndo}>Reload</button></div>}>{u.failure.text}</AlertPanel>{guard.prompt}</Shell>;
   if(!rv)return <Shell onClose={onClose} title="Undo this change?" actions={<>{cancel}<button type="button" disabled>Undo change</button></>}>{guard.prompt||<div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Checking the file</StatusLabel></div>}</Shell>;

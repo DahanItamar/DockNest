@@ -1,6 +1,7 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
+import {assertQuietFooters} from './footer-rule.js';
 import path from 'node:path';
 
 // Restore tests UI (docs/restore-tests.md) against the mocked API contract: overview columns and consistency, the
@@ -219,6 +220,7 @@ async function dialogFlow(scheme){
  const d=dialog(page);
  await d.getByRole('heading',{name:'Restore tests'}).waitFor();
  await d.getByRole('switch').waitFor();
+ await assertQuietFooters(d,'Restore tests footer');
  // Off by default: How often disabled, no live alert, Advanced closed
  assert.equal(await switchOf(d).getAttribute('aria-checked'),'false');
  assert.equal(await d.getByLabel('How often').isDisabled(),true);

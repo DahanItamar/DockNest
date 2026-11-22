@@ -38,9 +38,27 @@ export function elbow(points,r=8){
  }
  const last=p[p.length-1];return d+` L${last[0]} ${last[1]}`;
 }
+// Connection lines, like a workflow canvas (n8n): a forward link is one smooth cubic bezier with Vue Flow's shape (horizontal control points,
+// curvature 0.25), a backward link (target left of or behind the source) leaves right, drops 130 below the source and comes back into the
+// target's left side with rounded corners (radius 16, side offset 40), and a link at the same height stays a straight line.
+export const EDGE={handle:20,drop:130,side:40,radius:16,curvature:0.25};
+const control=(d,c)=>d>=0?0.5*d:c*25*Math.sqrt(-d);
+const num=n=>Math.round(n*100)/100;
+export function edgePath(a,b,{forward=false,curvature=EDGE.curvature}={}){
+ const [sx,sy]=a,[tx,ty]=b;
+ if(!forward&&sx>=tx-EDGE.handle){
+  const by=Math.max(sy+EDGE.drop,ty+EDGE.side),points=[[sx,sy],[sx+EDGE.side,sy],[sx+EDGE.side,by],[tx-EDGE.side,by],[tx-EDGE.side,ty],[tx,ty]];
+  return {d:elbow(points,EDGE.radius),points,kind:'back',labelX:num((sx+tx)/2),labelY:by};
+ }
+ if(sy===ty)return {d:'M'+sx+' '+sy+' L'+tx+' '+ty,points:[a,b],kind:'straight',labelX:num((sx+tx)/2),labelY:sy};
+ const c1=sx+control(tx-sx,curvature),c2=tx-control(tx-sx,curvature);
+ // points follow the curve (32 pieces), so hit and crossing checks see the real line
+ const points=Array.from({length:33},(_,i)=>{const t=i/32,u=1-t;return [num(u*u*u*sx+3*u*u*t*c1+3*u*t*t*c2+t*t*t*tx),num(u*u*u*sy+3*u*u*t*sy+3*u*t*t*ty+t*t*t*ty)]});
+ return {d:'M'+sx+' '+sy+' C'+num(c1)+' '+sy+' '+num(c2)+' '+ty+' '+tx+' '+ty,points,kind:'bezier',labelX:num((sx+3*c1+3*c2+tx)/8),labelY:num((sy+ty)/2)};
+}
 // Domains column (docs/domains.md): small nodes left of the servers. DOM_BLOCK is a node with its label.
 export const DOMAIN_METRICS={size:48,block:76,gap:16,x:52,toServer:130,stub:44,label:150};
-const route=(x1,y1,x2,y2,cx)=>y1===y2?[[x1,y1],[x2,y2]]:[[x1,y1],[cx,y1],[cx,y2],[x2,y2]];
+
 
 // opts.storage: [{id,...}] backup storage nodes; opts.links: [{id,a,b}] linked app pairs (drawn in a gutter right of the app column); opts.backupOf: {siteId: storageId} (which storage a site backs up to).
 export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
@@ -61,7 +79,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   const ns=list.map((d,i)=>domainNode(d,top0+i*(D.block+D.gap))),n=ns.length,cy0=srv.y+m.serverS/2;
   const ent=ns.map((_,i)=>cy0+(i-(n-1)/2)*14),above=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy<ent[i]),below=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy>ent[i]).reverse(),cx={};
   above.forEach(([d],k)=>{cx[d.id]=DOMR+64+(above.length-1-k)*8});below.forEach(([d],k)=>{cx[d.id]=DOMR+64+(below.length-1-k)*8});
-  ns.forEach((d,i)=>{const e=ent[i],pts=d.cy===e?[[DOMR,e],[serverX-14,e]]:[[DOMR,d.cy],[cx[d.id],d.cy],[cx[d.id],e],[serverX-14,e]];out.domainPaths.push({id:d.id,serverId:srv.id,points:pts,d:elbow(pts)})});
+  ns.forEach((d,i)=>{const e=ent[i],ep=edgePath([DOMR,d.cy],[serverX-14,e]);out.domainPaths.push({id:d.id,serverId:srv.id,points:ep.points,d:ep.d})});
  }
  for(const g of groups){
   const stack=g.sites.length?g.sites.length*rowH+(g.sites.length-1)*m.rowGap:0,block=m.serverS+m.label;
@@ -81,8 +99,8 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    rect.in={x:siteX,y:cy};rect.out={x:rightEdge,y:cy};rect.alertOut=rect.out;rect.backupId=backupOf[site.id]||null;
    (g.server?out.sites:out.unassigned).push(rect);
    if(node){
-    const x1=node.x+node.w,y1=node.y+m.serverS/2,x2=siteX,pts=route(x1,y1,x2-14,cy,channelS);
-    out.paths.push({id:site.id,serverId:node.id,x1,y1,x2,y2:cy,points:pts,d:elbow(pts)});
+    const x1=node.x+node.w,y1=node.y+m.serverS/2,x2=siteX,ep=edgePath([x1,y1],[x2-14,cy]);
+    out.paths.push({id:site.id,serverId:node.id,x1,y1,x2,y2:cy,points:ep.points,d:ep.d});
    }
    top+=rowH+m.rowGap;
   }
@@ -109,8 +127,8 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  }
  for(const s of all){
   const t=s.backupId&&out.storage.find(n=>n.id===s.backupId);if(!t)continue;
-  const pts=route(s.out.x,s.out.y,t.in.x-14,t.in.y,channelB);
-  out.backupPaths.push({id:s.id,storageId:t.id,points:pts,d:elbow(pts)});
+  const ep=edgePath([s.out.x,s.out.y],[t.in.x-14,t.in.y]);
+  out.backupPaths.push({id:s.id,storageId:t.id,points:ep.points,d:ep.d});
  }
  // Linked apps: dashed elbows in the gutter right of the app cards. A line leaves a card below its centre (backup uses the centre).
  // Short lines take the inner lane, so lines nest and never run through a card or its label.
@@ -126,8 +144,8 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    let k=0;for(const o of laneOf)if(o.lo>=it.lo&&o.hi<=it.hi&&o.k>=k)k=o.k+1;
    while(laneOf.some(o=>o.k===k&&o.lo<it.hi+24&&it.lo<o.hi+24))k++;
    laneOf.push({...it,k});
-   const x=rightEdge+m.linkBase+Math.min(k,linkLanes-1)*m.linkLane,pts=[[rightEdge,it.ya],[x,it.ya],[x,it.yb],[rightEdge,it.yb]];
-   out.linkPaths.push({id:it.l.id,a:it.l.a,b:it.l.b,kind:it.l.kind,points:pts,d:elbow(pts)});
+   const x=rightEdge+m.linkBase+Math.min(k,linkLanes-1)*m.linkLane,cx=num(rightEdge+(x-rightEdge)*4/3),pts=[[rightEdge,it.ya],[x,it.ya],[x,it.yb],[rightEdge,it.yb]];
+   out.linkPaths.push({id:it.l.id,a:it.l.a,b:it.l.b,kind:it.l.kind,points:pts,d:'M'+rightEdge+' '+it.ya+' C'+cx+' '+it.ya+' '+cx+' '+it.yb+' '+rightEdge+' '+it.yb});
   }
  }
  out.width=Math.max(out.storage.length?storageX+m.storageS+m.pad:rightEdge+m.pad+48,rightEdge+m.pad);
@@ -141,24 +159,24 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   // Lanes: the line that rises furthest left takes the highest lane and leaves furthest right, so lines nest and do not cross in the band.
   const placed=rules.map(r=>({r,src:srcOf(r)})).filter(x=>x.src).map((x,i)=>({...x,gx:gxOf(x.r,x.src,i)})).sort((a,b)=>a.gx-b.gx||a.src.alertOut.y-b.src.alertOut.y||(String(a.r.id)<String(b.r.id)?-1:1));
   const bundled=rules.length>6,mine=n=>placed.filter(p=>p.r.channelId===n.id);
-  const rt=(s0,gx,L,ax,node)=>[[s0.x,s0.y],[gx,s0.y],[gx,L],[ax,L],[ax,node.in.y],[node.in.x-14,node.in.y]];
+  const rt=(s0,node)=>edgePath([s0.x,s0.y],[node.in.x-14,node.in.y]);
   out.bundled=bundled;
   if(bundled){
    const used=out.alerts.filter(n=>mine(n).length),step=Math.min(6,Math.floor(56/Math.max(1,used.length)));
-   used.forEach((node,k)=>{const pts=rt(dn.alertOut,dn.x+dn.w+48+k*3,sy+k*m.laneGap,ax0+(used.length-1-k)*step,node);node.count=new Set(mine(node).map(p=>p.r.sourceKind+':'+p.r.sourceId)).size;
-    out.rulePaths.push({id:'bundle:'+node.id,bundle:true,channelId:node.id,count:node.count,points:pts,d:elbow(pts,12)})});
+   used.forEach((node,k)=>{const ep=rt(dn.alertOut,node);node.count=new Set(mine(node).map(p=>p.r.sourceKind+':'+p.r.sourceId)).size;
+    out.rulePaths.push({id:'bundle:'+node.id,bundle:true,channelId:node.id,count:node.count,points:ep.points,d:ep.d})});
   }else{
    const step=Math.min(6,Math.floor(56/Math.max(1,placed.length)));
    placed.forEach(({r,src,gx},k)=>{
-    const node=out.alerts.find(n=>n.id===r.channelId),pts=rt(src.alertOut,gx,sy+k*m.laneGap,ax0+(placed.length-1-k)*step,node);node.count=(node.count||0)+1;
-    out.rulePaths.push({id:r.id,ruleId:r.id,channelId:r.channelId,sourceKind:r.sourceKind,sourceId:r.sourceId,points:pts,d:elbow(pts,12)});
+    const node=out.alerts.find(n=>n.id===r.channelId),ep=rt(src.alertOut,node);node.count=(node.count||0)+1;
+    out.rulePaths.push({id:r.id,ruleId:r.id,channelId:r.channelId,sourceKind:r.sourceKind,sourceId:r.sourceId,points:ep.points,d:ep.d});
    });
   }
   out.width=alertX+m.alertS+m.pad;
  }
  out.height=bottom;out.x0=0;out.y0=0;
  // Free layout: the owner's saved positions replace the automatic ones node by node (unknown nodes keep their automatic place).
- // Lines are then drawn between the final ports with plain elbows; they can cross a card, which is the owner's choice.
+ // Lines are then drawn between the final ports with the same curves; they can cross a card, which is the owner's choice.
  const pos=opts.positions||{};
  const nodes=[...out.servers.map(n=>['server:'+n.id,n]),...[...out.sites,...out.unassigned].map(n=>['site:'+n.id,n]),...out.storage.map(n=>['storage:'+n.id,n]),...out.alerts.map(n=>['alert:'+n.id,n]),...out.domains.map(n=>['domain:'+n.id,n]),...(out.docknest?[['docknest:root',out.docknest]]:[])];
  out.keys=Object.fromEntries(nodes);
@@ -169,14 +187,14 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    const dx=p.x-n.x,dy=p.y-n.y,ports=new Set([n.in,n.out,n.alertOut].filter(Boolean));
    n.x+=dx;n.y+=dy;n.block={...n.block,x:n.block.x+dx,y:n.block.y+dy};for(const q of ports){q.x+=dx;q.y+=dy}
   }
-  const gen=(a,b)=>{const x1=a.x,y1=a.y,x2=b.x-14,y2=b.y;if(y1===y2&&x2>x1)return [[x1,y1],[x2,y2]];if(x2>x1+24){const mx=Math.round((x1+x2)/2);return [[x1,y1],[mx,y1],[mx,y2],[x2,y2]]}const lo=Math.max(x1,x2)+24,my=Math.round((y1+y2)/2);return [[x1,y1],[x1+20,y1],[x1+20,my],[x2-20,my],[x2-20,y2],[x2,y2]]};
+  const gen=(a,b)=>edgePath([a.x,a.y],[b.x-14,b.y]);
   const sv=Object.fromEntries(out.servers.map(n=>[n.id,n])),st=Object.fromEntries(out.storage.map(n=>[n.id,n])),al=Object.fromEntries(out.alerts.map(n=>[n.id,n]));
-  out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],pts=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:pts,d:elbow(pts)}});
-  out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],pts=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:pts,d:elbow(pts)}});
+  out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],ep=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:ep.points,d:ep.d}});
+  out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],ep=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:ep.points,d:ep.d}});
   const dom=Object.fromEntries(out.domains.map(n=>[n.id,n]));
-  out.domainPaths=out.domainPaths.map(p=>{const n=dom[p.id],a=n&&n.out;if(!a)return p;if(p.stub){const pts=[[a.x,a.y],[a.x+D.stub,a.y]];return {...p,points:pts,d:'M'+a.x+' '+a.y+' L'+(a.x+D.stub)+' '+a.y,end:{x:a.x+D.stub,y:a.y}}}const s=sv[p.serverId];if(!s)return p;const pts=gen(a,{x:s.x,y:s.y+s.h/2});return {...p,points:pts,d:elbow(pts)}});
+  out.domainPaths=out.domainPaths.map(p=>{const n=dom[p.id],a=n&&n.out;if(!a)return p;if(p.stub){const pts=[[a.x,a.y],[a.x+D.stub,a.y]];return {...p,points:pts,d:'M'+a.x+' '+a.y+' L'+(a.x+D.stub)+' '+a.y,end:{x:a.x+D.stub,y:a.y}}}const s=sv[p.serverId];if(!s)return p;const ep=gen(a,{x:s.x,y:s.y+s.h/2});return {...p,points:ep.points,d:ep.d}});
   out.nowhere=out.nowhere.filter(h=>!h.ids.some(id=>pos['domain:'+id]));
-  out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],pts=gen(src.alertOut,node.in);return {...p,points:pts,d:elbow(pts,12)}});
+  out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],ep=gen(src.alertOut,node.in);return {...p,points:ep.points,d:ep.d}});
   // The canvas grows in every direction: a node left of or above the automatic layout widens it there, with the same margin.
   let x0=0,y0=0,x1=0,y1=0;
   for(const [,n] of nodes){x0=Math.min(x0,n.x-m.pad,n.block.x);y0=Math.min(y0,n.y-m.pad,n.block.y);x1=Math.max(x1,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);y1=Math.max(y1,n.block.y+n.block.h+m.pad)}

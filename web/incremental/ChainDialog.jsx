@@ -21,6 +21,6 @@ export function ChainDialog({backup,backups,date,bytes,onClose}){
     <td className="inc-status"><Icon className={'status-icon '+(ok?'status-success':'status-queued')} size={18} stroke={2} aria-hidden="true"/><span className="inc-sr">{ok?'Integrity checked':'Not checked yet'}</span></td>
    </tr>})}</tbody>
   </table>
-  <div className="modal-foot"><button type="button" onClick={onClose}>Close</button><a className="button primary inc-download" href={chainDownloadUrl(backup.id)}><Download size={18} stroke={1.75} aria-hidden="true"/>Download chain</a></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Close</button><a className="button primary inc-download" href={chainDownloadUrl(backup.id)}><Download size={18} stroke={1.75} aria-hidden="true"/>Download chain</a></div>
  </div>;
 }

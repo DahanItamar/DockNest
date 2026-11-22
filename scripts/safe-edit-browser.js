@@ -141,14 +141,14 @@ async function layout(page,label){
  const r=await page.evaluate(()=>{
   const d=document.querySelector('dialog[open].dialog-edge');
   const wraps=[...d.querySelectorAll('button')].filter(b=>b.offsetParent&&!b.matches('[role=tab],.icon-button,.map-link')).filter(b=>b.getBoundingClientRect().height>48).map(b=>b.textContent.trim());
-  const foot=[...d.querySelectorAll('.map-dialog-foot button')].map(b=>Math.round(b.getBoundingClientRect().height*2)/2);
+  const foot=[...d.querySelectorAll('.map-dialog-foot button:not(.link-action)')].map(b=>Math.round(b.getBoundingClientRect().height*2)/2);
   const body=d.querySelector('.map-dialog-body');
   return {sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth,bw:body.scrollWidth,bc:body.clientWidth,wraps,foot,nowrap:[...d.querySelectorAll('.map-dialog-foot button,.rp-actions button')].every(b=>getComputedStyle(b).whiteSpace==='nowrap'),text:d.innerText};
  });
  assert.ok(r.sw<=r.cw,label+': page horizontal overflow');
  assert.ok(r.bw<=r.bc+1,label+': dialog horizontal overflow '+r.bw+' > '+r.bc);
  assert.deepEqual(r.wraps,[],label+': a button is taller than one line');
- assert.ok(new Set(r.foot).size<=1,label+': footer buttons differ in height '+r.foot);
+ assert.ok(new Set(r.foot).size<=1,label+': real footer buttons differ in height '+r.foot);
  assert.ok(r.nowrap,label+': buttons must not wrap');
  assert.ok(!r.text.includes(SECRET)&&!r.text.includes(OTHER),label+': an environment value is rendered');
 }

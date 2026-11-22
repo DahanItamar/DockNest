@@ -110,4 +110,8 @@ button.link-action:focus-visible{outline:2px solid var(--focus-ring);outline-off
 button.link-action:disabled,.map-root button.link-action:disabled{background:transparent;border:0;color:var(--text-muted);cursor:not-allowed}
 .link-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px}
 @media(max-width:767px){.link-row button.link-action{min-height:44px}}
+/* Secondary actions in dialog and card footers are quiet text links, the only filled button is the main action; the phone keeps a 44px tap height without a box. */
+:root:root :is(.modal-foot,.map-dialog-foot,.card-footer,.form-actions) button.link-action{min-width:0;min-height:var(--control-height);padding:4px 12px;white-space:nowrap}
+:root:root .map-root .map-toolbar button.link-action{min-height:var(--control-height);padding:4px 8px}
+@media(max-width:767px){:root:root :is(.modal-foot,.card-footer,.form-actions) button.link-action,:root:root .map-root .map-toolbar button.link-action{min-height:44px}}
 .map-root .map-dialog-foot button.link-action,.map-root .map-panel-foot button.link-action{min-height:44px;padding-inline:8px}

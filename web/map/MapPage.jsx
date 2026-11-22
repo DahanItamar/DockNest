@@ -9,7 +9,7 @@ import {domainStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domain
 import {DomainPanel,AppDomains,DomainRows} from './Domains.jsx';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
-import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
+import {layoutMap,groupForList,databasesOf,domainsOf,edgePath,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
 import {loadPositions,savePositions,prunePositions} from './saved-layout.js';
 import {createMovesClient,blocked,why,friendly,ackNotes} from './moves-client.js';
 import {createLaunchClient,stateText} from './launch-client.js';
@@ -30,7 +30,7 @@ import {MapCoverage,CoverageLine} from '../backup-coverage/MapCoverage.jsx';
 import './map.css';
 
 const bytes=v=>v?formatBytes(v):'';
-const MIN=0.2,MAX=2,FIT_MIN=0.45; // fit never scales above 100%; below 45% the map is too small to read, so the user pans
+const MIN=0.2,MAX=2,FIT_MIN=0.8; // fit never scales above 100%; below 80% the 14px node names drop under 11px, so a big map is panned instead of squeezed
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const short=(v,n=40)=>typeof v==='string'&&v.length>n?v.slice(0,Math.ceil((n-1)/2))+'…'+v.slice(-Math.floor((n-1)/2)):v; // long names are shortened in sentences; the full name stays in the title and the details
 const HIT=16; // forgiving drop area around a server
@@ -98,7 +98,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const narrow=useNarrow(),canMove=user?.role==='admin';
  // Backup coverage: read for connected servers only while the toggle is on. Nothing is scanned until then.
  const [showCov,setShowCov]=useState(false),connected=servers.filter(server=>server.status==='connected').map(server=>server.id),coverage=useCoverage(api,connected,showCov,onSessionExpired);
- const covToggle=<button type="button" className="bc-toggle" aria-pressed={showCov} onClick={()=>setShowCov(value=>!value)}><IconShieldCheck size={18} stroke={1.75} aria-hidden="true"/>Coverage</button>;
+ const covToggle=<button type="button" className="link-action bc-toggle" aria-pressed={showCov} onClick={()=>setShowCov(value=>!value)}><IconShieldCheck size={18} stroke={1.75} aria-hidden="true"/>Coverage</button>;
  const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState(()=>loadPositions(user?.id)),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
@@ -289,6 +289,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   const next=Math.max(360,Math.floor(window.innerHeight-top-below-24));
   if(Math.abs(next-box.height)>1)setViewH(next);
  },[]);
+ // Status messages are short-lived: they clear themselves after a few seconds instead of staying under the map.
+ useEffect(()=>{if(!note)return;const id=setTimeout(()=>setNote(''),6000);return()=>clearTimeout(id)},[note]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;size();window.addEventListener('resize',size);return()=>window.removeEventListener('resize',size)},[narrow,size,servers.length,note,!!strip,!!edit]);
  // The view holds still while a node is dragged, so the canvas can grow under it without the map re-centring away from the pointer.
  const apply=useCallback(()=>{if(gesture.current?.type==='node')return;if(mode.current==='fit')fit();else if(mode.current==='home')home()},[fit,home]);
@@ -497,8 +499,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const siteRect=id=>layout.sites.find(s=>s.id===id);
  const draggedSite=drag&&siteRect(drag.id),broken=unconnected&&siteRect(unconnected.siteId);
  const brokenPoint=drag?{x:drag.px,y:drag.py}:unconnected?.loose;
- const amber=(site,pt)=>site&&pt&&<path className="warn" markerEnd="url(#map-arrow-warn)" d={elbow([[pt.x,pt.y],[site.x-14,site.y+site.h/2]],8)}/>;
- const pendingLine=pending&&(()=>{const a=siteRect(pending.siteId),b=layout.servers.find(x=>x.id===pending.targetId);if(!a||!b)return null;const x1=b.x+b.w,y1=b.y+b.h/2,y2=a.y+a.h/2,cx=x1+M.serverGap/2;return <path className="pending" markerEnd="url(#map-arrow-pending)" d={elbow(y1===y2?[[x1,y1],[a.x-14,y2]]:[[x1,y1],[cx,y1],[cx,y2],[a.x-14,y2]])}/>})();
+ const amber=(site,pt)=>site&&pt&&<path className="warn" markerEnd="url(#map-arrow-warn)" d={edgePath([pt.x,pt.y],[site.x-14,site.y+site.h/2],{forward:true}).d}/>;
+ const pendingLine=pending&&(()=>{const a=siteRect(pending.siteId),b=layout.servers.find(x=>x.id===pending.targetId);if(!a||!b)return null;const x1=b.x+b.w,y1=b.y+b.h/2,y2=a.y+a.h/2,cx=x1+M.serverGap/2;return <path className="pending" markerEnd="url(#map-arrow-pending)" d={edgePath([x1,y1],[a.x-14,y2],{forward:true}).d}/>})();
  const enter=(e,p)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();openPanel(p,e.currentTarget);return true}return false};
  const renderSite=r=>{
   const s=byId.sites[r.id],lost=unconnected?.siteId===r.id,moving=pending?.siteId===r.id;
@@ -514,8 +516,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  return <section className="map-root" aria-label="Infrastructure map">
   {api&&<div className="map-toolbar">{covToggle}{canMove&&<>
    {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every app to a server to save</span>}
-   <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" onClick={tidy}>Tidy up</button>
-   {edit&&<button type="button" onClick={cancelEdit}>Cancel</button>}
+   <button type="button" className="link-action" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" className="link-action" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" className="link-action" onClick={tidy}>Tidy up</button>
+   {edit&&<button type="button" className="link-action" onClick={cancelEdit}>Cancel</button>}
    <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button></>}
   </div>}
   {strip}
@@ -538,7 +540,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
       <path className="rule" d={p.d}/>
       <path className="rule-hit" data-node={'rule:'+p.id} tabIndex={0} role="button" aria-label={p.bundle?`Alerts to ${alerts.nodes.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`:`Alerts from ${r?sourceName(r):''} to ${alerts.nodes.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(p.bundle)openAlert(p.channelId,null,e.currentTarget);else if(r)editRule(r,e.currentTarget)}}} d={p.d}/>
      </g>})}
-     {adrag?.src.from&&<path className="rule dragging hot" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
+     {adrag?.src.from&&<path className="rule dragging hot" d={edgePath([adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.py],{forward:true}).d}/>}
     </svg>
     {ghost&&<div className="map-ghost" aria-hidden="true" style={{left:ghost.x,top:ghost.y,width:64,height:64}}>{ghost.kind==='alert'?<IconBell size={28} stroke={1.5}/>:ghost.kind==='server'?<IconServer size={28} stroke={1.5}/>:ghost.kind==='storage'?<IconDatabaseExport size={28} stroke={1.5}/>:<IconBox size={28} stroke={1.5}/>}<span className="map-label"><b className="map-name">New</b></span></div>}
     {layout.docknest&&<div {...hov('docknest:root')} data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className={'map-docknest'+nodeCls('docknest:root')} style={item(layout.docknest)}>

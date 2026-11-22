@@ -16,6 +16,6 @@ export function ServerDetails({api,Field,server,onSaved,onCancel,onSessionExpire
   <Field label="Server name" aria-label="Server name" value={name} onChange={event=>setName(event.target.value)} maxLength={100} help="Optional. Uses the server address when left empty."/>
   <Field label="Server note (optional)" aria-label="Server note (optional)" value={note} onChange={event=>setNote(event.target.value)} maxLength={200} help="A short title or reminder shown with this server in lists."/>
   {error&&<AlertPanel variant="error" title="Server details were not saved">{error}</AlertPanel>}
-  <div className="modal-foot"><button type="button" disabled={busy} onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy?'Saving…':'Save details'}</button></div>
+  <div className="modal-foot"><button type="button" className="link-action" disabled={busy} onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy?'Saving…':'Save details'}</button></div>
  </form>;
 }

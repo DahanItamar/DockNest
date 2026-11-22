@@ -126,8 +126,8 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
   {error&&<AlertPanel variant="error" title="Could not finish">{error}</AlertPanel>}
   <div className="modal-foot">
    <span key={started?'started'+startN:'idle'} className={'t-caption rt-why'+(started?' rt-done':'')} role="status">{started?'Test started.':reason}</span>
-   <button type="button" onClick={onClose}>Cancel</button>
-   <button type="button" disabled={busy||guard.waiting||!!reason} onClick={run}>Run test</button>
+   <button type="button" className="link-action" onClick={onClose}>Cancel</button>
+   <button type="button" className="link-action" disabled={busy||guard.waiting||!!reason} onClick={run}>Run test</button>
    {isAdmin&&<button type="submit" className="primary" disabled={busy||guard.waiting}>Save</button>}
   </div>
  </form>;

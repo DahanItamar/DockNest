@@ -19,7 +19,7 @@ const label=(providers,id)=>providerOf(providers,id)?.label||id;
 
 // Phone, keyboard and "Add alert": choose the node for a source; its panel opens with that source added.
 export function PickSheet({source,nodes,rules,providers,onPick,onAdd,onClose}){
- return <Sheet title={`Send alerts from ${source.name} to`} labelId="map-pick-title" onClose={onClose} actions={<button type="button" onClick={onClose}>Cancel</button>}>
+ return <Sheet title={`Send alerts from ${source.name} to`} labelId="map-pick-title" onClose={onClose} actions={<button className="link-action" type="button" onClick={onClose}>Cancel</button>}>
   {nodes.length>0?<ul className="map-targets">{nodes.map(n=>{const has=rules.some(r=>nodeOf(r)===n.id&&sameSource(r,source));
    return <li key={n.id}><button type="button" onClick={()=>onPick(n)}><b>{n.name}</b><span className="map-caption">{label(providers,n.provider)}{has?'. Already connected, you can change it.':''}</span></button></li>})}</ul>
   :<p>You have no alert nodes yet. Add one, then connect it.</p>}
@@ -85,7 +85,7 @@ export function AlertPanel({narrow,node,startProvider,rules,connections,provider
  const status=connection?testState(connection,item):null;
  const items=providers.map(p=>({value:p.id,label:p.label,icon:p.icon,group:GROUPS[p.group]||p.group}));
  const connItems=mine.map(c=>({value:c.id,label:c.name,icon:item?.icon,caption:(c.usedBy||[]).length?'Used by '+c.usedBy.map(u=>u.name).join(', '):'Not used yet'}));
- return <SidePanel narrow={narrow} labelId="map-panel-title" title={edit?node.name:'New alert node'} onClose={onClose} icon={<NodeIcon provider={item} size={24}/>} footer={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>} sub={<>
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title={edit?node.name:'New alert node'} onClose={onClose} icon={<NodeIcon provider={item} size={24}/>} footer={<><button type="button" className="link-action" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>} sub={<>
   <TestBox onTest={test} disabled={!connectionId} dirty={!!live&&dirty&&!!connectionId}/>
   <div className="map-tabs" role="tablist" aria-label="Alert settings">{[['settings','Settings'],['sends','Sends when']].map(([id,l])=><button key={id} type="button" role="tab" id={'map-tab-'+id} aria-selected={tab===id} aria-controls={'map-tabpanel-'+id} tabIndex={tab===id?0:-1} className={tab===id?'on':''} onClick={()=>setTab(id)} onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const n=tab==='settings'?'sends':'settings';setTab(n);setTimeout(()=>document.getElementById('map-tab-'+n)?.focus(),0)}}}>{l}</button>)}</div></>}>
   {tab==='settings'&&<section id="map-tabpanel-settings" role="tabpanel" aria-labelledby="map-tab-settings" className="map-cfg">
@@ -116,7 +116,7 @@ export function AlertPanel({narrow,node,startProvider,rules,connections,provider
 export function DeleteNodeSheet({node,count,client,onClose,onDeleted}){
  const guard=useGuard(client),[busy,setBusy]=useState(false),[error,setError]=useState('');
  async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.deleteNode(node.id);await onDeleted()},e=>setError(friendly(e)));setBusy(false)}
- return <Sheet title={`Delete ${node.name}?`} labelId="map-delete-title" onClose={onClose} actions={<div className="map-panel-foot"><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Delete</button></div>}>
+ return <Sheet title={`Delete ${node.name}?`} labelId="map-delete-title" onClose={onClose} actions={<div className="map-panel-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Delete</button></div>}>
   <p>It stops alerts from {count===1?'1 source':count+' sources'}. Its connection stays in Connections.</p>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {guard.prompt}

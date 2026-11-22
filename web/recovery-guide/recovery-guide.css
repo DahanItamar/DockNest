@@ -27,7 +27,8 @@
 .rb-paper h3.rb-sub{margin:0 0 12px;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--heading)}
 .rb-paper h3.rg-gap{margin-top:16px}
 .rg-list{margin:0;padding:0 0 0 20px}
-.rg-cmd{margin:8px 0 0;padding:12px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);color:var(--text-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-x:auto;white-space:pre}
+.rg-cmd{margin:8px 0 0;padding:12px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);color:var(--text-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;scrollbar-width:none}
+.rg-cmd::-webkit-scrollbar{display:none}
 .rb-paper .data-table th,.rb-paper .data-table td{white-space:normal;height:auto;padding:12px 16px;font-size:var(--fs-body);line-height:var(--lh-body);vertical-align:top}
 .rb-paper .data-table{table-layout:auto}
 .rb-paper .data-table-wrap{background:var(--surface);overflow-x:visible}

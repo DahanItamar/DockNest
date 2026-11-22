@@ -29,7 +29,7 @@ function ConfirmDialog({server,items,busy,onCancel,onConfirm}){
   <div className="modal-body">
    <p>DockNest removes {count(items.length,'item')}, about {formatBytes(sum(items))}. This cannot be undone.</p>
    <p className="t-caption">Each item is checked again first. Anything now in use stays.</p>
-   <div className="modal-foot"><button type="button" disabled={busy} onClick={onCancel}>Cancel</button><button type="button" className="danger" disabled={busy} onClick={onConfirm}>{busy?'Cleaning…':'Clean up'}</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" disabled={busy} onClick={onCancel}>Cancel</button><button type="button" className="danger" disabled={busy} onClick={onConfirm}>{busy?'Cleaning…':'Clean up'}</button></div>
   </div>
  </dialog>;
 }

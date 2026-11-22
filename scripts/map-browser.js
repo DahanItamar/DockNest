@@ -5,6 +5,7 @@ import path from 'node:path';
 import {EVENTS_FOR,EVENT_LABEL} from '../web/map/alerts-client.js';
 import {providerList} from '../src/alerts/providers/index.js';
 import {linkedChecks} from './linked-browser.js';
+import {assertQuietFooters} from './footer-rule.js';
 
 // Read-only Map page against a mocked API: servers, sites and connectors, stable automatic layout on reload, no overlaps,
 // zoom and fit, the phone list at 402 px, light and dark, names and roles. Run against a dev server:
@@ -233,6 +234,11 @@ async function moveFlow(page,scheme){
  await save.click();
  await dialog(page).getByRole('heading',{name:'Ready to move'}).waitFor();
  const d=dialog(page);
+ await assertQuietFooters(d,'Move preview footer');
+ const gap=await d.evaluate(e=>({sheet:e.getBoundingClientRect().height,body:e.querySelector('.map-dialog-body').scrollHeight+e.querySelector('.map-dialog-foot').offsetHeight}));
+ assert.ok(gap.sheet<=gap.body+2,'the move preview fits its content, no empty gap above the buttons: '+JSON.stringify(gap));
+ // The toolbar actions are text links too: Cancel, Undo, Tidy up and Coverage have no box and only Save changes is filled.
+ assert.deepEqual(await page.locator('.map-toolbar button').evaluateAll(bs=>bs.filter(b=>!b.classList.contains('link-action')).map(b=>b.textContent.trim())),['Save changes'],'only Save changes is a real button in the toolbar');
  await d.getByText('shop.example.com',{exact:false}).first().waitFor();
  await d.getByText('3 minutes').waitFor();await d.getByText('30 s').waitFor();await d.getByText('7 days').waitFor();
  const adv=d.getByRole('button',{name:'Advanced settings'});
@@ -612,10 +618,11 @@ async function installFlow(page,scheme){
  await d.getByRole('heading',{name:'nginx is installed'}).waitFor({timeout:6000});
  await d.getByRole('button',{name:'Check again'}).click();
  await d.getByRole('heading',{name:'Ready to move'}).waitFor();
- await measure();
+ await measure();sizes.pop();feet.pop(); // the ready-to-move preview is as tall as its content; only the install steps share one size
  for(const s of sizes){assert.equal(s.width,sizes[0].width,'same sheet width');assert.equal(s.height,sizes[0].height,'same sheet height');assert.equal(s.x,sizes[0].x);assert.equal(s.y,sizes[0].y)}
  for(const f of feet)assert.deepEqual(f.at(-1),feet[0].at(-1),'primary button in the same place on every step');
- for(const f of feet)assert.deepEqual(f.at(-2),feet[0].at(-2),'secondary button in the same place on every step');
+ // The secondary action is a text link: its width follows its words, so only its row stays the same (its right edge sits a fixed gap left of the main button).
+ for(const f of feet){assert.equal(f.at(-2)[1],feet[0].at(-2)[1],'secondary link on the same row on every step');assert.equal(f.at(-2)[3],feet[0].at(-2)[3],'secondary link the same height on every step')}
  await d.getByRole('button',{name:'Cancel'}).click();
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  // Unsupported systems: a plain note, no Install button; the command only when it is known
@@ -675,10 +682,10 @@ async function alertsFlow(scheme){
  for(const [k,n] of Object.entries(handles))assert.equal(n,1,'one circle for '+k);
  for(const id of ['docknest','fr','ash','nas','s1','s2','s3','s4','s5'])assert.ok(handles['out:'+id]===1,'one output circle on '+id);
  assert.ok(['s1','s2','s3','s4','s5'].every(id=>handles['in:'+id]===1)&&!handles['in:fr']&&!handles['in:docknest'],'inputs on sites only');
- // Lines never run over a card
+ // Lines are smooth curves from output port to input port, like a workflow canvas: they may pass behind other cards but never run over their own source card
  const cards=await page.evaluate(()=>[...document.querySelectorAll('.map-server,.map-site,.map-storage,.map-alert,.map-docknest')].map(e=>{const r=e.getBoundingClientRect();return {id:e.dataset.node||e.dataset.site,x:r.x,y:r.y,w:r.width,h:r.height}}));
- const hits=await page.evaluate(cs=>{const out=[];document.querySelectorAll('.rule-hit').forEach(p=>{const L=p.getTotalLength(),m=p.getScreenCTM();for(let i=0;i<=L;i+=4){const q=p.getPointAtLength(i),x=m.a*q.x+m.e,y=m.d*q.y+m.f;for(const c of cs){if(x>c.x+3&&x<c.x+c.w-3&&y>c.y+3&&y<c.y+c.h-3)out.push(p.dataset.node+' over '+c.id)}}});return out},cards);
- assert.deepEqual([...new Set(hits)],[],'no line runs over a card');
+ const hits=await page.evaluate(cs=>{const out=[];document.querySelectorAll('.rule-hit').forEach(p=>{const L=p.getTotalLength(),m=p.getScreenCTM(),at=d=>{const q=p.getPointAtLength(d);return [m.a*q.x+m.e,m.d*q.y+m.f]},[x0,y0]=at(0),src=cs.find(c=>Math.abs(x0-(c.x+c.w))<6&&y0>c.y&&y0<c.y+c.h);if(!src)out.push(p.dataset.node+' does not start on a card edge');for(let i=0;i<=L;i+=4){const [x,y]=at(i);if(src&&x>src.x+3&&x<src.x+src.w-3&&y>src.y+3&&y<src.y+src.h-3)out.push(p.dataset.node+' over its own source '+src.id)}});return out},cards);
+ assert.deepEqual([...new Set(hits)],[],'every rule line starts on a card edge and never runs over its source card');
  // A failed node says so in its caption; the provider is the node's caption otherwise
  await page.locator('.map-alert[data-alert="c2"] .map-caption.warn').getByText('Last message failed').waitFor();
  await page.locator('.map-alert[data-alert="c1"] .map-caption').getByText('Telegram').waitFor();
@@ -855,7 +862,7 @@ async function freeDragTest(){
  const viewBox=page=>page.locator('.map-lines').evaluate(e=>e.getAttribute('viewBox').split(' ').map(Number));
  const {context,page}=await open({width:1280,height:800,appState:alertState});
  const node=page.locator('.map-site[data-site="s2"]');await node.waitFor();
- const auto=await place(node),vp=await page.locator('.map-viewport').boundingBox();await page.getByRole('button',{name:'Fit to screen'}).click();
+ const auto=await place(node),vp=await page.locator('.map-viewport').boundingBox();await page.getByRole('button',{name:'Fit to screen'}).click();for(let i=0;i<3;i++)await page.getByRole('button',{name:'Zoom out'}).click(); // zoomed out by hand: Fit itself stops at 80%
  // Drag to the top left corner, pan the view with the arrow keys, drag again: well past the old edge at 0
  for(let i=0;i<2;i++){
   const b=await node.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(vp.x+40,vp.y+40,{steps:8});await page.mouse.up();
@@ -875,7 +882,7 @@ async function freeDragTest(){
  await context.close();
  // Touch: the same drag with a finger
  {const {context:c,page:p}=await open({width:1280,height:800,appState:alertState,touch:true});const n=p.locator('.map-site[data-site="s2"]');await n.waitFor();
-  await p.getByRole('button',{name:'Fit to screen'}).click();const a=await place(n),b=await n.boundingBox(),v=await p.locator('.map-viewport').boundingBox(),cdp=await c.newCDPSession(p);
+  await p.getByRole('button',{name:'Fit to screen'}).click();for(let i=0;i<3;i++)await p.getByRole('button',{name:'Zoom out'}).click();const a=await place(n),b=await n.boundingBox(),v=await p.locator('.map-viewport').boundingBox(),cdp=await c.newCDPSession(p);
   const x0=b.x+b.width/2,y0=b.y+b.height/2,touch=(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'?[]:[{x,y,id:1}]});
   await touch('touchStart',x0,y0);for(let i=1;i<=8;i++)await touch('touchMove',x0+(v.x+20-x0)*i/8,y0+(v.y+20-y0)*i/8);await touch('touchEnd');
   const m=await place(n);assert.ok(m[0]<a[0]-48&&m[1]<a[1]-48,'a finger moves the node left and up: '+JSON.stringify([a,m]));await c.close();}
@@ -997,8 +1004,8 @@ try{
    assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>/map|layout|position/i.test(k)).length),0,'nothing persisted');
    // Fit shrinks the map when asked, down to the minimum, and everything is then inside the viewport
    await page.getByRole('button',{name:'Fit to screen'}).click();
-   const kFit=await scaleOf(page);assert.ok(kFit>=0.45-0.001&&kFit<1,"fit scale between 45% and 100%");
-   if(kFit>0.451)for(const b of [...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-storage')])assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
+   const kFit=await scaleOf(page);assert.ok(kFit>=0.8-0.001&&kFit<1,"fit scale between 80% and 100%");
+   if(kFit>0.801)for(const b of [...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-storage')])assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
    // Zoom buttons, keyboard, fit
    const k0=await scaleOf(page);
    await page.getByRole('button',{name:'Zoom in'}).click();assert.ok(await scaleOf(page)>k0,'zoom in');
@@ -1012,7 +1019,8 @@ try{
    const m=await viewport.boundingBox();
    await page.mouse.move(m.x+m.width/2,m.y+m.height/2);await page.mouse.wheel(0,-300);
    await page.waitForFunction(k=>new DOMMatrix(getComputedStyle(document.querySelector('.map-canvas')).transform).a>k,k0);
-   await page.getByRole('button',{name:'Fit to screen'}).click();
+   // Fit no longer shrinks below 80%, so the move scenarios use a window tall enough to show the whole fixture map.
+   await page.setViewportSize({width:1440,height:1500});await page.getByRole('button',{name:'Fit to screen'}).click();
    await panelChecks(page,scheme);
    await reconnectChecks(page,scheme);
    await moveFlow(page,scheme);

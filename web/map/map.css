@@ -9,7 +9,7 @@
 .map-root .map-group{display:contents}
 .map-root .map-caption{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
 .map-root svg{flex:none}
-.map-root .map-live{min-height:var(--lh-caption);font-size:var(--fs-body);color:var(--text-secondary)}
+.map-root .map-live{min-height:calc(2 * var(--lh-body));font-size:var(--fs-body);color:var(--text-secondary)}
 .map-root.map-empty{align-items:center;text-align:center;padding:48px 16px;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);color:var(--text-muted)}
 .map-root.map-empty h2{margin:0;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--heading)}
 .map-root.map-empty p{margin:0}
@@ -146,6 +146,7 @@
 .map-root .map-dialog-body{flex:1;min-height:0;padding:24px;display:flex;flex-direction:column;gap:16px;overflow:auto;font-size:var(--fs-body);line-height:var(--lh-body)}
 .map-root .map-dialog-foot{flex:none}
 .map-root .map-dialog-foot button{width:148px;white-space:nowrap}
+@media(min-width:768px){.map-root dialog.map-dialog.map-fit{height:fit-content;max-height:min(600px,calc(100dvh - 32px))}.map-root dialog.map-dialog.map-fit .map-dialog-body{flex:0 1 auto}}
 .map-root .map-inline-actions{display:flex;gap:12px;flex-wrap:wrap}
 .map-root .map-inline-actions button{white-space:nowrap}
 .map-root .map-install{display:flex;flex-direction:column;gap:12px}
@@ -329,7 +330,7 @@
 .map-root .cx-stack button{width:100%;min-height:44px;white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.map-root .map-alert .cx-del{transition:none}.map-root .map-undo{animation:none}}
 .map-root .map-toolbar .bc-toggle{margin-right:auto}
-.map-root .map-toolbar .bc-toggle[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.map-root .map-toolbar .bc-toggle[aria-pressed=true]{color:var(--accent);font-weight:700;text-decoration-thickness:2px}
 
 /* n8n-style details panel: one grid of rows, hairline-divided sections, quiet link actions. 8px rhythm. */
 .map-root .map-panel-body,.map-root .map-dialog-body{gap:16px}

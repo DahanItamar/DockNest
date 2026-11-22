@@ -130,7 +130,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
    <div role="status" aria-live="polite" className="cx-result-box">{result&&<p className={'cx-result '+(result.ok?'ok':'bad')}>{result.ok?<IconCircleCheck size={16} stroke={2} aria-hidden="true"/>:<IconCircleX size={16} stroke={2} aria-hidden="true"/>}<span>{result.text}</span></p>}</div>
    {error&&<AlertPanel variant="error">{error.text}</AlertPanel>}
    {guard.box}
-   <div className="modal-foot"><span className="t-caption rt-why" role="status">{why}</span><button type="button" onClick={onClose}>{readOnly?'Close':'Cancel'}</button><button type="button" disabled={!item||missing||testing||busy||guard.waiting} onClick={test}>{testing?'Sending…':'Send test'}</button>{!readOnly&&<button type="submit" className="primary" disabled={missing||busy||guard.waiting}>{busy?'Saving…':'Save'}</button>}</div>
+   <div className="modal-foot"><span className="t-caption rt-why" role="status">{why}</span><button className="link-action" type="button" onClick={onClose}>{readOnly?'Close':'Cancel'}</button><button className="link-action" type="button" disabled={!item||missing||testing||busy||guard.waiting} onClick={test}>{testing?'Sending…':'Send test'}</button>{!readOnly&&<button type="submit" className="primary" disabled={missing||busy||guard.waiting}>{busy?'Saving…':'Save'}</button>}</div>
   </form>
  </dialog>;
 }
@@ -147,7 +147,7 @@ export function DeleteConnectionDialog({client,connection,onClose,onDeleted}){
     :<p>The login is removed from DockNest. If it leaked, also revoke it at the provider.</p>}
    {error&&<AlertPanel variant="error">{error}</AlertPanel>}
    {guard.box}
-   <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||used.length>0} onClick={go}>Delete</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||used.length>0} onClick={go}>Delete</button></div>
   </div>
  </dialog>;
 }

@@ -33,8 +33,8 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
   return()=>{alive=false};
  },[client,site.id,tries]);
  const title='Self-heal',label='map-selfheal-title',cls='dialog-edge sh-sheet';
- if(loadError)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setLoadError('');setData(null);setTries(x=>x+1)}}>Try again</button></>}><AlertPanel variant="error" title="Could not load">{loadError}</AlertPanel></Sheet>;
- if(!data)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<button type="button" onClick={onClose}>Cancel</button>}><div className="sh-load" role="status" aria-live="polite"><StatusLabel state="running">Loading…</StatusLabel></div></Sheet>;
+ if(loadError)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setLoadError('');setData(null);setTries(x=>x+1)}}>Try again</button></>}><AlertPanel variant="error" title="Could not load">{loadError}</AlertPanel></Sheet>;
+ if(!data)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<button className="link-action" type="button" onClick={onClose}>Cancel</button>}><div className="sh-load" role="status" aria-live="polite"><StatusLabel state="running">Loading…</StatusLabel></div></Sheet>;
  // A site that was never switched on has no watched list yet, so "no health check" is known from the server's answer: the stream reason, a static site, or a 422 on save.
  const canEdit=data.canEdit===true,noHc=data.available===false||data.stream?.reason==='no_healthcheck'||noHcSeen,locked=!canEdit||noHc;
  const found=(Array.isArray(data.watched)?data.watched:[]).filter(w=>w.found===true);
@@ -53,7 +53,7 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
   try{await client.save(site.id,{enabled,maxRestarts:validRestarts(count)?Number(count):DEFAULT_RESTARTS,windowMinutes});onSaved?.(enabled?'Self-heal saved.':'Self-heal is off.')}
   catch(e){if(e.status===401&&onSessionExpired){onSessionExpired();return}if(e.status===401){setError({title:'Signed out',text:SESSION});return}if(e.code==='NO_HEALTHCHECK'){setNoHcSeen(true);setEnabled(false);return}setError(saveError(e))}finally{setBusy(false)}
  }
- return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={canEdit?<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'Saving…':'Save'}</button></>:<button type="button" onClick={onClose}>Close</button>}>
+ return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={canEdit?<><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'Saving…':'Save'}</button></>:<button type="button" onClick={onClose}>Close</button>}>
   <div className="sb-switch-row sh-switch">
    <span className="sb-switch-text"><span id={on} className="sb-switch-label">Restart unhealthy containers</span></span>
    <button type="button" role="switch" className="switch" aria-checked={enabled&&!noHc} aria-labelledby={on} disabled={locked} onPointerDown={e=>e.preventDefault()} onClick={()=>{setError(null);setEnabled(v=>!v)}}></button>

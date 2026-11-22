@@ -65,6 +65,6 @@ export function SiteStorageDialog({client,site,siteRetention,onClose,onSaved,onS
   </div>}
   {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title={error.reason}>{error.action}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy||guard.waiting}>{busy?'Saving…':'Save'}</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy||guard.waiting}>{busy?'Saving…':'Save'}</button></div>
  </form>;
 }
