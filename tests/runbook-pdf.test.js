@@ -63,6 +63,7 @@ test('golden structure: header, xref offsets of every object, object count and t
   // The only links are the two DockNest credit links, real URI annotations, and nothing from the input.
   assert.deepEqual([...text.matchAll(/\/URI \(([^)]*)\)/g)].map(match => match[1]).sort(), ['https://github.com/DahanItamar/DockNest', 'https://trydocknest.com']);
   assert.equal([...text.matchAll(/\/Subtype \/Link/g)].length, 2);
+  assert.ok(/\/Subtype \/Image [^>]*\/SMask/.test(text) && text.includes('/Im1'), 'the DockNest mark is in the page header as an image with a transparent background');
   assert.match(readText(pdf), /Made with DockNest[\s\S]*github\.com\/DahanItamar\/DockNest[\s\S]*trydocknest\.com/);
 });
 test('sections flow on: the title shares page 1, a short section needs no page of its own, and the credit is on every page', () => {
