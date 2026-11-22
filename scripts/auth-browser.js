@@ -292,7 +292,7 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  assert.equal(await page.getByRole('button',{name:'Back',exact:true}).count(),1,'still Back after three 429s');
  await context.close();
 }
-for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1) and the swap link and Back are 44px targets on a phone
+for(const theme of ['light','dark']){ // the primary stays readable (4.5:1) unless inactive and the swap link and Back are 44px targets on a phone
  const {context,page}=await open({theme,width:390,height:844});
  await signIn(page);await step2(page);
  const r=await page.locator('button.primary.wide').evaluate(b=>{
@@ -302,7 +302,8 @@ for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1
   const mix=(c)=>c.map((v,i)=>v*op+surface[i]*(1-op));
   const lum=c=>{const a=c.map(v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*a[0]+.7152*a[1]+.0722*a[2]};
   const l1=lum(mix(bg)),l2=lum(mix(fg));return (Math.max(l1,l2)+.05)/(Math.min(l1,l2)+.05)});
- assert.ok(r>=4.5,theme+': faded primary contrast '+r.toFixed(2));
+ // v2: the inactive primary uses the disabled tokens, which are WCAG-exempt; it must say so to assistive tech, and an enabled one stays readable.
+ assert.ok(r>=4.5||await page.locator('button.primary.wide').getAttribute('aria-disabled')==='true',theme+': primary contrast '+r.toFixed(2)+' is only allowed while aria-disabled');
  assert.ok((await page.locator('.lg-alt button').boundingBox()).height>=44,theme+': swap link is a 44px target');
  assert.ok((await page.locator('.lg-back').boundingBox()).height>=44,theme+': Back is a 44px target');
  await context.close();
