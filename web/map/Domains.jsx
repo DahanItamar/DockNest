@@ -10,7 +10,7 @@ const HOP_ICON={domain:IconWorld,dns:IconNetwork,proxy:IconArrowsSplit,app:IconB
 export const Status=({state,children})=><StatusLabel state={state}>{children||WORD[state]}</StatusLabel>;
 
 // The five steps of one domain: domain, DNS, proxy, app, certificate. Read-only; a step that is not green says why and what to do.
-export function PathStepper({row,ctx,checking,error,onLink,now}){
+export function PathStepper({row,ctx,checking,error,onLink,onAddApp,now}){
  const rows=pathRows(row,ctx);
  return <ol className="map-path" aria-label={'Path of '+row.domain}>
   {rows.map(h=>{const st=checking?'running':h.state,stale=!checking&&error&&h.k!=='domain';
@@ -21,14 +21,14 @@ export function PathStepper({row,ctx,checking,error,onLink,now}){
      <p className="map-hop-detail">{checking?'Looking…':h.detail}</p>
      {stale&&<p className="map-caption">Last known result, {checkedText(row,now).replace(/^Checked /,'checked ')}</p>}
      {!checking&&h.reason&&<p className="map-hop-reason">{h.reason}</p>}
-     {!checking&&(h.next||h.link)&&<p className="map-hop-next">{h.next&&<><b>Next step</b> {h.next} </>}{h.link&&onLink&&<button type="button" className="map-hoplink" onClick={onLink}>Open Connections</button>}</p>}
+     {!checking&&(h.next||h.link)&&<p className="map-hop-next">{h.next&&<><b>Next step</b> {h.next} </>}{h.link==='connections'&&onLink&&<button type="button" className="map-hoplink" onClick={onLink}>Open Connections</button>}{h.link==='add-static'&&onAddApp&&<button type="button" className="link-action" onClick={()=>onAddApp(row)}>Add as app</button>}</p>}
     </div>
    </li>})}
  </ol>;
 }
 
 // The path panel for one domain (a node on the Map, or a row in an app's panel).
-export function DomainPanel({row,narrow,ctx,checking,error,canCheck,onCheck,onClose,onOpenApp,onConnections,now}){
+export function DomainPanel({row,onAddApp,others=[],checkingOf=()=>false,errorOf=()=>'',narrow,ctx,checking,error,canCheck,onCheck,onClose,onOpenApp,onConnections,now}){
  const never=!row.hops,busy=!!checking;
  const check=canCheck&&<button type="button" className={never&&!busy?'primary':'link-action'} disabled={busy} onClick={()=>onCheck(row.domain)}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{never?'Check now':'Check again'}</button>;
  const open=row.siteId&&onOpenApp&&<button type="button" className={never&&canCheck?'link-action':'primary'} onClick={()=>onOpenApp(row.siteId)}>Open app</button>;
@@ -42,9 +42,13 @@ export function DomainPanel({row,narrow,ctx,checking,error,canCheck,onCheck,onCl
    <p className="map-hop-detail"><b>Not checked yet</b></p>
    <p className="map-caption">DockNest has not looked at {row.domain} yet. A check reads its DNS record, the proxy, the app and the certificate. It changes nothing.</p>
   </>:<>
-   <PathStepper row={row} ctx={ctx} checking={busy} error={error} onLink={onConnections} now={now}/>
+   <PathStepper row={row} ctx={ctx} checking={busy} error={error} onLink={onConnections} onAddApp={onAddApp} now={now}/>
    {!busy&&row.checkedAt&&<p className="map-caption map-checked"><IconClock size={16} stroke={1.75} aria-hidden="true"/>{checkedText(row,now)}</p>}
   </>}
+  {others.map(o=><section key={o.domain} className="map-alias" aria-label={'Also served as '+o.domain}>
+   <h3 className="map-group-title">Also served as {o.domain}</h3>
+   {o.hops?<PathStepper row={o} ctx={ctx} checking={!!checkingOf(o.domain)} error={errorOf(o.domain)} onLink={onConnections} onAddApp={onAddApp} now={now}/>:<p className="map-caption">Not checked yet.</p>}
+  </section>)}
  </SidePanel>;
 }
 

@@ -43,6 +43,7 @@ export function hopText(name,hop,ctx={}){
   const px=proxyName(p.proxy),up=p.upstream||'';
   if(r==='routed')return out(`${px} on ${srv} sends it to ${up}${p.appServerId?` on ${serverName(p.appServerId)}`:''}.`);
   if(r==='static')return out(`${px} on ${srv} serves this static site.`);
+  if(r==='static-no-app')return out(`${px} on ${srv} serves it as a static site${p.root?` from ${p.root}`:''}.`,{next:'Add it as a static app to back it up.',link:'add-static'});
   if(r==='no-route')return out(`No proxy on ${srv} has this domain.`,{reason:`Visitors reach ${srv}, but nothing there sends this domain to ${siteName}.`,next:`Add the domain to the proxy on ${srv} and send it to ${siteName}, then check again.`});
   if(r==='routes-elsewhere')return out(`${px} on ${srv} sends it to ${up||'another target'}.`,{reason:`That target is not a container of ${siteName}.`,next:`Change the route to the port ${siteName} publishes, then check again.`});
   if(r==='proxy-stopped')return out(`${px} on ${srv} has the route, but it is not running.`,{next:`Start ${px} on ${srv}, then check again.`});
@@ -92,12 +93,76 @@ export function domainStatus(row,{checking=false,error=''}={}){
  if(error&&RANK[worst]<RANK['needs-review'])worst='needs-review';
  return worst;
 }
-// What the Map's layout needs: where each domain sits (the server its DNS answers with), and why it has none.
-export function layoutDomains(view,serverIds){
- const g=view?.groups||{},place={};
+// Registrable domain (the name someone buys): the last two labels, or three under a common two-part public suffix.
+// This is a short list on purpose (no network, no big table); a suffix that is missing only means a subdomain of it is drawn
+// straight to the server, as before. Documented in docs/domains.md.
+const SUFFIX2=new Set(['co.il','org.il','net.il','ac.il','gov.il','muni.il','co.uk','org.uk','ac.uk','gov.uk','me.uk','ltd.uk','plc.uk','com.au','net.au','org.au','edu.au','gov.au','co.nz','org.nz','net.nz','co.za','org.za','co.jp','ne.jp','or.jp','co.in','net.in','org.in','com.br','net.br','org.br','com.mx','com.ar','com.tr','com.cn','net.cn','org.cn','com.hk','com.sg','com.tw','co.kr','co.id','com.ua','com.pl','com.es']);
+export function registrableOf(name){
+ const labels=String(name||'').toLowerCase().split('.').filter(Boolean);
+ if(labels.length<=2)return labels.join('.');
+ return labels.slice(-(SUFFIX2.has(labels.slice(-2).join('.'))?3:2)).join('.');
+}
+// Apps that own a domain: the apps that list it, plus the app the API routed it to. Zero (no app), one, or several.
+export function ownersOf(name,rows,sites=[]){
+ const ids=new Set(sites.filter(site=>(Array.isArray(site?.config?.domains)?site.config.domains:[]).includes(name)).map(site=>site.id));
+ const row=(Array.isArray(rows)?rows.find(r=>r.domain===name):rows?.[name]);
+ if(row?.siteId&&sites.some(site=>site.id===row.siteId))ids.add(row.siteId);
+ return [...ids].sort();
+}
+const labelsOf=name=>String(name||'').toLowerCase().split('.').filter(Boolean);
+// One node per name people think of as one domain. "www.x" is an alias of "x" when both are on the Map and the same app owns both
+// (ownerKey), so the www name is shown inside the node and moves with it; a www name of another app stays its own node.
+// Returns {nodes:[{id,aliases:[],names:[]}], nodeOf:{name:nodeId}} in the order of the rows.
+export function groupDomains(rows=[],ownerKey=()=>''){
+ const names=new Set(rows.map(r=>r.domain)),nodeOf={},nodes=[],byId={};
+ for(const r of rows){
+  const d=r.domain,root=d.startsWith('www.')&&names.has(d.slice(4))&&ownerKey(d)===ownerKey(d.slice(4))?d.slice(4):d;
+  nodeOf[d]=root;
+  if(root===d){const n={id:d,aliases:[],names:[d]};nodes.push(n);byId[d]=n}
+ }
+ for(const r of rows){const d=r.domain,root=nodeOf[d];if(root!==d){byId[root].aliases.push(d);byId[root].names.push(d)}}
+ const parentOf={};
+ for(const n of nodes){const t=treeParent(n.id,byId,()=>true);if(t.parent)parentOf[n.id]=t.parent}
+ return {nodes,parentOf,nodeOf};
+}
+// The parent of a name on the Map: the nearest ancestor that is a node and passes sameSide(ancestor), never going above the registrable
+// domain (so a public suffix such as co.il is never a parent). partOf: the nearest ancestor that is on the Map but on another side.
+export function treeParent(id,byId,sameSide){
+ const need=labelsOf(registrableOf(id)).length;let labels=labelsOf(id),partOf=null;
+ while(labels.length>need){
+  labels=labels.slice(1);const c=labels.join('.');
+  if(labels.length<need)break;
+  if(byId[c]){if(sameSide(c))return {parent:c,partOf:null};partOf=partOf||c}
+ }
+ return {parent:null,partOf};
+}
+// The status of a merged node: the worst of its names.
+export function groupStatus(names,rowOf,statusOf){
+ let worst='queued';
+ for(const n of names){const r=rowOf[n];if(!r)continue;const s=statusOf(r);if(s==='running')return s;if(RANK[s]>RANK[worst])worst=s}
+ return worst;
+}
+// What the Map's layout needs: one entry per node (aliases merged), where it sits and its parent node.
+// Where: the server its DNS answers with; while its app is moving, the server the app moves to (pending, dashed); once the app has moved, the
+// app's own server. A domain with no app, or several apps, is always placed by DNS. The parent is the nearest ancestor on the SAME server
+// (so a line never crosses to another server's domain); an ancestor on another server only gives a quiet "part of" caption.
+// ctx: {sites:[], pending:{siteId:targetServerId}, done:Set(siteIds)}
+export function layoutDomains(view,serverIds,ctx={}){
+ const g=view?.groups||{},place={},rows=view?.domains||[],sites=ctx.sites||[],pending=ctx.pending||{},done=ctx.done||new Set();
  for(const [id,list] of Object.entries(g.servers||{}))for(const d of list)place[d]=id;
- const nowhere=new Set(g.pointsNowhere||[]);
- return (view?.domains||[]).map(r=>({id:r.domain,serverId:nowhere.has(r.domain)?null:serverIds.has(place[r.domain])?place[r.domain]:null,loose:nowhere.has(r.domain)?'nowhere':'unplaced'}));
+ const nowhere=new Set(g.pointsNowhere||[]),ownerKey=d=>ownersOf(d,rows,sites).join(','),grouped=groupDomains(rows,ownerKey);
+ const placed=grouped.nodes.map(n=>{
+  const owners=ownersOf(n.id,rows,sites),site=owners.length===1?sites.find(x=>x.id===owners[0]):null;
+  let serverId=nowhere.has(n.id)?null:serverIds.has(place[n.id])?place[n.id]:null,moving=false;
+  if(serverId&&site){
+   if(pending[site.id]&&serverIds.has(pending[site.id])&&pending[site.id]!==serverId){serverId=pending[site.id];moving=true}
+   else if(done.has(site.id)&&serverIds.has(site.serverId))serverId=site.serverId;
+  }
+  const loose=nowhere.has(n.id)?'nowhere':'unplaced';
+  return {id:n.id,aliases:n.aliases,serverId,loose,pending:moving,ownerSiteId:site?site.id:null,side:serverId||'loose:'+loose};
+ });
+ const byId=Object.fromEntries(placed.map(d=>[d.id,d]));
+ return placed.map(d=>{const t=treeParent(d.id,byId,c=>byId[c].side===d.side&&byId[c].pending===d.pending);return {id:d.id,aliases:d.aliases,parentId:t.parent,partOf:t.partOf,serverId:d.serverId,loose:d.loose,pending:d.pending,ownerSiteId:d.ownerSiteId}});
 }
 // Line classes by the worst step: st-ok, st-wn, st-er, st-nc (not checked, dashed).
 export const lineState=s=>({success:'ok','needs-review':'wn',failed:'er',queued:'nc',running:'nc'}[s]||'nc');

@@ -56,3 +56,4 @@
 .map-root .map-list .map-drow .status{flex:none}
 .map-root .map-list-group>.map-list-doms{margin-top:12px}
 @media(prefers-reduced-motion:reduce){.map-root .map-badge.dom-running{animation:none}}
+.map-root .map-lines .dwire.pending,.map-root .map-lines .pending.dragging{stroke:var(--accent);stroke-dasharray:6 4}

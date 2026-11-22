@@ -5,7 +5,8 @@ import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,I
 import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
 import {IconTrash,IconBell,IconWorld,IconWorldOff} from '@tabler/icons-react';
 import {useDomains} from './domains-client.js';
-import {domainStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domains-model.js';
+import {dropVerdict,moveState} from './domain-moves.js';
+import {ownersOf,domainStatus,groupDomains,groupStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domains-model.js';
 import {DomainPanel,AppDomains,DomainRows} from './Domains.jsx';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
@@ -122,8 +123,13 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const toggleDomains=()=>setDomOn(v=>{try{localStorage.setItem(domToggleKey,v?'off':'on')}catch{}return !v});
  const domRows=useMemo(()=>Object.fromEntries((dom.view?.domains||[]).map(r=>[r.domain,r])),[dom.view]);
  const serverIdSet=useMemo(()=>new Set(servers.map(x=>x.id)),[servers]);
- const domLayout=useMemo(()=>domOn&&dom.view?layoutDomains(dom.view,serverIdSet):[],[domOn,dom.view,serverIdSet]);
+ const [moves,setMoves]=useState([]),[edit,setEdit]=useState(null);
+ // Domains follow their app: while its move is going on they show at the new server (dashed), afterwards they sit there.
+ const mv=useMemo(()=>moveState(moves,edit),[moves,edit]);
+ const domLayout=useMemo(()=>domOn&&dom.view?layoutDomains(dom.view,serverIdSet,{sites,pending:mv.pending,done:mv.done}):[],[domOn,dom.view,serverIdSet,sites,mv]);
  const statusOf=r=>domainStatus(r,{checking:!!dom.checking[r.domain],error:dom.errors[r.domain]});
+ // One node can hold a root name and its www aliases: its status is the worst of its names.
+ const domGroup=useMemo(()=>groupDomains(dom.view?.domains||[]),[dom.view]),groupOf=id=>domGroup.nodes.find(n=>n.id===id)||{id,aliases:[],names:[id]},nodeStatus=id=>groupStatus(groupOf(id).names,domRows,statusOf);
  const livePos=useMemo(()=>dragPos?{...positions,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}:positions,[positions,dragPos]);
  const links=useMemo(()=>linkPairs(servers),[servers]);
  const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:livePos,domains:domLayout}),[servers,sites,storage,backupOf,links,alertLayout,livePos,domLayout]);
@@ -158,7 +164,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function closePanel(back=true){setPanel(null);setGhost(null);setSel(null);if(back)setTimeout(()=>opener.current?.focus?.(),0)}
  useEffect(()=>{if(!panel||narrow)return;const h=e=>{if(e.key==='Escape'&&!e.defaultPrevented&&!document.querySelector('dialog[open]'))closePanel(true)};document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h)},[panel,narrow]);
  const [shFlow,setShFlow]=useState(null),shClient=useMemo(()=>createSelfHealClient(api||(()=>Promise.reject(new Error('Self-heal is not available.')))),[api]);
- const [edit,setEdit]=useState(null),[checks,setChecks]=useState({}),[flow,setFlow]=useState(null),opener=useRef(null);
+ const [checks,setChecks]=useState({}),[flow,setFlow]=useState(null),opener=useRef(null);
  const pending=edit&&edit.targetId?edit:null,unconnected=edit&&!edit.targetId?edit:null;
  const siteChecks=checks[drag?.id]||{};
  function precheck(siteId){
@@ -172,7 +178,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   setFlow(f=>({kind:'review',siteId,targetId,busy:true,preview:f?.preview}));
   client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,kind:'review',preview:p,busy:false,error:''})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,blockers:[friendly(e)]}}));
  }
- const [moves,setMoves]=useState([]);
+
  const loadMoves=useCallback(()=>{if(canMove)client.list().then(r=>setMoves(Array.isArray(r?.moves)?r.moves:[])).catch(()=>{})},[client,canMove]);
  useEffect(()=>{loadMoves();const t=setInterval(loadMoves,15000);return()=>clearInterval(t)},[loadMoves]);
  // Launches that are still going on the server whose details are open (event-driven: read when the panel opens and when a launch dialog closes).
@@ -218,6 +224,21 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(targetId===byId.sites[siteId]?.serverId){setEdit(null);setNote(`${name} stays on ${target}. Nothing changes.`);return;}
   if(r&&blocked(r)){setEdit({siteId,targetId:null,loose:loose||edit?.loose||null});setNote(`${name} cannot move to ${target}. ${why(r)} ${name} is not connected.`);return;}
   setEdit({siteId,targetId});setNote(`${name} will move to ${target}. Choose Save changes to continue.`);
+ }
+ // One drop handler for app ports and domain ports. A drop that is refused says why and changes nothing.
+ function dropOn(g,d){
+  if(g.domain){
+   if(!d.over)return;
+   const v=dropVerdict({domain:g.domain,rows:dom.view?.domains||[],sites,servers,targetServerId:d.over,moves});
+   if(!v.ok){setNote(v.hint);return}
+   connect(v.siteId,d.over,{x:d.px,y:d.py});
+   return;
+  }
+  if(d.over){
+   const v=dropVerdict({siteId:g.id,sites,servers,targetServerId:d.over,moves});
+   if(!v.ok&&v.reason==='running'){setNote(v.hint);return}
+   connect(g.id,d.over,{x:d.px,y:d.py});
+  }else disconnect(g.id,{x:d.px,y:d.py});
  }
  function disconnect(siteId,loose){
   const s=layout.sites.find(x=>x.id===siteId);if(!s)return;
@@ -267,11 +288,13 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  });
  function tidy(){pushHist();setPositions({});setNote('The map is tidy again. Undo brings your layout back.')}
 
- // The default view is always 100%: centred when the map fits, otherwise the top-left of the content. Only the Fit button and the 0 key shrink it.
+ // The opening view fits the whole map (never above 100%, never below 80%) and is centred; a map that is still too big is centred on its middle.
+ // A view the person set (pan, zoom, drag) is never replaced.
  const home=useCallback(()=>{
   const el=view.current;if(!el)return;
   const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
-  setT({k:1,...homeOffset(layout,1,w,h)});
+  const k=clamp(Math.min(w/layout.width,h/layout.height),FIT_MIN,1);
+  setT({k,...homeOffset(layout,k,w,h)});
  },[layout.x0,layout.y0,layout.width,layout.height]);
  const fit=useCallback(()=>{
   const el=view.current;if(!el)return;
@@ -318,10 +341,16 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function down(e){
   if(e.button>0)return;
   pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  const port=canMove&&e.target.closest?.('[data-port-site]'),aport=alertsOn&&e.target.closest?.('[data-alert-src]');
+  const port=canMove&&e.target.closest?.('[data-port-site],[data-port-domain]'),aport=alertsOn&&e.target.closest?.('[data-alert-src]');
   if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);setAdrag(null);}
   else if(aport){const [k,...r]=aport.dataset.alertSrc.split(':'),src=alertSource(k,r.join(':')),[px,py]=toCanvas(e);if(src.kind==='site')precheck(src.id);gesture.current={type:'alert',src,x:e.clientX,y:e.clientY,moved:false};setAdrag({src,px,py,over:null});}
-  else if(port&&edit&&edit.siteId!==port.dataset.portSite){setNote('Save or cancel the current change first.');gesture.current=null;}
+  else if(port&&port.dataset.portDomain&&edit&&edit.siteId&&ownersOf(port.dataset.portDomain,dom.view?.domains||[],sites)[0]!==edit.siteId){setNote('Save or cancel the current change first.');gesture.current=null;}
+  else if(port&&port.dataset.portSite&&edit&&edit.siteId!==port.dataset.portSite){setNote('Save or cancel the current change first.');gesture.current=null;}
+  else if(port&&port.dataset.portDomain){
+   // A domain drag is the drag of its app: the same flow, started from the domain's own output dot.
+   const name=port.dataset.portDomain,owners=ownersOf(name,dom.view?.domains||[],sites),id=owners.length===1?owners[0]:null;
+   if(id)precheck(id);const [px,py]=toCanvas(e);gesture.current={type:'drag',id,domain:name,x:e.clientX,y:e.clientY,moved:false};setDrag({id,domain:name,px,py,over:null});
+  }
   else if(port){const id=port.dataset.portSite;precheck(id);const [px,py]=toCanvas(e);gesture.current={type:'drag',id,x:e.clientX,y:e.clientY,moved:false};setDrag({id,px,py,over:null});}
   else{
    const node=e.target.closest?.('[data-node]')||null,nk=node?.dataset.node,kind=nk?nk.split(':')[0]:'',n=nk&&layout.keys?.[nk];
@@ -352,7 +381,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   else if(g.type==='drag'){
    if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
    const [px,py]=toCanvas(e),over=serverAt(px,py);
-   setDrag({id:g.id,px,py,over:over?over.id:null});
+   setDrag({id:g.id,domain:g.domain,px,py,over:over?over.id:null});
   }
  }
  function up(e){
@@ -363,8 +392,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(g?.type==='pan'&&!g.moved&&!g.node&&e.type==='pointerup')setSel(null);
   if(g?.type==='alert'&&g.moved&&e.type==='pointerup'){if(adrag?.over)openAlert(adrag.over,g.src,view.current);else if(adrag?.overServer)connect(g.src.id,adrag.overServer,{x:adrag.px,y:adrag.py});}
   if(g?.type==='drag'&&g.moved&&drag){
-   if(drag.over)connect(g.id,drag.over,{x:drag.px,y:drag.py});
-   else disconnect(g.id,{x:drag.px,y:drag.py});
+   dropOn(g,drag);
   }
   if(!pointers.current.size){gesture.current=null;setDrag(null);setAdrag(null);setDragPos(null);}
  }
@@ -469,8 +497,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    return <AlertPanel key={(ch?.id||'new')+':'+panel.n} narrow={narrow} node={ch} rules={alerts.rules} connections={alerts.connections} providers={alerts.providers} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} connClient={connClient} role={alerts.role||user?.role} onClose={close} onReload={loadAlerts} onSaved={async(saved,created)=>{if(created&&ghost)setPositions(p=>({...p,['alert:'+saved.id]:{x:ghost.x,y:ghost.y}}));await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
   }
   if(panel.kind==='domain'&&domRows[panel.id]){
-   const r=domRows[panel.id],site=byId.sites[r.siteId];
-   return <DomainPanel key={r.domain} row={r} narrow={narrow} ctx={{serverName:id=>byId.servers[id]?.name||'the server',siteName:site?.name||'the app'}} checking={!!dom.checking[r.domain]} error={dom.errors[r.domain]} canCheck={canDomains} onCheck={d=>dom.check(d)} onClose={close} onConnections={onOpenConnections?()=>{closePanel(false);onOpenConnections()}:undefined} onOpenApp={byId.sites[r.siteId]?id=>{closePanel(false);onOpenSite?.(byId.sites[id])}:undefined}/>;
+   const r=domRows[panel.id],site=byId.sites[r.siteId],grp=groupOf(r.domain),others=grp.aliases.map(a=>domRows[a]).filter(Boolean);
+   return <DomainPanel key={r.domain} row={r} onAddApp={canMove&&onAddSite?d=>{closePanel(false);onAddSite(d.hops?.proxy?.params?.serverId||d.serverId,d.domain)}:undefined} others={others} checkingOf={d=>!!dom.checking[d]} errorOf={d=>dom.errors[d]} status={nodeStatus(r.domain)} narrow={narrow} ctx={{serverName:id=>byId.servers[id]?.name||'the server',siteName:site?.name||'the app'}} checking={!!dom.checking[r.domain]} error={dom.errors[r.domain]} canCheck={canDomains} onCheck={d=>{dom.check(d);others.forEach(o=>dom.check(o.domain))}} onClose={close} onConnections={onOpenConnections?()=>{closePanel(false);onOpenConnections()}:undefined} onOpenApp={byId.sites[r.siteId]?id=>{closePanel(false);onOpenSite?.(byId.sites[id])}:undefined}/>;
   }
   if(panel.kind==='storage'&&byId.storage[panel.id]){
    const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
@@ -482,7 +510,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   return null;
  }
  const panelKey=!panel?null:panel.kind==='alert'?'alert:'+panel.id:panel.kind==='docknest'?'docknest:root':['server','site','storage','domain'].includes(panel.kind)?panel.kind+':'+panel.id:null;
- const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.linkPaths.map(p=>['l'+p.id,'site:'+p.a,'site:'+p.b]),...layout.domainPaths.filter(p=>p.serverId).map(p=>['d'+p.id,'domain:'+p.id,'server:'+p.serverId]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
+ const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.linkPaths.map(p=>['l'+p.id,'site:'+p.a,'site:'+p.b]),...layout.domainPaths.filter(p=>p.serverId||p.parentId).map(p=>['d'+p.id,'domain:'+p.id,p.parentId?'domain:'+p.parentId:'server:'+p.serverId]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
  const actKey=hot||(sel?.type==='node'?sel.key:null),actLine=!hot&&sel?.type==='line'?sel.id:null,lit=new Set(),litNodes=new Set();
  if(actLine){const e=ends.find(x=>x[0]===actLine);if(e){lit.add(e[0]);litNodes.add(e[1]);litNodes.add(e[2])}}
  else if(actKey){litNodes.add(actKey);for(const [id,a,b] of ends)if(a===actKey||b===actKey){lit.add(id);litNodes.add(a);litNodes.add(b)}}
@@ -497,7 +525,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
  const siteRect=id=>layout.sites.find(s=>s.id===id);
- const draggedSite=drag&&siteRect(drag.id),broken=unconnected&&siteRect(unconnected.siteId);
+ const draggedSite=drag&&!drag.domain&&siteRect(drag.id),broken=unconnected&&siteRect(unconnected.siteId);
  const brokenPoint=drag?{x:drag.px,y:drag.py}:unconnected?.loose;
  const amber=(site,pt)=>site&&pt&&<path className="warn" markerEnd="url(#map-arrow-warn)" d={edgePath([pt.x,pt.y],[site.x-14,site.y+site.h/2],{forward:true}).d}/>;
  const pendingLine=pending&&(()=>{const a=siteRect(pending.siteId),b=layout.servers.find(x=>x.id===pending.targetId);if(!a||!b)return null;const x1=b.x+b.w,y1=b.y+b.h/2,y2=a.y+a.h/2,cx=x1+M.serverGap/2;return <path className="pending" markerEnd="url(#map-arrow-pending)" d={edgePath([x1,y1],[a.x-14,y2],{forward:true}).d}/>})();
@@ -529,9 +557,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
       {['','-warn','-pending','-rule','-dok','-dwn','-der','-dnc'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
      </defs>
      <g aria-hidden="true" className="decor">
-     {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} data-wire={p.id} className={'wire'+lineCls('w'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
+     {layout.paths.map(p=>edit?.siteId===p.id||(drag&&!drag.domain&&drag.id===p.id)?null:<path key={p.id} data-wire={p.id} className={'wire'+lineCls('w'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
      {layout.backupPaths.map(p=><path key={'b'+p.id} className={'backup'+lineCls('b'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
-     {layout.domainPaths.map(p=>{const r=domRows[p.id];if(!r)return null;const st=lineState(statusOf(r));return p.stub?<path key={'d'+p.id} className={'dstub '+p.stub+lineCls('d'+p.id)} d={p.d}/>:<path key={'d'+p.id} className={'dwire st-'+st+lineCls('d'+p.id)} markerEnd={'url(#map-arrow-d'+st+')'} d={p.d}/>})}
+     {layout.domainPaths.map(p=>{const r=domRows[p.id];if(!r)return null;const st=lineState(nodeStatus(p.id));return p.stub?<path key={'d'+p.id} className={'dstub '+p.stub+lineCls('d'+p.id)} d={p.d}/>:<path key={'d'+p.id} className={'dwire st-'+st+(p.pending?' pending':'')+lineCls('d'+p.id)} d={p.d}/>})}
+     {drag?.domain&&(()=>{const n=layout.domains.find(x=>x.id===drag.domain);return n&&<path className="pending dragging" d={edgePath([n.out.x,n.out.y],[drag.px,drag.py],{forward:true}).d}/>})()}
      {layout.linkPaths.map(p=><path key={'l'+p.id} className={'link'+lineCls('l'+p.id)} d={p.d}/>)}
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
@@ -549,12 +578,14 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     </div>}
     {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={alertsOn?'docknest:':undefined} className={'map-port out'+(alertsOn?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
     {layout.nowhere.map(h=><div key={'t'+h.kind} className="map-dtitle" style={{left:h.x,top:h.y,width:h.w,height:28}}>{h.kind==='nowhere'&&<IconWorldOff size={14} stroke={1.75} aria-hidden="true"/>}{h.title}</div>)}
-    {layout.domains.map(n=>{const r=domRows[n.id];if(!r)return null;const st=statusOf(r),word=DOMAIN_WORD[st];return <React.Fragment key={'dn'+n.id}>
+    {layout.domains.map(n=>{const r=domRows[n.id];if(!r)return null;const st=nodeStatus(n.id),word=DOMAIN_WORD[st],extra=n.aliases?.length;return <React.Fragment key={'dn'+n.id}>
      <div {...hov('domain:'+n.id)} data-node={'domain:'+n.id} tabIndex={0} aria-label={`${n.id}. ${word}. Press Enter for the path from this domain to your app.`} onKeyDown={e=>enter(e,{kind:'domain',id:n.id})} className={'map-dnode'+(st==='queued'||st==='running'?' dashed':'')+nodeCls('domain:'+n.id)} style={item(n)} title={n.id}>
       <IconWorld size={24} stroke={1.5} aria-hidden="true"/>
       {React.createElement(st==='success'?IconCircleCheck:st==='failed'?IconAlertTriangle:st==='needs-review'?IconAlertTriangle:IconClock,{className:'map-badge dom-'+st,size:16,stroke:2,'aria-hidden':'true'})}
-      <span className="map-label"><b className="map-name">{n.id}</b><span className="sr-only">{word}</span></span>
+      <span className="map-label"><b className="map-name">{n.id}</b>{n.partOf&&<span className="map-caption">part of {n.partOf}</span>}{extra>0&&<span className="map-caption">{extra===1&&n.aliases[0]===('www.'+n.id)?'+ www':'+ '+extra+(extra===1?' alias':' aliases')}</span>}<span className="sr-only">{word}</span></span>
      </div>
+     {<span aria-hidden="true" data-handle={'out:domain:'+n.id} data-port-domain={canMove?n.id:undefined} className={'map-port out'+(canMove?' grab':'')+(drag?.domain===n.id?' active':'')} style={at(n.out.x,n.out.y)}/>}
+     {n.in&&<span aria-hidden="true" className="map-port" data-handle={'in:domain:'+n.id} style={at(n.in.x,n.in.y)}/>}
      {n.loose&&<span aria-hidden="true" className={'map-port loose '+(n.loose==='nowhere'?'dead':'pending')} style={at(n.out.x+44,n.out.y)}/>}
     </React.Fragment>})}
     {layout.alerts.map(r=>{const ch=alerts.nodes.find(c=>c.id===r.id),pv=providerOf(alerts.providers,ch.provider),needs=ch.needsConnection,failed=ch.lastSend==='failed',bad=failed||needs;return <React.Fragment key={'n'+r.id}>
@@ -566,11 +597,12 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      </div>
      <span aria-hidden="true" data-handle={'in:'+r.id} className={'map-port'+(adrag?.over===r.id?' active':'')} style={at(r.in.x,r.in.y)}/>
     </React.Fragment>})}
+    {layout.servers.filter(r=>r.in).map(r=><span key={'di'+r.id} aria-hidden="true" data-handle={'in:'+r.id} className="map-port" style={at(r.in.x,r.in.y)}/>)}
     {layout.servers.map(r=><span key={'o'+r.id} aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={alertsOn&&layout.docknest?'server:'+r.id:undefined} className={'map-port out'+(alertsOn&&layout.docknest?' grab':'')+(drag?.over===r.id||adrag?.overServer===r.id||(adrag?.src.kind==='server'&&adrag.src.id===r.id)?' active':'')} style={at(r.x+r.w,r.y+r.h/2)}/>)}
-    {layout.sites.map(r=>{const lost=!!drag&&drag.id===r.id||unconnected?.siteId===r.id;const grab=canMove&&!lost;const out=r.out;return <React.Fragment key={'p'+r.id}>
+    {layout.sites.map(r=>{const lost=!!drag&&!drag.domain&&drag.id===r.id||unconnected?.siteId===r.id;const grab=canMove&&!lost;const out=r.out;return <React.Fragment key={'p'+r.id}>
      <span aria-hidden="true" data-handle={'in:'+r.id} data-port-site={grab?r.id:undefined} className={'map-port in'+(grab?' grab':'')+(lost?' lost':'')} style={at(r.x,r.y+r.h/2)}/>
      <span aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={alertsOn&&layout.docknest?'site:'+r.id:undefined} className={'map-port out'+(alertsOn&&layout.docknest?' grab':'')+(adrag?.src.kind==='site'&&adrag.src.id===r.id?' active':'')} style={at(out.x,out.y)}/>
-     {!r.backupId&&!alerts.rules.some(x=>x.sourceKind==='site'&&x.sourceId===r.id)&&<span aria-hidden="true" className="map-stub" style={at(out.x+8,out.y)}><IconPlus size={14} stroke={2}/></span>}
+     {!r.backupId&&!alerts.rules.some(x=>x.sourceKind==='site'&&x.sourceId===r.id)&&(canMove||alertsOn)&&<button type="button" className="map-stub" aria-label={'Add backup storage or alerts for '+r.name} style={at(out.x+8,out.y)} onPointerDown={e=>e.stopPropagation()} onClick={e=>openPanel({kind:'add'},e.currentTarget)}><IconPlus size={14} stroke={2} aria-hidden="true"/></button>}
     </React.Fragment>})}
     {unconnected?.loose&&!drag&&<span aria-hidden="true" data-port-site={canMove?unconnected.siteId:undefined} className="map-port grab loose" style={at(unconnected.loose.x,unconnected.loose.y)}/>}
     {drag&&<span aria-hidden="true" className="map-port loose active" style={at(drag.px,drag.py)}/>}

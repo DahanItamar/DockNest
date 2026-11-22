@@ -971,6 +971,9 @@ try{
    assert.equal(await page.locator('.map-storage').count(),2,'backup storage');
    assert.equal(await page.locator('.map-lines path.backup').count(),3,'backup lines');
    assert.equal(await page.locator('.map-stub').count(),2,'open outputs');
+   // Every + on the map opens something when clicked (item: the output + used to do nothing)
+   const pluses=await page.locator('.map-stub, .map-plus').all();assert.ok(pluses.length>=6,'a + on every server and every app with an open output');
+   for(const plus of pluses){await plus.evaluate(e=>e.click());await page.locator('.map-panel, [role=dialog]').first().waitFor({timeout:4000});await page.keyboard.press('Escape');}
    await page.getByText('1.2 TB free of 2 TB').waitFor();
    // Order: servers by name
    const names=await page.locator('.map-server .map-name').allTextContents();
@@ -990,17 +993,19 @@ try{
    assert.equal(await card.getAttribute('title'),long);
    // The map takes the height left on screen: the map and the hint below it are fully visible without scrolling
    assert.ok(await page.locator('.map-hint').evaluate(e=>e.getBoundingClientRect().bottom<=window.innerHeight),'hint in view');
-   // The map always opens at 100%; nodes are never shrunk to make a big map fit
-   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'opens at 100%');
+   // The map opens whole and centred: fitted (never above 100%, never below 80%), and never at a cut-off corner
+   const kOpen=await scaleOf(page);assert.ok(kOpen>=0.8-0.001&&kOpen<=1.001,'opens fitted, between 80% and 100%');
    const vp=await page.locator('.map-viewport').boundingBox(),first=(await boxes(page,'.map-server'))[0];
-   assert.ok(first.x>=vp.x-1&&first.y>=vp.y-1,'the first server is in view');
+   assert.ok(first.x>=vp.x-1,'the left edge of the map is in view');
    assert.ok(parseFloat(await page.locator(".map-site .map-name").first().evaluate(e=>getComputedStyle(e).fontSize))===14,"card text uses body size");
    // Auto layout is stable across a reload
-   const before=JSON.stringify(await boxes(page,'.map-site'));
+   // Relative to the first card: the opening view (fit and centre) may differ after the checks above, the layout may not
+   const relative=async()=>{const b=await boxes(page,'.map-site');return JSON.stringify(b.map(x=>({id:x.id,dx:Math.round((x.x-b[0].x)*10)/10,dy:Math.round((x.y-b[0].y)*10)/10})))};
+   const before=await relative();
    await page.reload();
    await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).click();
    await page.locator('.map-site').first().waitFor();
-   assert.equal(JSON.stringify(await boxes(page,'.map-site')),before,'stable layout');
+   assert.equal(await relative(),before,'stable layout');
    assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>/map|layout|position/i.test(k)).length),0,'nothing persisted');
    // Fit shrinks the map when asked, down to the minimum, and everything is then inside the viewport
    await page.getByRole('button',{name:'Fit to screen'}).click();
@@ -1040,11 +1045,12 @@ try{
    assert.equal(await save.evaluate(e=>{const bg=el=>getComputedStyle(el).backgroundColor,own=bg(e);let p=e.parentElement;while(p&&/rgba\(0, 0, 0, 0\)|transparent/.test(bg(p)))p=p.parentElement;return own!==bg(p||document.body)&&!/rgba\(0, 0, 0, 0\)/.test(own)}),true,'disabled save is a filled grey button');
    const row=await page.locator('.map-toolbar').boundingBox(),sb=await save.boundingBox();
    assert.ok(sb.y>=row.y-1&&sb.y+sb.height<=row.y+row.height+1&&sb.height>=39,'save sits inside its toolbar row');
+   const kStart=await scaleOf(page);
    await page.locator('.map-site[data-site="3"]').focus();await page.keyboard.press('Delete');
    await page.locator('.map-site.lost').waitFor();
-   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'still 100% after disconnecting a site');
+   assert.ok(Math.abs(await scaleOf(page)-kStart)<0.001,'the zoom is unchanged after disconnecting a site');
    await page.getByRole('button',{name:'Cancel',exact:true}).click();
-   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'still 100% after cancelling');
+   assert.ok(Math.abs(await scaleOf(page)-kStart)<0.001,'the zoom is unchanged after cancelling');
    await page.locator('.map-site[data-site="3"]').focus();await page.keyboard.press('Delete');
    const note=await page.locator('.map-live').textContent();assert.ok(note.length<120&&note.includes('…'),'long names are shortened in the status line');
    assert.equal(await page.locator('.map-live').evaluate(e=>e.getBoundingClientRect().height<=40),true,'status line stays on one or two short lines');
@@ -1055,7 +1061,7 @@ try{
   {
    const {context,page}=await open({width:2551,height:1257,scheme});
    await page.locator('.map-site').first().waitFor();
-   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'100% on a large screen');
+   {const k=await scaleOf(page);assert.ok(k>=0.8-0.001&&k<=1.001,'a large screen opens fitted');}
    await page.locator(`.map-site[data-site="${SHOP}"]`).click();await page.locator('.map-panel').waitFor();
    await shot(page,scheme,'2551');
    await context.close();
@@ -1073,7 +1079,7 @@ try{
    assert.equal(await page.locator('[data-port-site]').count(),0,'operators have no grab handles');
    assert.equal(await page.locator('.map-storage').count(),0,'operators do not load storage');
    assert.equal(await page.getByRole('button',{name:'Add to the map'}).count()+await page.locator('.map-plus').count(),0,'operators cannot add');
-   await page.locator('.map-site').first().click();
+   {const vp2=await page.locator('.map-viewport').boundingBox(),seen=(await boxes(page,'.map-site')).find(b=>b.y>vp2.y+8&&b.y+b.h<vp2.y+vp2.height-8);await page.locator(`.map-site[data-site="${seen.id}"]`).click();}
    await page.locator('.map-panel').getByRole('button',{name:'Open site'}).waitFor();
    assert.equal(await page.locator('.map-panel').getByRole('button',{name:'Move to…'}).count(),0,'operators cannot move');
    await context.close();
@@ -1148,17 +1154,17 @@ try{
   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'small maps stay at 100%');assert.equal(await page.locator('.map-fade').count(),0,'no fade when everything fits');await context.close();
  }
  {
-  // A big map still opens at 100% at the top left, with the out-of-view hint; Fit shrinks it
+  // A big map opens at the smallest fit (80%), centred on its middle, with the out-of-view hint
   const servers=Array.from({length:6},(_,i)=>({id:'big'+i,name:'Server '+(i+1),host:'h'+i+'.example.invalid',port:22,username:'root',status:'connected'}));
   const sites=Array.from({length:20},(_,i)=>({id:'bs'+i,name:'site-'+String(i).padStart(2,'0')+'.example.com',serverId:'big'+(i%6),config:{containers:[1]}}));
   const {context,page}=await open({appState:{...state,servers,sites,backups:[],policies:[]}});
   await page.locator('.map-site').first().waitFor();
-  assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'big map opens at 100%');
+  assert.ok(Math.abs(await scaleOf(page)-0.8)<0.001,'big map opens at the 80% minimum fit');
   await page.locator('.map-fade').waitFor();await page.getByText('Part of the map is out of view',{exact:false}).waitFor();
   const vp=await page.locator('.map-viewport').boundingBox(),s1=(await boxes(page,'.map-server'))[0];
-  assert.ok(s1.x>=vp.x&&s1.y>=vp.y&&s1.y<vp.y+vp.height/2,'the first server is at the top left');
-  await page.getByRole('button',{name:'Fit to screen'}).click();
-  assert.ok(await scaleOf(page)<0.99,'Fit shrinks a big map');
+  const mids=(await boxes(page,'.map-server')).map(b=>b.y+b.h/2),centre=(Math.min(...mids)+Math.max(...mids))/2;
+  assert.ok(Math.abs(centre-(vp.y+vp.height/2))<vp.height/4,'opens centred on the middle of the map, not at its top left corner');
+  assert.ok(await scaleOf(page)<0.99,'a big map is shrunk to the minimum fit');
   await page.keyboard.press('Escape');
   await context.close();
  }
@@ -1189,7 +1195,7 @@ try{
   // n8n-style panel layout: one label column, one filled primary, quiet link actions, no overflow, no cards in cards
   for(const scheme of ['light','dark']){
    for(const w of [1280,390]){
-    const {context,page}=await open({width:w,height:900,scheme});
+    const {context,page}=await open({width:w,height:w>=768?1500:900,scheme});
     if(w>=768){await page.locator('.map-site[data-site="'+SHOP+'"]').focus();await page.keyboard.press('Enter')}
     else{await page.locator('.map-list').waitFor();await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click()}
     const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();

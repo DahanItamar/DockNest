@@ -130,7 +130,8 @@
 .map-root .map-port.grab:hover,.map-root .map-port.active{border-color:var(--accent);background:var(--accent-soft)}
 .map-root .map-port.lost,.map-root .map-port.loose{border-color:var(--warning);background:var(--warning-surface)}
 .map-root .map-port.loose{width:16px;height:16px;margin:-8px 0 0 -8px}
-.map-root .map-stub{position:absolute;box-sizing:border-box;width:24px;height:24px;margin-top:-12px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border-control);border-radius:4px;background:var(--surface);color:var(--text-muted);pointer-events:none}
+.map-root .map-stub{position:absolute;box-sizing:border-box;width:24px;height:24px;margin-top:-12px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border-control);border-radius:4px;background:var(--surface);color:var(--text-muted);padding:0;min-height:0;cursor:pointer}
+.map-root .map-stub:hover,.map-root .map-stub:focus-visible{color:var(--accent);border-color:var(--accent)}
 .map-root .map-stub::before{content:'';position:absolute;left:-9px;top:11px;width:8px;border-top:2px solid var(--border-control)}
 .map-root .map-controls{position:absolute;right:16px;bottom:16px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:var(--dn-shadow-1);cursor:default}
 .map-root .map-hint{display:flex;align-items:flex-start;gap:8px;margin:0;color:var(--text-secondary);font-size:var(--fs-body);line-height:var(--lh-body)}

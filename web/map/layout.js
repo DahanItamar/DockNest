@@ -56,14 +56,26 @@ export function edgePath(a,b,{forward=false,curvature=EDGE.curvature}={}){
  const points=Array.from({length:33},(_,i)=>{const t=i/32,u=1-t;return [num(u*u*u*sx+3*u*u*t*c1+3*u*t*t*c2+t*t*t*tx),num(u*u*u*sy+3*u*u*t*sy+3*u*t*t*ty+t*t*t*ty)]});
  return {d:'M'+sx+' '+sy+' C'+num(c1)+' '+sy+' '+num(c2)+' '+ty+' '+tx+' '+ty,points,kind:'bezier',labelX:num((sx+3*c1+3*c2+tx)/8),labelY:num((sy+ty)/2)};
 }
+// Domain tree (docs/domains.md): par = valid parent of each id (never a cycle), kids = children by parent id (sorted), maxDepth = deepest column.
+export function domainTree(doms){
+ const byId=new Map(doms.map(d=>[d.id,d])),par={},kids=new Map();
+ const own=d=>{const q=d.parentId&&d.parentId!==d.id&&byId.get(d.parentId);return q?q.id:null};
+ for(const d of doms){let p=own(d);const seen=new Set([d.id]);let ok=true;while(p){if(seen.has(p)){ok=false;break}seen.add(p);p=own(byId.get(p))}par[d.id]=ok?own(d):null}
+ for(const d of doms)if(par[d.id]){if(!kids.has(par[d.id]))kids.set(par[d.id],[]);kids.get(par[d.id]).push(d)}
+ for(const l of kids.values())l.sort((a,b)=>a.id<b.id?-1:1);
+ const depth=d=>{let n=0,p=par[d.id];while(p&&n<64){n++;p=par[p]}return n};
+ return {par,kids,maxDepth:Math.max(0,...doms.map(depth))};
+}
 // Domains column (docs/domains.md): small nodes left of the servers. DOM_BLOCK is a node with its label.
-export const DOMAIN_METRICS={size:48,block:76,gap:16,x:52,toServer:130,stub:44,label:150};
+export const DOMAIN_METRICS={size:48,block:76,gap:16,x:52,toServer:130,toParent:120,stub:44,label:150};
 
 
 // opts.storage: [{id,...}] backup storage nodes; opts.links: [{id,a,b}] linked app pairs (drawn in a gutter right of the app column); opts.backupOf: {siteId: storageId} (which storage a site backs up to).
 export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const groups=groupForList(servers,sites),storage=[...(opts.storage||[])].sort(byName),backupOf=opts.backupOf||{};
- const doms=opts.domains||[],D=DOMAIN_METRICS,DOMX=m.pad+D.x,DOMR=DOMX+D.size,serverX=doms.length?DOMR+D.toServer:m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
+ const doms=opts.domains||[],D=DOMAIN_METRICS;
+ const {par,kids,maxDepth}=domainTree(doms);
+ const STEP=D.size+D.toParent,SUBX=m.pad+D.x,DOMX=SUBX+maxDepth*STEP,DOMR=DOMX+D.size,serverX=doms.length?DOMR+D.toServer:m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
  const out={domains:[],domainPaths:[],nowhere:[],servers:[],sites:[],storage:[],paths:[],backupPaths:[],linkPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
  // Alerts: a band above the map holds the DockNest source and one lane per line; nothing is drawn until a channel exists.
  const chs=opts.alerts?.channels||[],on=chs.length>0,serverIds=new Set(servers.map(s=>s.id)),siteIds=new Set(sites.map(s=>s.id));
@@ -73,24 +85,40 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const rightEdge=siteX+m.siteS,channelB=rightEdge+linkW+m.storageGap+16,storageX=channelB+m.storageGap;
  const rowH=m.siteS+m.label;
  let y=base;
- // A line runs from each domain to the left edge of its server. Entry points are spread along the edge and the elbows are staggered, so lines nest and never cross.
- const domainNode=(d,top)=>{const cy=top+D.size/2,n={id:d.id,serverId:d.serverId||null,x:DOMX,y:top,w:D.size,h:D.size,cy};n.block={x:DOMX+D.size/2-D.label/2,y:top,w:D.label,h:D.block};n.out={x:DOMR,y:cy};out.domains.push(n);return n};
- function placeDomains(list,top0,srv){
-  const ns=list.map((d,i)=>domainNode(d,top0+i*(D.block+D.gap))),n=ns.length,cy0=srv.y+m.serverS/2;
-  const ent=ns.map((_,i)=>cy0+(i-(n-1)/2)*14),above=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy<ent[i]),below=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy>ent[i]).reverse(),cx={};
-  above.forEach(([d],k)=>{cx[d.id]=DOMR+64+(above.length-1-k)*8});below.forEach(([d],k)=>{cx[d.id]=DOMR+64+(below.length-1-k)*8});
-  ns.forEach((d,i)=>{const e=ent[i],ep=edgePath([DOMR,d.cy],[serverX-14,e]);out.domainPaths.push({id:d.id,serverId:srv.id,points:ep.points,d:ep.d})});
+ // Domains form a tree (docs/domains.md): subdomains sit in a column left of their root domain, and only root domains reach the
+ // server. Every line runs from an output dot to an input dot (the server has one input dot on its left edge, a root with subdomains
+ // has one on its left edge), so lines converge on one point and carry no arrowheads.
+ const domainNode=(d,top,x=DOMX)=>{const cy=top+D.size/2,n={id:d.id,serverId:d.serverId||null,parentId:par[d.id]||null,aliases:d.aliases||[],partOf:d.partOf||null,pending:!!d.pending,ownerSiteId:d.ownerSiteId||null,x,y:top,w:D.size,h:D.size,cy};n.block={x:x+D.size/2-D.label/2,y:top,w:D.label,h:D.block};n.out={x:x+D.size,y:cy};out.domains.push(n);return n};
+ const treeHeight=n=>{const ks=kids.get(n.id)||[];return Math.max(D.block,ks.length?ks.reduce((t,k)=>t+treeHeight(k),0)+(ks.length-1)*D.gap:0)};
+ const stackHeight=roots=>roots.length?roots.reduce((t,r)=>t+treeHeight(r),0)+(roots.length-1)*D.gap:0;
+ // A node is centred on its subdomains; each subdomain column sits one step left of its parent.
+ function placeTree(d,top,depth){
+  const h=treeHeight(d),n=domainNode(d,top+(h-D.block)/2+(D.block-D.size)/2,DOMX-depth*STEP),ks=kids.get(d.id)||[];
+  if(ks.length){
+   n.in={x:n.x,y:n.cy};
+   let sy=top+(h-(ks.reduce((t,k)=>t+treeHeight(k),0)+(ks.length-1)*D.gap))/2;
+   for(const k of ks){const c=placeTree(k,sy,depth+1),ep=edgePath([c.out.x,c.cy],[n.in.x,n.in.y]);out.domainPaths.push({id:k.id,parentId:d.id,serverId:null,points:ep.points,d:ep.d});sy+=treeHeight(k)+D.gap}
+  }
+  return n;
  }
+ // Places root trees from top0; calls each(rootNode) and returns the bottom.
+ function placeRoots(roots,top0,each){
+  let top=top0;
+  for(const r of roots){const h=treeHeight(r);each(placeTree(r,top,0));top+=h+D.gap}
+  return top-D.gap;
+ }
+ const isRoot=d=>!par[d.id];
  for(const g of groups){
   const stack=g.sites.length?g.sites.length*rowH+(g.sites.length-1)*m.rowGap:0,block=m.serverS+m.label;
-  const mineD=g.server?doms.filter(d=>d.serverId===g.server.id):[],domStack=mineD.length?mineD.length*D.block+(mineD.length-1)*D.gap:0;
+  const mineD=g.server?doms.filter(d=>isRoot(d)&&d.serverId===g.server.id):[],domStack=stackHeight(mineD);
   const height=Math.max(g.server?block:0,stack,domStack);
   let node=null;
   if(g.server){
    node={id:g.server.id,x:serverX,y:y+(height-block)/2,w:m.serverS,h:m.serverS};
    node.block={x:node.x+node.w/2-m.labelW.server/2,y:node.y,w:m.labelW.server,h:block};node.alertOut={x:node.x+node.w,y:node.y+m.serverS/2};
+   if(mineD.length)node.in={x:node.x,y:node.y+m.serverS/2};
    out.servers.push(node);
-   placeDomains(mineD,y+(height-domStack)/2,node);
+   placeRoots(mineD,y+(height-domStack)/2,n=>{const ep=edgePath([n.out.x,n.cy],[node.in.x,node.in.y]);out.domainPaths.push({id:n.id,serverId:node.id,...(n.pending?{pending:true}:{}),points:ep.points,d:ep.d})});
   }
   let top=y+(height-stack)/2;
   for(const site of g.sites){
@@ -108,11 +136,11 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  }
  // Domains that reach none of the servers: "Points nowhere" (red stub) and "Not placed yet" (grey stub, never looked up).
  for(const [kind,title] of [['nowhere','Points nowhere'],['unplaced','Not placed yet']]){
-  const list=doms.filter(d=>!d.serverId||!serverIds.has(d.serverId)).filter(d=>(d.loose||'unplaced')===kind);
+  const list=doms.filter(d=>isRoot(d)&&(!d.serverId||!serverIds.has(d.serverId))).filter(d=>(d.loose||'unplaced')===kind);
   if(!list.length)continue;
-  const head={kind,title,x:DOMX+D.size/2-D.label/2,y,w:D.label,ids:list.map(d=>d.id)};out.nowhere.push(head);let top=y+36;
-  for(const d of list){const n=domainNode(d,top);n.loose=kind;out.domainPaths.push({id:d.id,serverId:null,stub:kind,points:[[DOMR,n.cy],[DOMR+D.stub,n.cy]],d:'M'+DOMR+' '+n.cy+' L'+(DOMR+D.stub)+' '+n.cy,end:{x:DOMR+D.stub,y:n.cy}});top+=D.block+D.gap}
-  y=top-D.gap+m.groupGap;
+  const head={kind,title,x:DOMX+D.size/2-D.label/2,y,w:D.label,ids:list.map(d=>d.id)};out.nowhere.push(head);
+  const end=placeRoots(list,y+36,n=>{n.loose=kind;out.domainPaths.push({id:n.id,serverId:null,stub:kind,points:[[DOMR,n.cy],[DOMR+D.stub,n.cy]],d:'M'+DOMR+' '+n.cy+' L'+(DOMR+D.stub)+' '+n.cy,end:{x:DOMR+D.stub,y:n.cy}})});
+  y=end+m.groupGap;
  }
  let bottom=Math.max(y-m.groupGap+m.pad,m.pad*2+m.serverS+m.label);
  // Storage nodes sit at the average height of the sites that back up to them; a sweep keeps them apart.
@@ -192,7 +220,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],ep=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:ep.points,d:ep.d}});
   out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],ep=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:ep.points,d:ep.d}});
   const dom=Object.fromEntries(out.domains.map(n=>[n.id,n]));
-  out.domainPaths=out.domainPaths.map(p=>{const n=dom[p.id],a=n&&n.out;if(!a)return p;if(p.stub){const pts=[[a.x,a.y],[a.x+D.stub,a.y]];return {...p,points:pts,d:'M'+a.x+' '+a.y+' L'+(a.x+D.stub)+' '+a.y,end:{x:a.x+D.stub,y:a.y}}}const s=sv[p.serverId];if(!s)return p;const ep=gen(a,{x:s.x,y:s.y+s.h/2});return {...p,points:ep.points,d:ep.d}});
+  out.domainPaths=out.domainPaths.map(p=>{const n=dom[p.id],a=n&&n.out;if(!a)return p;if(p.stub){const pts=[[a.x,a.y],[a.x+D.stub,a.y]];return {...p,points:pts,d:'M'+a.x+' '+a.y+' L'+(a.x+D.stub)+' '+a.y,end:{x:a.x+D.stub,y:a.y}}}if(p.parentId){const par=dom[p.parentId];if(!par||!par.in)return p;const ep=edgePath([a.x,a.y],[par.in.x,par.in.y]);return {...p,points:ep.points,d:ep.d}}const s=sv[p.serverId];if(!s||!s.in)return p;const ep=edgePath([a.x,a.y],[s.in.x,s.in.y]);return {...p,points:ep.points,d:ep.d}});
   out.nowhere=out.nowhere.filter(h=>!h.ids.some(id=>pos['domain:'+id]));
   out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],ep=gen(src.alertOut,node.in);return {...p,points:ep.points,d:ep.d}});
   // The canvas grows in every direction: a node left of or above the automatic layout widens it there, with the same margin.
@@ -207,7 +235,8 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
 // sits left of or above it. Everything else (nodes, ports, lines, the view offset) uses the same coordinates, with no wall at 0.
 export const GRID=16;
 export const snapToGrid=v=>Math.round(v/GRID)*GRID||0; // never -0
-// The view offset at zoom k that shows the canvas centred when it fits a w x h view, otherwise from its top left corner.
-export const homeOffset=(l,k,w,h)=>({x:Math.max(0,(w-l.width*k)/2)-l.x0*k,y:Math.max(0,(h-l.height*k)/2)-l.y0*k});
+// The view offset at zoom k that puts the middle of the canvas in the middle of a w x h view. When it does not fit, the automatic layout keeps
+// that centre (both ends cut equally); a layout with places the owner chose starts at its top left corner, so a node they moved far out stays in view.
+export const homeOffset=(l,k,w,h)=>{const mid=(view,size)=>{const free=(view-size*k)/2;return free>=0||!l.custom?free:0};return {x:mid(w,l.width)-l.x0*k,y:mid(h,l.height)-l.y0*k}};
 // Whether part of the canvas lies outside a w x h view at offset t ({x,y,k}).
 export const clippedIn=(l,t,w,h)=>t.x+l.x0*t.k<-2||t.y+l.y0*t.k<-2||t.x+(l.x0+l.width)*t.k>w+2||t.y+(l.y0+l.height)*t.k>h+2;

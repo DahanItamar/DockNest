@@ -44,7 +44,7 @@ const noOverflow=page=>page.waitForFunction(()=>document.documentElement.scrollW
 // scenario: {role, domains (rows), failJob, holdJob (a promise the job waits for), deniedDomains}. calls records every domain request.
 const asLink=async(loc,label,w)=>{await loc.waitFor();const s=await loc.evaluate(e=>{const c=getComputedStyle(e);return {bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor,td:c.textDecorationLine,sw:document.documentElement.scrollWidth}});assert.equal(s.bw,0,label+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(s.bg),label+' has no fill: '+s.bg);assert.ok(s.td.includes('underline'),label+' is underlined');assert.ok(s.sw<=w,label+' does not overflow at '+w)};
 async function open(theme,width,scenario={}){
- const {role='admin',failJob=false,hold=null,denied=false}=scenario,calls=[],rows=scenario.rows||domainRows();
+ const {role='admin',failJob=false,hold=null,denied=false,groups:scenarioGroups=groups}=scenario,calls=[],rows=scenario.rows||domainRows();
  const page=await browser.newPage({viewport:{width,height:width<500?874:900}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{name:'Person',role},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}}));
@@ -53,7 +53,7 @@ async function open(theme,width,scenario={}){
  await page.route('**/api/storage-targets',r=>r.fulfill({json:{targets:[],activeTargetId:null}}));
  await page.route('**/api/**',async r=>{
   const q=r.request(),url=new URL(q.url()),path=url.pathname.replace(/^\/api/,'');
-  if(path==='/domains'&&q.method()==='GET'){calls.push({method:'GET',path});return denied?r.fulfill({status:403,json:{error:'Operator access required.'}}):r.fulfill({json:{domains:rows,groups}})}
+  if(path==='/domains'&&q.method()==='GET'){calls.push({method:'GET',path});return denied?r.fulfill({status:403,json:{error:'Operator access required.'}}):r.fulfill({json:{domains:rows,groups:scenarioGroups}})}
   if(path==='/domains/check'){const body=q.postDataJSON();calls.push({method:'POST',path,body});return r.fulfill({status:202,json:{jobId:'job-1'}})}
   if(path==='/jobs/job-1'){calls.push({method:'GET',path});if(hold)await hold;return r.fulfill({json:failJob?{id:'job-1',status:'failed',error:'DockNest could not read the proxy routes on a server. Test the server connection, then check again.'}:{id:'job-1',status:'completed'}})}
   if(path==='/moves'&&q.method()==='POST'){calls.push({method:'POST',path});return r.fulfill({json:{id:'mv1',siteId:SHOP,targetServerId:'s2',ok:true,verdict:'ready-with-notes',estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:'h',blockers:[],
@@ -78,7 +78,7 @@ async function openDomain(page,phone,name){
  await side.getByRole('heading',{name,exact:true}).waitFor();
  return side;
 }
-const hopOf=(side,name)=>side.locator('.map-hop').filter({has:side.page().locator('.map-hop-head b',{hasText:new RegExp('^'+name+'$')})});
+const hopOf=(side,name)=>side.locator('.map-hop').filter({has:side.page().locator('.map-hop-head b',{hasText:new RegExp('^'+name+'$')})}).first();
 const stateOf=(side,name)=>hopOf(side,name).locator('.status').innerText();
 
 for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',390]]){
@@ -87,9 +87,12 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  {
   const {page,calls}=await open(theme,width);
   if(!phone){
-   assert.equal(await page.locator('[data-node^="domain:"]').count(),8,'one node per domain');
+   assert.equal(await page.locator('[data-node^="domain:"]').count(),7,'one node per domain (www.shop is inside the shop node)');
+   assert.equal(await page.locator('.map-lines .dwire[marker-end]').count(),0,'no arrowheads on domain lines');
+   assert.ok(await page.locator('[data-node="domain:shop.example.invalid"] .map-caption',{hasText:'+ www'}).count(),'the www name is shown quietly inside the node');
+   assert.equal(await page.locator('[data-handle="in:s1"]').count(),1,'one input dot on the server');
    assert.ok(await page.locator('.map-dtitle',{hasText:'Points nowhere'}).count(),'Points nowhere group');
-   assert.ok(await page.locator('.map-lines .dwire.st-ok').count()>0&&await page.locator('.map-lines .dwire.st-er').count()===0,'lines are coloured by the worst step; a red domain points nowhere');
+   assert.ok(await page.locator('.map-lines .dwire.st-wn').count()>0&&await page.locator('.map-lines .dwire.st-er').count()===0,'lines are coloured by the worst step; a red domain points nowhere');
    assert.ok(await page.locator('.map-lines .dstub.nowhere').count()===2,'a red stub for each domain that points nowhere');
    assert.ok(await page.locator('.map-lines .dwire.st-nc').count()===1,'the never-checked domain has a dashed line');
    const first=await page.locator('[data-node="domain:shop.example.invalid"]').boundingBox(),server=await page.locator('[data-node="server:s1"]').boundingBox();
@@ -97,7 +100,7 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
    // The column hides and shows, and the choice is kept.
    const toggle=page.getByRole('button',{name:'Domains',exact:true});
    await toggle.click();assert.equal(await page.locator('[data-node^="domain:"]').count(),0);
-   await toggle.click();assert.equal(await page.locator('[data-node^="domain:"]').count(),8);
+   await toggle.click();assert.equal(await page.locator('[data-node^="domain:"]').count(),7);
   }else{
    const shopRow=page.locator('.map-list li',{hasText:'Shop'}).first();
    assert.ok(await shopRow.locator('.map-list-domains li').count()>=3,'domains are listed under their app');
@@ -121,6 +124,15 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  const WORDS={success:'OK','needs-review':'Needs review',failed:'Failed',queued:'Not checked'};
  for(const [name,domain,expect,texts] of cases){
   const {page}=await open(theme,width);
+  if(name==='A10-state-partial'&&!phone){
+   // Desktop: the www name lives inside the shop node, with its own checks in the panel.
+   const merged=await openDomain(page,false,'shop.example.invalid');
+   const alias=merged.locator('.map-alias');
+   await alias.getByRole('heading',{name:'Also served as www.shop.example.invalid'}).waitFor();
+   assert.equal(await alias.locator('.map-hop').filter({hasText:'Proxy'}).first().locator('.status').innerText(),'Needs review');
+   assert.ok((await alias.innerText()).includes('This list may be incomplete'));
+   await noOverflow(page);await shot(page,name,theme,width);await page.close();continue;
+  }
   const side=await openDomain(page,phone,domain);
   for(const [k,st] of Object.entries(expect))assert.equal(await stateOf(side,{dns:'DNS',proxy:'Proxy',app:'App',certificate:'Certificate'}[k]),WORDS[st],`${domain} ${k}`);
   for(const t of texts)assert.ok((await side.innerText()).includes(t),`${domain} says: ${t}`);
@@ -139,13 +151,13 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
   const side=await openDomain(page,phone,'shop.example.invalid');
   await side.getByRole('button',{name:'Check again'}).click();
   await side.getByText('Checking…').first().waitFor();
-  assert.equal(await side.getByText('Checking…').count(),5,'every step says Checking');
+  assert.equal(await side.getByText('Checking…').count(),10,'every step of every name says Checking');
   assert.ok(await side.getByRole('button',{name:'Check again'}).isDisabled(),'one check at a time');
   assert.deepEqual(calls.find(c=>c.method==='POST').body,{domain:'shop.example.invalid'});
   await noOverflow(page);await shot(page,'A7-state-checking',theme,width);
   release();
   await side.getByText('Checking…').first().waitFor({state:'detached'});
-  assert.equal(calls.filter(c=>c.path==='/domains'&&c.method==='GET').length,2,'the list is read again after the check');
+  assert.equal(calls.filter(c=>c.path==='/domains'&&c.method==='GET').length,3,'the list is read again after each name is checked');
   await page.close();
  }
  // A8 never checked: Check now is the primary action.
@@ -220,6 +232,71 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await page.locator('[data-node="domain:shop.example.invalid"]').waitFor();
  assert.ok(calls.some(c=>c.path==='/domains'));
  await page.close();
+}
+// Tree: many subdomains of one root, www duplicates, a two-part suffix, a static site nginx serves itself. Subdomains hang under their root,
+// only roots reach the server through one input dot, and the map opens whole and centred.
+{
+ const names=['leads','docs','houserules','meridian','tc','status','blog','shop'],root='devsite.invalid',two='shop.example.co.il';
+ const all=[root,'www.'+root,...names.flatMap(n=>[n+'.'+root]),'www.docs.'+root,'gitcheck.invalid','www.gitcheck.invalid','static.example.invalid',two,'www.'+two,'orphan.example.net'];
+ const rows=all.map(d=>d==='static.example.invalid'?row(d,'s1',null,{dns:hop('ok','points-to-server',{addresses:['192.0.2.10'],serverId:'s1'}),proxy:hop('warn','static-no-app',{proxy:'nginx',serverId:'s1',root:'/var/www/static'}),app:hop('unknown','no-app'),certificate:hop('ok','valid',{name:d,notAfter:'2027-03-01T00:00:00Z'})}):row(d,'s1',null,good()));
+ for(const theme of ['light','dark']){
+  const {page}=await open(theme,1280,{rows,groups:{servers:{s1:all},pointsNowhere:[],unplaced:[]}});
+  const ids=await page.locator('[data-node^="domain:"]').evaluateAll(l=>l.map(e=>e.dataset.node.slice(7)));
+  assert.ok(!ids.includes('www.'+root)&&!ids.includes('www.gitcheck.invalid')&&!ids.includes('www.'+two),'www names are merged');
+  assert.ok(ids.includes(root)&&ids.includes(two)&&ids.includes('docs.'+root),'roots and subdomains are nodes');
+  const box=async id=>page.locator('[data-node="domain:'+id+'"]').boundingBox();
+  const r=await box(root),sub=await box('leads.'+root);
+  assert.ok(sub.x+sub.width<r.x,'subdomains sit left of their root');
+  assert.ok((await box('orphan.example.net')).x>=r.x-1,'a subdomain whose root is not on the map is a root and goes to the server');
+  const wires=await page.locator('.map-lines .dwire').count();
+  assert.equal(wires,ids.length-0,'one line per node');
+  assert.equal(await page.locator('.map-lines .dwire[marker-end]').count(),0,'no arrowheads');
+  assert.equal(await page.locator('[data-handle="in:s1"]').count(),1,'one input dot on the server');
+  // A map too tall for the screen opens centred on its middle, not at a corner: the server (the middle of the content) is in view.
+  const midView=await page.locator('.map-viewport').boundingBox(),midServer=await page.locator('[data-node="server:s1"]').boundingBox();
+  assert.ok(Math.abs(midServer.y+midServer.height/2-(midView.y+midView.height/2))<midView.height/3,'the opening view is centred on the middle of the map');
+  // Every domain line ends at the server dot, or at the dot of a root domain.
+  const dot=await page.locator('[data-handle="in:s1"]').boundingBox(),viewBox=await page.locator('.map-viewport').boundingBox();
+  assert.ok(dot.x>=viewBox.x&&dot.x<=viewBox.x+viewBox.width&&dot.y>=viewBox.y&&dot.y<=viewBox.y+viewBox.height,'the server input dot is in view');
+  // The static site: amber, with the folder and an Add as app link.
+  const side=await openDomain(page,false,'static.example.invalid');
+  assert.equal(await stateOf(side,'Proxy'),'Needs review');
+  assert.ok((await side.innerText()).includes('serves it as a static site from /var/www/static.'));
+  await asLink(side.getByRole('button',{name:'Add as app'}),'Add as app',1280);
+  await side.getByRole('button',{name:'Add as app'}).click();
+  await page.locator('.map-panel').waitFor({state:'detached'});
+  await noOverflow(page);await shot(page,'A12-tree',theme,1280);await page.close();
+ }
+ const {page}=await open('light',390,{rows,groups:{servers:{s1:all},pointsNowhere:[],unplaced:[]}});
+ await noOverflow(page);await shot(page,'A12-tree','light',390);await page.close();
+}
+// Domains take part in moves: dragging a domain starts the move of its app; refused drops say why; the domains of a moving app show dashed.
+{
+ const drag=async(page,fromSel,toSel)=>{
+  const a=await page.locator(fromSel).boundingBox(),b=await page.locator(toSel).boundingBox();
+  await page.mouse.move(a.x+a.width/2,a.y+a.height/2);await page.mouse.down();
+  await page.mouse.move(b.x+b.width/2,b.y+b.height/2,{steps:12});await page.mouse.up();
+ };
+ for(const theme of ['light','dark']){
+  const {page}=await open(theme,1280);
+  // A domain with no app: refused with a hint, nothing changes.
+  await drag(page,'[data-port-domain="old.example.invalid"]','[data-node="server:s2"]');
+  await page.getByText('This domain moves with its app. Add the app first.').waitFor();
+  assert.equal(await page.locator('.map-lines .dwire.pending').count(),0,'a refused drop changes nothing');
+  // The app's own server: refused too.
+  await drag(page,'[data-port-domain="wiki.example.invalid"]','[data-node="server:s1"]');
+  await page.getByText(/stays on|already runs/).first().waitFor();
+  // Home's domains go to Server 1: the app's move is pending, its domains show dashed lines to the new server.
+  await drag(page,'[data-port-domain="home.example.invalid"]','[data-node="server:s1"]');
+  await page.getByText(/will move to/i).first().waitFor();
+  assert.equal(await page.locator('.map-lines .dwire.pending').count(),2,'both domains of the moving app are dashed to the new server');
+  const moved=await page.locator('[data-node="domain:home.example.invalid"]').boundingBox(),shop=await page.locator('[data-node="domain:shop.example.invalid"]').boundingBox();
+  assert.ok(Math.abs(moved.x-shop.x)<2,'the moving domain sits with the new server column');
+  await shot(page,'A13-domain-move-pending',theme,1280);
+  await page.getByRole('button',{name:'Save changes'}).click();
+  await page.getByRole('dialog').first().waitFor();
+  await page.close();
+ }
 }
 // Keyboard: a domain node opens its path with Enter, and Escape closes the panel and returns focus to the node.
 {

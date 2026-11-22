@@ -125,7 +125,8 @@ test('snapping, the home view and the out-of-view check use the same coordinates
  assert.deepEqual([-500,-9,-7,0,7,8,23].map(snapToGrid),[-496,-16,0,0,0,16,16]);
  const l={x0:-200,y0:-100,width:600,height:400};
  assert.deepEqual(homeOffset(l,1,1000,800),{x:400,y:300},'centred when it fits: x0 lands at the left edge of the centred box');
- assert.deepEqual(homeOffset(l,0.5,200,100),{x:100,y:50},'otherwise its top left corner is at the view corner');
+ assert.deepEqual(homeOffset(l,1,100,100),{x:-50,y:-50},'otherwise its middle is at the middle of the view (both ends cut equally)');
+ assert.deepEqual(homeOffset({...l,custom:true},1,100,100),{x:200,y:100},'a layout the owner arranged starts at its top left corner');
  assert.equal(clippedIn(l,{x:400,y:300,k:1},1000,800),false);
  assert.equal(clippedIn(l,{x:100,y:300,k:1},1000,800),true,'a node left of the view counts as out of view');
 });

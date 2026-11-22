@@ -63,6 +63,7 @@ a domain with no route found is amber rather than red, because that rule may be 
 | Proxy | `no-route` | no proxy on the server has the domain |
 | Proxy | `routes-elsewhere` | the route's target (`upstream`) is not a container of this app |
 | Proxy | `proxy-stopped` | the proxy holding the route is not running |
+| Proxy | `static-no-app` | amber: nginx serves the domain as a static site (`root` is its folder) and no static app of yours backs it up. The panel offers an **Add as app** link that opens the Add app flow for it. Not a failure |
 | Proxy | `no-app` | amber: the route goes to something that is not one of your apps |
 | Proxy | `route-unknown` / `incomplete` | amber: the route list may be incomplete |
 | App | `running` / `static` | ok |
@@ -81,6 +82,16 @@ Domains whose DNS reaches none of your servers are grouped as **Points nowhere**
 ## On the Map and the app pages
 
 The Map has a Domains column left of the servers: one node per domain, placed by the server its DNS answers with, and a line to that server coloured by the domain's worst step (dashed when never checked). Domains whose DNS reaches none of your servers sit under **Points nowhere** with a red stub; domains never looked up and without a server sit under **Not placed yet**. A **Domains** button on the canvas hides or shows the column (kept in this browser). Opening a node shows its five steps (domain, DNS, proxy, app, certificate), each with its state, one reason and a next step, the time of the last check, and **Check again** (**Check now** when never checked). While a check runs every step says Checking; if it fails the last results stay with their time. An app's panel lists its domains, one row each, and on a phone the Map lists them under each app (the rest under **Domains that point nowhere** or **Other domains**). A check is followed for at most two minutes; if it is still running then, the panel says so and you check again later. Domain nodes can be moved like others by administrators; nodes never connect to anything but their server. Viewers see no domains.
+
+### Aliases and subdomains on the Map
+
+One node stands for one domain. A `www.` name is merged into its root when both are known (`example.com` and `www.example.com` show as `example.com` with a quiet "+ www"). The panel lists every name with its own checks, and the node's status is the worst of them. A subdomain whose registrable parent domain is also on the Map is drawn under it (subdomain, domain, server); only root domains connect to the server. The registrable domain is the last two labels, or three under a short built-in list of common two-part suffixes (such as `co.il` and `co.uk`); DockNest does not download the public suffix list. An unknown suffix only means the subdomain is drawn straight to the server.
+
+### Moving apps from the Map
+
+A domain has no move of its own: it moves with the app that owns it (the app that lists it, or that the API routed it to). Dragging the output dot of a domain or subdomain onto a server starts the same move preview as dragging the app, for that one app only. Names of other apps stay where they are, and their lines are redrawn. A drop is refused, with a short hint and no change, when the domain has no app ("This domain moves with its app. Add the app first."), when several apps use it ("Used by several apps; move the app instead."), when the app already runs on that server, when that server is offline, or when a move of the app is already running.
+
+While a move is going on, the domains of that app show at the new server with dashed lines and leave their tree. When it is done they sit with the new server, and join the tree again if their domain is there too. A move that is cancelled, switched back or failed puts them back. A subdomain hangs under its nearest ancestor on the same server, never above the registrable domain (`example.co.il` is a root); an ancestor on another server only gives the "part of" note. A `www.` name that belongs to another app than its root is not merged. The rules live in `web/map/domain-moves.js` and `web/map/domains-model.js` and are covered by `tests/domains-moves.test.js`, including a seeded random run (`DOMAIN_FUZZ_SEED=<seed>` repeats one case).
 
 ## Moving an app
 
