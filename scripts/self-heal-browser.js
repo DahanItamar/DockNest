@@ -34,7 +34,7 @@ const json=(route,body,status=200)=>route.fulfill({status,json:body});
 
 let browser;const errors=[];
 async function open({role='admin',width=1280,height=800,scheme='light'}={}){
- const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme,hasTouch:width<600,deviceScaleFactor:width<600?2:1});
+ const context=await browser.newContext({viewport:{width,height:width>=900?Math.max(height,1400):height},reducedMotion:'reduce',colorScheme:scheme,hasTouch:width<600,deviceScaleFactor:width<600?2:1});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  const page=await context.newPage();
  page.on('pageerror',e=>errors.push(e.message));
@@ -287,7 +287,7 @@ async function realApi(){
  db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at) VALUES(?,?,?,?,?,?,?,'connected',?,?)").run(serverId,'Commerce host','192.0.2.10',22,'root','fixture','0'.repeat(64),JSON.stringify({freeBytes:84*1024**3}),now());
  const site=(name,containers)=>{const id=randomUUID();db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(id,serverId,name,JSON.stringify({kind:'docker',containers,domains:[name+'.example.com']}),now());return id};
  const healthy=site('Demo Shop',['demo-web','demo-db']),plain=site('Plain Site',['demo-db']);
- const signedIn=async(token,width=1280)=>{const context=await browser.newContext({viewport:{width,height:width<600?844:800},reducedMotion:'reduce'});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
+ const signedIn=async(token,width=1280)=>{const context=await browser.newContext({viewport:{width,height:width<600?844:1400},reducedMotion:'reduce'});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
   if(width<900)await page.getByRole('button',{name:'Open navigation'}).click();
   await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).click();return {context,page}};
  const openFor=async(page,name)=>{const panel=page.locator('.map-panel');if(await panel.count()){await panel.getByRole('button',{name:'Close'}).first().click();await panel.waitFor({state:'detached'})}await page.locator('.map-site',{hasText:name}).first().click();await page.getByRole('button',{name:'Self-heal',exact:true}).click();const d=page.locator('dialog.sh-sheet');await d.getByRole('switch').waitFor();return d};
