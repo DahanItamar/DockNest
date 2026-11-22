@@ -102,6 +102,10 @@ jobs:
           npm run test:login-typing
           npm run test:recovery-guide
           npm run test:dumps
+          npm run test:restore-tests
+          npm run test:auth
+          npm run test:self-heal
+          npm run test:safe-edit
         env:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000
