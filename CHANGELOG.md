@@ -45,6 +45,8 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Changed
 
+- Secondary actions everywhere are quiet text links; each screen and dialog has one clear main button.
+- Map: lines curve smoothly between connection points, like a workflow canvas.
 - The app and server details panels on the Map have a new layout: a status line under the name, one label and value list, thin lines between sections, and Self-heal, Edit history and Add an app found here together under Tools. Move to and Edit are plain underlined links; Open site stays the one filled button.
 - Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are plain underlined links instead of outlined buttons; main actions stay filled buttons.
 - A new look across the dashboard: consistent dialogs, tabs, notices, step-by-step flows, fields and buttons. Sign-in animates each password dot and 2FA digit as you type, with no focus border on those inputs. Off under reduced motion.
@@ -56,6 +58,10 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Fixed
 
+- The Recovery Guide shows the whole install command instead of cutting it off.
+- The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
+- The move preview dialog no longer has an empty gap above its buttons.
+- Fit to screen on the Map keeps names readable and lets you pan a big map instead of shrinking it.
 - The Map shows the backup storage an app really uses: the app's own main destination, not always the default one.
 - The Recovery Guide says whether a restore test read the main backup or the off-site copy.
 - Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
