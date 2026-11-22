@@ -91,7 +91,7 @@ def nginx_routes(proxy,folders=None,container=None,sites=None):
     routes=[]
     for site in sites if sites is not None else nginx_sites(folders,follow_links=container is None):
         upstreams=[value for value in (upstream_address(raw) for raw in site.get('upstreams',[])) if value]
-        routes.append({'proxy':proxy,'domains':route_domains(site['domains']),'upstreams':upstreams,'static':site['kind']=='static',
+        routes.append({'proxy':proxy,'domains':route_domains(site['domains']),'upstreams':upstreams,'static':site['kind']=='static',**({'root':str(site['documentRoot'])} if site['kind']=='static' and site.get('documentRoot') else {}),
             'understood':len(upstreams)==len(site.get('upstreams',[])),'listen':site.get('listen',[]),'certificates':site.get('certificates',[]),
             **({'container':container} if container else {})})
     return routes

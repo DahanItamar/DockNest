@@ -82,7 +82,10 @@ function proxyHop(domain, server, declared, sites, servers) {
   if (proxy && !proxy.running) return { hop: hop('fail', 'proxy-stopped', params), route, site: declared };
   if (route.static) {
     const site = declared?.kind === 'static' && declared.serverId === server.id ? declared : null;
-    return site ? { hop: hop(partial ? 'warn' : 'ok', partial ? 'incomplete' : 'static', params), route, site } : { hop: hop('fail', 'routes-elsewhere', params), route, site: declared };
+    if (site) return { hop: hop(partial ? 'warn' : 'ok', partial ? 'incomplete' : 'static', params), route, site };
+    // nginx serves the folder itself and no static app of this server backs it up: that works, so it is a note, not a failure.
+    if (!declared) return { hop: hop('warn', 'static-no-app', { ...params, ...(route.root ? { root: route.root } : {}) }), route, site: null };
+    return { hop: hop('fail', 'routes-elsewhere', params), route, site: declared };
   }
   if (!route.upstreams.length) return { hop: hop('warn', 'route-unknown', params), route, site: declared };
   const targets = routeTargets(route, server.id, servers), site = siteOfTargets(targets, sites);
