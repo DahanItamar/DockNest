@@ -196,7 +196,7 @@ async function runningJob(){
  const {context,page}=await open({page:'Jobs'});
  const first=page.locator('table.data-table tbody tr').first();
  assert.match(await first.textContent(),/Running/);
- assert.match(await first.locator('td').nth(2).textContent(),/restore copy/);
+ assert.match(await first.locator('td').nth(2).textContent(),/Restore copy/);
  await first.getByRole('button',{name:'View job'}).click();
  await dialog(page).getByRole('button',{name:'Cancel test'}).click();
  await dialog(page).getByRole('status').filter({hasText:'Stopping the test.'}).waitFor();
@@ -410,7 +410,7 @@ async function operator(){
  freshMock();
  const second=await open({role:'operator',page:'Apps & Schedules'});
  const p=second.page;
- await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
+ await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:/^More actions for /}).first().click();await p.getByRole('menuitem',{name:'Restore tests'}).click();
  const d3=dialog(p);await d3.getByRole('switch').waitFor();
  assert.equal(await d3.getByRole('button',{name:'Run test'}).isDisabled(),false);
  mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each app.'};
