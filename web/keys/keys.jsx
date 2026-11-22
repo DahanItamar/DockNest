@@ -81,7 +81,7 @@ export function KeysSection({site,canEdit,api,onChanged}){
   setBusy(false);
  };
  return <section className="keys-section" aria-labelledby={'keys-title-'+site.id}>
-  <h3 className="map-group-title" id={'keys-title-'+site.id}>Keys this app needs</h3>
+  <h3 className="map-group-title keys-head" id={'keys-title-'+site.id}><Padlock state={keyState(site)} className="keys-lock"/>Keys this app needs</h3>
   {none?<p className="map-caption">No app keys found. DockNest looks for keys such as APP_KEY, N8N_ENCRYPTION_KEY and SECRET_KEY_BASE.</p>:<>
    <ul className="keys-list">{k.keys.map(key=>{const [state,word]=keyStatus(key),where=place(key.location),addable=key.status==='missing'&&(key.reasonCode?key.reasonCode==='not-included':key.reason===NOT_INCLUDED)&&String(key.location).startsWith('file:');
     return <li key={key.ruleId+key.location}>

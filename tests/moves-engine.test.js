@@ -51,7 +51,7 @@ function backupRow(siteId, seconds = 20) {
 }
 
 // The fake helper keeps per-move target state like remote/helper/move.py does (deploy-status, idempotent deploys).
-const calls = [], deployed = new Map(), faults = {};
+const calls = [], deployed = new Map(), faults = {}, probe = { sourceMode: 'none' };
 moves.moveTransport.wait = async () => {};
 moves.moveTransport.upload = async () => ({ plaintextChecksum: 'f'.repeat(64) });
 moves.moveTransport.remote = async (server, request, options = {}) => {
@@ -60,8 +60,8 @@ moves.moveTransport.remote = async (server, request, options = {}) => {
   const state = deployed.get(request.moveId) ?? new Set();
   switch (request.operation) {
     case 'move-facts': return request.role === 'source'
-      ? { addresses: ['203.0.113.7'], site: { kind: 'container', domains: request.config.domains, containerCount: 1, architecture: 'x86_64', ports: [{ container: 'web', hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }], bindPaths: ['/srv/shop'], handPlaced: ['/etc/cron.d/shop'], names: { containers: ['web'], volumes: [], networks: [] }, networks: [], running: ['cid-web'], nginxDirectives: ['client_max_body_size'], web: 8080, maintenanceReady: true, env: [{ key: 'API_URL', where: 'container web', kind: 'ip', masked: 'http://203.0.113.7:9000' }] } }
-      : { uid: 0, architecture: 'x86_64', dockerVersion: '29.0.1', composeVersion: '2.29.1', freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3, stagingWritable: true, usedPorts: [22, 80, 8080], nginx: { installed: true, configOk: true, running: true, confDir: '/etc/nginx/conf.d', serverNames: [] }, webPortOwner: 'nginx', certbot: { installed: false, account: false }, addresses: ['198.51.100.9'], probe: { existingPaths: [], conflicts: {} } };
+      ? { addresses: ['203.0.113.7'], ownership: { engine: { mode: probe.sourceMode }, modes: { checked: true, scanned: 3, truncated: false, unreadable: 0, xattrChecked: true, findings: [] } }, site: { kind: 'container', domains: request.config.domains, containerCount: 1, architecture: 'x86_64', ports: [{ container: 'web', hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }], bindPaths: ['/srv/shop'], handPlaced: ['/etc/cron.d/shop'], names: { containers: ['web'], volumes: [], networks: [] }, networks: [], running: ['cid-web'], nginxDirectives: ['client_max_body_size'], web: 8080, maintenanceReady: true, env: [{ key: 'API_URL', where: 'container web', kind: 'ip', masked: 'http://203.0.113.7:9000' }] } }
+      : { uid: 0, architecture: 'x86_64', dockerVersion: '29.0.1', composeVersion: '2.29.1', freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3, stagingWritable: true, usedPorts: [22, 80, 8080], nginx: { installed: true, configOk: true, running: true, confDir: '/etc/nginx/conf.d', serverNames: [] }, webPortOwner: 'nginx', certbot: { installed: false, account: false }, addresses: ['198.51.100.9'], probe: { existingPaths: [], conflicts: {} }, ownership: { engine: { mode: 'none' }, filesystem: { mounts: [{ mount: '/', filesystem: 'ext4', readOnly: false, noexec: false, nosuid: false, rootSquash: false, sample: '/srv/shop/data' }], features: { setid: true, xattr: true } } } };
     case 'deploy-status': return { present: state.size > 0, deployed: [...state], finalized: false };
     case 'deploy-restore': state.add(request.mode); deployed.set(request.moveId, state); return { mode: request.mode, kind: 'docker', containers: ['web'], running: ['web'], ports: [{ container: 'web', from: 8080, to: 8081, containerPort: 80, protocol: 'tcp' }], paths: ['/srv/shop'], mailBlocked: request.mode === 'test' };
     case 'deploy-teardown': deployed.delete(request.moveId); return { removed: true };
@@ -94,7 +94,7 @@ async function drive(rounds = 60) {
 }
 const engineState = moveId => db.prepare('SELECT state FROM site_moves WHERE id=?').get(moveId).state;
 async function preview(siteId, options) { const response = await post(admin, '/moves', { siteId, targetServerId: newServer, ...(options ? { options } : {}) }); assert.equal(response.status, 201, await response.clone().text()); return response.json(); }
-async function start(body) { const response = await post(admin, `/moves/${body.id}/start`, { preflightHash: body.preflightHash, ...(body.moveAnyway ? { moveAnyway: true } : {}) }); return response; }
+async function start(body) { const response = await post(admin, `/moves/${body.id}/start`, { preflightHash: body.preflightHash, ...(body.moveAnyway ? { moveAnyway: true } : {}), ...(body.ownershipChecked ? { ownershipChecked: true } : {}) }); return response; }
 
 test('a site moves end to end: fresh backup, loopback test, final copy, DNS wait, finalize; the source changes only at the final copy', async () => {
   const siteId = siteRow('shop'); backupRow(siteId);
@@ -194,6 +194,31 @@ test('a failed test rolls the move back with the reason; a failed final copy res
   assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(second).server_id, oldServer);
 });
 
+test('owner or permission findings are warnings; the move starts only with "I checked these", enforced by the server', async () => {
+  const siteId = siteRow('owners'); backupRow(siteId);
+  probe.sourceMode = 'userns';
+  try {
+    const draft = await preview(siteId);
+    assert.equal(draft.ok, true); assert.equal(draft.needsOwnershipCheck, true);
+    assert.ok(draft.warnings.some(item => item.id === 'owner-map' && item.requiresAcknowledgement));
+    const refused = await start(draft); assert.equal(refused.status, 409); assert.equal((await refused.json()).code, 'OWNERSHIP_CHECK_REQUIRED');
+    const explicitNo = await post(admin, `/moves/${draft.id}/start`, { preflightHash: draft.preflightHash, ownershipChecked: false });
+    assert.equal(explicitNo.status, 409); assert.equal((await explicitNo.json()).code, 'OWNERSHIP_CHECK_REQUIRED');
+    assert.equal(engineState(draft.id), 'draft', 'a refused start changes nothing');
+    assert.equal((await start({ ...draft, ownershipChecked: true })).status, 202);
+    await post(admin, `/moves/${draft.id}/cancel`); await drive(20);
+  } finally { probe.sourceMode = 'none'; }
+});
+test('a missing ownership probe blocks the move and no tick can start it', async () => {
+  const siteId = siteRow('noprobe'); backupRow(siteId);
+  probe.sourceMode = null;
+  try {
+    const draft = await preview(siteId);
+    assert.equal(draft.ok, false); assert.equal(draft.needsOwnershipCheck, false);
+    const refused = await start({ ...draft, ownershipChecked: true }); assert.equal(refused.status, 409);
+    assert.equal(engineState(draft.id), 'draft');
+  } finally { probe.sourceMode = 'none'; }
+});
 test('long downtime needs Move anyway; Cloudflare is not offered yet; a changed preview is refused', async () => {
   const siteId = siteRow('large'); backupRow(siteId, 3000);
   const draft = await preview(siteId);

@@ -57,6 +57,7 @@
     "test:backup-coverage": "node scripts/coverage-browser.js",
     "test:restore-tests": "node scripts/restore-tests-browser.js",
     "test:safe-edit": "node scripts/safe-edit-browser.js",
+    "test:dumps": "node scripts/online-dumps-browser.js",
     "test:self-heal": "node scripts/self-heal-browser.js",
     "test:login-typing": "node scripts/login-typing-browser.js",
     "test:auth": "node scripts/auth-browser.js",

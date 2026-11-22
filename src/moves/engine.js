@@ -130,7 +130,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
       ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening, domainPaths,
       ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
-    source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
+    source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])], ownership: sourceFacts.ownership },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
     state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id) || !!editingSite(site.id),
@@ -217,10 +217,10 @@ export function previewView(moveId, { result, plan, hash, target, site }) {
   const checks = result.details.checks;
   return {
     id: moveId, siteId: site.id, targetServerId: target.id, ok: result.canStart, mailBlocked: !!plan.mailBlocking, verdict: result.verdict, sentence: result.sentence,
-    needsMoveAnyway: !!result.needsMoveAnyway, estimateSeconds: plan.estimateSeconds, downtimeSeconds: result.details.downtime?.seconds ?? null,
+    needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck, estimateSeconds: plan.estimateSeconds, downtimeSeconds: result.details.downtime?.seconds ?? null,
     downtimeText: result.details.downtime?.text ?? null, undoDays: RETENTION_DAYS, preflightHash: hash,
     blockers: checks.filter(item => item.status === 'block').map(item => item.text),
-    warnings: checks.filter(item => item.status === 'warn').map(item => ({ id: item.id, text: item.text, advanced: !!item.advanced, requiresConfirmation: !!item.requiresConfirmation })),
+    warnings: checks.filter(item => item.status === 'warn').map(item => ({ id: item.id, text: item.text, advanced: !!item.advanced, requiresConfirmation: !!item.requiresConfirmation, requiresAcknowledgement: !!item.requiresAcknowledgement })),
     advanced: {
       ports: result.details.portMap.map(({ from, to, containerPort, protocol, hostIp }) => ({ from, to, containerPort, protocol, hostIp, changed: from !== to })),
       nginx: { file: plan.domains.length ? `/etc/nginx/conf.d/docknest-${site.id}.conf` : null, notCopied: plan.nginxDirectives ?? [] },
@@ -243,7 +243,7 @@ function refuseWhileInstalling(move) {
     if (launchActive(serverId) || launchHeld(serverId)) throw httpError(409, `DockNest is launching a new site on ${server(serverId)?.name ?? 'a server'}. Start the move when the launch has finished.`, { code: 'LAUNCH_RUNNING' });
   }
 }
-export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false }, actor) {
+export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false, ownershipChecked = false }, actor) {
   const move = loadMove(moveId);
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'draft') throw httpError(409, 'This move has already started.');
@@ -255,6 +255,8 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
   if (!preview.result.canStart) throw httpError(409, preview.result.sentence, { code: 'PREFLIGHT_CHANGED', preview: previewView(move.id, preview) });
   if (reviewed !== move.preflight_hash || preview.hash !== move.preflight_hash) throw httpError(409, 'Something changed since you reviewed this move. Press Save changes to check again.', { code: 'PREFLIGHT_CHANGED', preview: previewView(move.id, preview) });
   if (preview.result.needsMoveAnyway && moveAnyway !== true) throw httpError(409, 'This move has a long downtime. Confirm with Move anyway to start it.', { code: 'MOVE_ANYWAY_REQUIRED' });
+  // Fail closed: findings about owners or file permissions need the person's tick, whatever the client sent before.
+  if (preview.result.needsOwnershipCheck && ownershipChecked !== true) throw httpError(409, 'Check the owner and file permission notes, then confirm "I checked these" to start this move.', { code: 'OWNERSHIP_CHECK_REQUIRED' });
   transaction(() => {
     const current = loadMove(moveId);
     if (current.state !== 'draft') throw httpError(409, 'This move has already started.');
@@ -266,7 +268,7 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
       const row = !preview.plan.domains.length && ['switch_dns', 'verify_dns', 'certificate'].includes(step.step) ? skipStep(step, 'The site has no domain.', now()) : step;
       insert.run(row.move_id, row.step, row.attempt, row.state, row.started_at, row.finished_at, JSON.stringify(row.resources), JSON.stringify(row.result));
     }
-    audit(actor, 'move.start', move.site_id, { move: moveId, target: move.target_server_id, moveAnyway: !!moveAnyway });
+    audit(actor, 'move.start', move.site_id, { move: moveId, target: move.target_server_id, moveAnyway: !!moveAnyway, ownershipChecked: !!ownershipChecked });
   });
   return moveView(moveId);
 }

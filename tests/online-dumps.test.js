@@ -43,3 +43,33 @@ test('the helper carries the dumps module and its restore guide section', () => 
   assert.match(source, /^# Database dumps$/m);
   assert.ok(source.indexOf('def dump_candidates(') > source.indexOf("ENGINES={'postgres'"), 'after the engine registry');
 });
+
+test('the engine capability list is the one the helper follows, and Redis/Mongo text is driven by it', async () => {
+  const { DATABASE_ENGINES, engineCapabilities } = await import('../shared/database-engines.js');
+  const { readFileSync } = await import('node:fs');
+  // Drift guard: an engine reports an online copy exactly when its helper module sets dump_format.
+  const byFile = { postgres: 'engine_postgres.py', mysql: 'engine_mysql.py', mariadb: 'engine_mysql.py', redis: 'engine_redis.py', mongo: 'engine_mongo.py' };
+  for (const engine of DATABASE_ENGINES) {
+    const source = readFileSync(new URL('../remote/helper/' + byFile[engine.id], import.meta.url), 'utf8');
+    assert.equal(engine.onlineCopy, /^\s+dump_format\s*=\s*'/m.test(source), engine.id + ' capability matches its helper module');
+  }
+  const list = engineCapabilities();
+  assert.deepEqual(list.filter(item => item.onlineCopy).map(item => item.id), ['postgres', 'mysql', 'mariadb']);
+  assert.equal(list.find(item => item.id === 'mongo').onlineCopy, false);
+  assert.equal(list.find(item => item.id === 'redis').reason, 'has no online copy yet');
+  const { detectDatabases, rowState, rowText, switchDisabled, covers } = await import('../web/online-dumps.js');
+  const services = [{ container: 'shop-db', engine: 'postgres', version: '16.2' }, { container: 'shop-cache', engine: 'redis' }];
+  const text = engines => detectDatabases({ selected: ['shop-db', 'shop-cache'], services, engines }).map(db => rowText(db, rowState(db, { on: true })));
+  assert.deepEqual(text(list), ['Online copy, stays running', 'Always stopped for a file copy. Redis has no online copy yet.']);
+  // When the Redis/Valkey change flips the capability, the same screen says online copy without any change of its own.
+  const flipped = list.map(item => item.id === 'redis' ? { id: item.id, label: item.label, onlineCopy: true } : item);
+  assert.deepEqual(text(flipped), ['Online copy, stays running', 'Online copy, stays running']);
+  const onlyRedisMongo = detectDatabases({ selected: ['c', 'm'], services: [{ container: 'c', engine: 'redis' }, { container: 'm', engine: 'mongo' }], engines: list });
+  assert.equal(switchDisabled(onlyRedisMongo, false), true);
+  assert.equal(switchDisabled(onlyRedisMongo, true), false, 'a saved on can still be turned off');
+  assert.equal(switchDisabled(detectDatabases({ selected: ['c'], services: [{ container: 'c', engine: 'redis' }], engines: flipped }), false), false);
+  assert.equal(rowState(detectDatabases({ selected: ['shop-db'], services, engines: list })[0], { on: true, incremental: true }), 'stopped-see');
+  assert.equal(covers(list), 'PostgreSQL, MySQL and MariaDB');
+  assert.equal(detectDatabases({ selected: ['x'], containers: [{ name: 'x', image: 'redis:7' }], services: [], engines: list })[0].engine, 'redis', 'engine from the image when none is declared');
+  assert.deepEqual(detectDatabases({ selected: ['x'], containers: [{ name: 'x', image: 'oliver006/redis_exporter' }], services: [], engines: list }), [], 'tools are not databases');
+});

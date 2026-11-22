@@ -51,7 +51,7 @@ export function DomainPanel({row,narrow,ctx,checking,error,canCheck,onCheck,onCl
 // A row in an app's panel: one per domain with the status of its worst step. A row opens the path panel.
 export function AppDomains({list,statusOf,onOpen}){
  if(!list.length)return null;
- return <section><h3 className="map-group-title">Domains</h3>
+ return <section className="map-sec"><h3 className="map-group-title">Domains</h3>
   <ul className="map-rows map-drows">{list.map(d=><li key={d.domain}><button type="button" className="map-row" onClick={e=>onOpen(d,e.currentTarget)}><IconWorld size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{d.domain}</b><Status state={statusOf(d)}/></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>)}</ul>
  </section>;
 }

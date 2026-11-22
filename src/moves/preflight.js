@@ -18,13 +18,14 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] },
  *     unsupported?: { container: string, settings: string[] }[], unreadableMounts?: string[],
  *     cpuLimits?: { container: string, cpus: string|null, cpuset: string|null }[] },
- *   source: { id: string, name: string, addresses?: string[] },
+ *   source: { id: string, name: string, addresses?: string[], ownership?: { engine?: { mode: string|null }, modes?: { checked: boolean, scanned?: number, truncated?: boolean, findings?: { path: string, modes: string[] }[] } } },
  *   target: { id: string, name: string, reachable: boolean, hostKeyOk?: boolean, uid?: number, architecture?: string,
  *     dockerVersion?: string|null, composeVersion?: string|null, freeBytes: number, totalBytes?: number,
  *     usedPorts?: number[], reservedPorts?: number[], existingPaths?: { path: string, empty: boolean }[],
  *     conflicts?: { containers?: string[], volumes?: string[], networks?: string[] },
  *     nginx?: { installed: boolean, configOk?: boolean, serverNames?: string[] }, webPortOwner?: 'nginx'|'other'|null,
  *     certbot?: { installed: boolean, account?: boolean }, stagingWritable?: boolean, addresses?: string[],
+ *     ownership?: { engine?: { mode: string|null }, filesystem?: { mounts?: object[], features?: { setid: boolean, xattr: boolean }, error?: string } },
  *     transferBytesPerSecond?: number, apparmorLoaded?: string[], apparmorEnabled?: boolean, seccompPresent?: string[], cpuCount?: number },
  *   state: { sameServer?: boolean, busy?: boolean, archived?: boolean, deploymentHold?: boolean, activeMove?: boolean },
  *   backupStorage?: { freeBytes: number },
@@ -83,6 +84,9 @@ export function describeDuration(seconds) {
   return `about ${hours} hours`;
 }
 
+// Owner decision (docs/moving-sites.md): what a probe FOUND is a warning the person must tick "I checked these" for; a probe that
+// failed or is missing stays a block. The server refuses to start without the tick (startMove).
+const ACK = { requiresAcknowledgement: true };
 const check = (id, status, title, text, extra) => ({ id, status, title, text, ...extra });
 // The CPU limit and CPU set a server with `count` CPUs accepts; mirrors cpu_fit in remote/helper/runspec.py.
 export function cpuFit(cpus, cpuset, count) {
@@ -138,6 +142,41 @@ export function evaluateMove(facts, options = {}) {
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${target.name} already has a folder ${folder}. DockNest never overwrites folders.`);
     // Configuration files outside the folders a move may create (such as /etc/cron.d) are never written; they stay in the backup.
     for (const file of site.handPlaced ?? []) add('paths', 'warn', 'Put back by hand', `Put back by hand: ${file}. DockNest does not write there during a move; copy it from the backup to the same path on ${target.name}.`);
+    // Owners, modes and file system (docs/adr-3.0.0-keys-safe.md, section 6). The helper reads them without changing anything.
+    // A fact that could not be read blocks the move ("could not be checked"); it never passes silently.
+    const sameServer = source.id === target.id;
+    const dockerBlocked = checks.some(item => item.id === 'docker' && item.status === 'block');
+    const unverified = (id, title, what, where = target.name) => add(id, 'block', title, `DockNest could not check ${what} on ${where}. Update DockNest on both servers, then check again.`);
+    const MODES = ['none', 'userns', 'rootless'], sourceMode = source.ownership?.engine?.mode, targetMode = target.ownership?.engine?.mode;
+    if (docker && !dockerBlocked && !sameServer) {
+      if (!MODES.includes(sourceMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses', source.name);
+      else if (!MODES.includes(targetMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses');
+      else if (sourceMode !== 'none' || targetMode !== 'none') add('owner-map', 'warn', 'Owners and groups', `Docker on ${sourceMode !== 'none' ? source.name : target.name} runs with remapped user IDs (${sourceMode !== 'none' ? sourceMode : targetMode}). File owners keep their numbers, but the owners the containers see on ${target.name} can differ, so the app may not read its own files. Check it after the move.`, ACK);
+    }
+    const modes = source.ownership?.modes, fsFacts = target.ownership?.filesystem;
+    if (sameServer) { /* nothing moves */ }
+    else if (!modes || modes.checked !== true) unverified('file-mode', 'File permissions', "the app's file permissions", source.name);
+    else {
+      if (modes.truncated) add('file-mode', 'warn', 'File permissions', `DockNest looked at the first ${modes.scanned} files of ${site.name} only, so special permissions further on were not checked.`, ACK);
+      if (modes.findings?.length) {
+        const features = fsFacts?.features;
+        if (!features || typeof features.setid !== 'boolean' || typeof features.xattr !== 'boolean') unverified('file-mode', 'File permissions', 'which file permissions the file system keeps');
+        else {
+          const lost = modes.findings.filter(item => (item.modes ?? []).some(mode => (mode === 'setid' && !features.setid) || (mode !== 'setid' && !features.xattr)));
+          if (lost.length) add('file-mode', 'warn', 'File permissions', `${lost[0].path}${lost.length > 1 ? ` and ${lost.length - 1} more` : ''} use special permissions (setuid or setgid bits, ACLs or extended attributes) that the file system on ${target.name} does not keep. The copy may lose them.`, ACK);
+        }
+      }
+    }
+    if (sameServer) { /* nothing moves */ }
+    else if (!fsFacts || fsFacts.error || !Array.isArray(fsFacts.mounts)) unverified('target-filesystem', 'Target folder', 'the folders the app moves into');
+    else for (const mount of fsFacts.mounts) {
+      const where = `${mount.sample ?? mount.mount} on ${target.name}`;
+      if (mount.readOnly) add('target-filesystem', 'block', 'Target folder', `${where} is on a read-only file system. Make it writable, then check again.`);
+      if (mount.noexec) add('target-filesystem', 'block', 'Target folder', `${where} is on a file system mounted noexec, so programs cannot run from it. Change the mount, then check again.`);
+      if (mount.nosuid) add('target-filesystem', 'block', 'Target folder', `${where} is on a file system mounted nosuid, which ignores setuid bits. Change the mount, then check again.`);
+      if (mount.rootSquash === true) add('target-filesystem', 'block', 'Target folder', `${where} is on a network file system that does not let root own files (root squash). Allow it on the share, then check again.`);
+      else if (mount.rootSquash !== false) unverified('target-filesystem', 'Target folder', 'whether the network file system lets root own files');
+    }
     const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `${target.name} already has a ${label} called ${name}. DockNest never replaces it.`);
     for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this app by hand.`);
@@ -216,10 +255,11 @@ export function evaluateMove(facts, options = {}) {
 
   const blocks = checks.filter(item => item.status === 'block'), warnings = checks.filter(item => item.status === 'warn');
   const needsMoveAnyway = checks.some(item => item.requiresConfirmation);
+  const needsOwnershipCheck = checks.some(item => item.status === 'warn' && item.requiresAcknowledgement);
   const verdict = blocks.length ? 'blocked' : warnings.length ? 'ready-with-notes' : 'ready';
   const sentence = blocks.length ? blocks[0].text
     : `${site.name} is ready to move to ${target.name}. It stays online while the copy is tested${downtime ? `; expected downtime is ${downtime.text}` : ''}.`;
-  return { verdict, canStart: !blocks.length, needsMoveAnyway, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
+  return { verdict, canStart: !blocks.length, needsMoveAnyway, needsOwnershipCheck, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
@@ -229,8 +269,10 @@ export function evaluateMove(facts, options = {}) {
 export function preflightHash(result, options = {}) {
   const canonical = value => Array.isArray(value) ? value.map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const material = {
-    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway,
+    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck,
     blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
+    // The owner and permission notes behind "I checked these": a new or different note needs a fresh review and tick.
+    acknowledged: result.details.checks.filter(item => item.status === 'warn' && item.requiresAcknowledgement).map(({ id, text }) => ({ id, text })),
     portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
     env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
     options,

@@ -530,4 +530,66 @@ class KeepStoppedTests(unittest.TestCase):
         source=pathlib.Path(helper.__file__).read_text()
         self.assertIn("keep_stopped=bool(req.get('keepStopped')) and captured is not None",source)
 
+@unittest.skipUnless(os.name=='posix','Reads Linux mount tables, setuid bits and extended attributes')
+class OwnershipProbeTests(unittest.TestCase):
+    """docs/adr-3.0.0-keys-safe.md section 6: read-only probes that report facts, never raise, never return file content."""
+    def test_source_modes_name_setid_acl_and_xattr_paths_and_skip_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=pathlib.Path(temporary);(root/'plain').write_text('x');tool=root/'tool';tool.write_text('x');os.chmod(tool,0o4755)
+            os.symlink(str(tool),str(root/'link'))
+            result=helper.source_modes([temporary])
+        self.assertTrue(result['checked']);self.assertFalse(result['truncated'])
+        paths={pathlib.Path(f['path']).name:f['modes'] for f in result['findings']}
+        self.assertEqual(paths.get('tool'),['setid']);self.assertNotIn('plain',paths);self.assertNotIn('link',paths)
+        self.assertTrue(all(set(f)=={'key','kind','path','modes'} for f in result['findings']),'paths and mode names only')
+    def test_source_modes_are_capped_and_say_so(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for i in range(6):(pathlib.Path(temporary)/('f%d'%i)).write_text('x')
+            with patch('helper.OWNERSHIP_SCAN_LIMIT',3):result=helper.source_modes([temporary])
+        self.assertTrue(result['truncated']);self.assertEqual(result['scanned'],3)
+    def test_source_modes_fail_to_unchecked_not_to_clean(self):
+        with patch('helper.os.lstat',side_effect=RuntimeError('boom')):result=helper.source_modes(['/srv/x'])
+        self.assertEqual(result,{'checked':False,'error':'scan'})
+        self.assertEqual(helper.source_modes(['relative','/a/../b'])['findings'],[],'unsafe paths are skipped')
+    def test_mount_details_read_options_and_filesystem(self):
+        text='36 35 98:0 / /srv/data rw,nosuid,noexec,relatime shared:1 - ext4 /dev/sda1 rw,errors=remount-ro\n40 35 0:30 / /mnt/share ro,relatime - nfs4 host:/x ro,vers=4.2\n'
+        table=helper.mount_details(text)
+        self.assertEqual([(m['path'],m['filesystem']) for m in table],[('/srv/data','ext4'),('/mnt/share','nfs4')])
+        self.assertIn('nosuid',table[0]['options']);self.assertIn('noexec',table[0]['options']);self.assertIn('ro',table[1]['options'])
+        self.assertEqual(helper.covering_mount('/srv/data/app',table)['path'],'/srv/data');self.assertIsNone(helper.covering_mount('/other',table))
+        with self.assertRaises(ValueError):helper.mount_details('')
+    def test_target_filesystem_reports_mount_flags_and_cleans_its_probe(self):
+        text='36 35 98:0 / /srv rw,nosuid,noexec - ext4 /dev/sda1 rw\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            staging=pathlib.Path(temporary)
+            with patch('helper.mount_details',return_value=helper.mount_details(text)),patch('helper.nearest_existing',side_effect=pathlib.Path),patch('helper.os.path.realpath',side_effect=lambda v:str(v)):result=helper.target_filesystem(['/srv/shop/data'],str(staging))
+            self.assertEqual(list(staging.iterdir()),[],'the probe folder is removed')
+        self.assertEqual(len(result['mounts']),1);mount=result['mounts'][0]
+        self.assertEqual((mount['mount'],mount['noexec'],mount['nosuid'],mount['readOnly'],mount['rootSquash']),('/srv',True,True,False,False))
+        self.assertIn('setid',result['features']);self.assertIn('xattr',result['features'])
+    def test_target_filesystem_marks_nfs_root_squash(self):
+        text='40 35 0:30 / /mnt/share rw - nfs4 host:/x rw\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch('helper.mount_details',return_value=helper.mount_details(text)),patch('helper.nearest_existing',side_effect=pathlib.Path),patch('helper.os.path.realpath',side_effect=lambda v:str(v)),patch('helper.squashes_root',return_value=True):
+                result=helper.target_filesystem(['/mnt/share/app'],temporary)
+        self.assertTrue(result['mounts'][0]['rootSquash'])
+    def test_target_filesystem_errors_instead_of_passing(self):
+        with patch('helper.mount_details',side_effect=OSError('no mountinfo')):self.assertEqual(helper.target_filesystem(['/srv/a'],'/tmp'),{'error':'mounts'})
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch('helper.mount_details',return_value=helper.mount_details('36 35 98:0 / / rw - ext4 /dev/sda1 rw\n')),patch('helper.staging_features',return_value=None):
+                self.assertEqual(helper.target_filesystem(['/srv/a'],temporary),{'error':'probe'})
+    def test_squash_probe_is_false_for_a_normal_folder_and_never_leaves_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch('helper.os.chown'):self.assertFalse(helper.squashes_root(temporary+'/new/path'))
+            with patch('helper.os.chown',side_effect=PermissionError()):self.assertTrue(helper.squashes_root(temporary))
+            self.assertEqual(list(pathlib.Path(temporary).iterdir()),[])
+    def test_ownership_facts_split_by_role(self):
+        with patch('helper.engine_rootless',return_value='userns'),patch('helper.source_modes',return_value={'checked':True}) as modes,patch('helper.target_filesystem',return_value={'mounts':[]}) as fs:
+            source=helper.ownership_facts('source',{},{'site':{'bindPaths':['/srv/a']}})
+            target=helper.ownership_facts('target',{'probe':{'paths':['/srv/a']}},{'stagingExisting':'/var/lib'})
+            neither=helper.ownership_facts('target',{},{})
+        self.assertEqual(source,{'engine':{'mode':'userns'},'modes':{'checked':True}});modes.assert_called_once_with(['/srv/a'])
+        self.assertEqual(target,{'engine':{'mode':'userns'},'filesystem':{'mounts':[]}});fs.assert_called_once_with(['/srv/a'],'/var/lib')
+        self.assertEqual(neither,{'engine':{'mode':'userns'}})
+
 if __name__=='__main__':unittest.main()

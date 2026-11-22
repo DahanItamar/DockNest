@@ -68,4 +68,4 @@ export function AddToServer({found,onPick,onDragItem,onNewSite}){
 }
 export const DiscoverFooter=({found})=><><span className="map-caption">Not listed?</span><button type="button" className="link-action" disabled={found.loading} onClick={found.again}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Discover again</button></>;
 
-export const Defs=({rows})=><dl className="map-defs">{rows.filter(Boolean).map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
+export const Defs=({rows})=><dl className="map-defs">{rows.filter(Boolean).map(([k,v],i)=><div key={k+i}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;

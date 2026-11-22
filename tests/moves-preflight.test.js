@@ -9,10 +9,11 @@ function facts(change = f => f) {
     site: { id: 'site', name: 'Shop', kind: 'compose', domains: ['shop.example.com'], containerCount: 2, architecture: 'x86_64', packageBytes: 2 * GiB,
       ports: [{ hostIp: '127.0.0.1', hostPort: 8082, containerPort: 80 }], bindPaths: ['/srv/shop/data'], names: { containers: ['shop-web'] },
       nginxDirectives: [], maintenanceReady: true, env: [], timings: { backupSeconds: 20, restoreSeconds: 15 } },
-    source: { id: 'old', name: 'old-srv', addresses: ['203.0.113.7'] },
+    source: { id: 'old', name: 'old-srv', addresses: ['203.0.113.7'], ownership: { engine: { mode: 'none' }, modes: { checked: true, scanned: 3, truncated: false, unreadable: 0, xattrChecked: true, findings: [] } } },
     target: { id: 'new', name: 'new-srv', reachable: true, hostKeyOk: true, uid: 0, architecture: 'x86_64', dockerVersion: '28.1.1', composeVersion: '2.29.1',
       freeBytes: 100 * GiB, totalBytes: 200 * GiB, usedPorts: [22, 80, 443], reservedPorts: [], existingPaths: [], conflicts: {},
-      nginx: { installed: true, configOk: true, serverNames: ['other.example.com'] }, webPortOwner: 'nginx', certbot: { installed: true, account: true }, stagingWritable: true, addresses: ['198.51.100.9'] },
+      nginx: { installed: true, configOk: true, serverNames: ['other.example.com'] }, webPortOwner: 'nginx', certbot: { installed: true, account: true }, stagingWritable: true, addresses: ['198.51.100.9'],
+      ownership: { engine: { mode: 'none' }, filesystem: { mounts: [{ mount: '/', filesystem: 'ext4', readOnly: false, noexec: false, nosuid: false, rootSquash: false, sample: '/srv/shop/data' }], features: { setid: true, xattr: true } } } },
     state: {}, backupStorage: { freeBytes: 50 * GiB },
     dns: { mode: 'cloudflare', records: [{ type: 'A', name: 'shop.example.com', value: '203.0.113.7' }] },
   };
@@ -247,4 +248,69 @@ test('a mount a copy cannot read blocks the move; CPU limits the new server must
   assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { cpu(f); f.target.cpuCount = 16; }))));
   assert.deepEqual(cpuFit('2', '0-2', 2), { cpus: '2', cpuset: null }); assert.deepEqual(cpuFit('2', '0-1', 2), { cpus: '2', cpuset: '0-1' });
   assert.deepEqual(cpuFit(null, null, 1), { cpus: null, cpuset: null });
+});
+
+// Keys safe: owners, modes and the target file system (docs/adr-3.0.0-keys-safe.md, section 6).
+const own = result => result.details.checks.filter(item => ['owner-map', 'file-mode', 'target-filesystem'].includes(item.id));
+test('a normal pair of servers shows no ownership notes and stays ready', () => {
+  const result = evaluateMove(facts());
+  assert.deepEqual(own(result), []); assert.equal(result.verdict, 'ready');
+});
+test('owner-map warns when either Docker remaps user IDs, and never blocks', () => {
+  for (const [from, to] of [['none', 'userns'], ['rootless', 'none'], ['userns', 'userns']]) {
+    const result = evaluateMove(facts(f => { f.source.ownership.engine.mode = from; f.target.ownership.engine.mode = to; }));
+    assert.deepEqual(own(result).map(item => [item.id, item.status]), [['owner-map', 'warn']]); assert.equal(result.canStart, true);
+  }
+});
+test('file-mode names the path when the target file system drops special permissions', () => {
+  const result = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }, { path: '/srv/shop/data/a', modes: ['xattr'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.deepEqual(own(result).map(item => [item.id, item.status]), [['file-mode', 'warn']]);
+  assert.match(own(result)[0].text, /^\/srv\/shop\/data\/bin\/tool use special permissions/); assert.equal(result.canStart, true);
+  const kept = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }]; }));
+  assert.deepEqual(own(kept), [], 'a file system that keeps them has nothing to say');
+});
+test('target-filesystem blocks read-only, noexec, nosuid and root squash mounts', () => {
+  for (const [key, value, words] of [['readOnly', true, /read-only/], ['noexec', true, /noexec/], ['nosuid', true, /nosuid/], ['rootSquash', true, /root squash/]]) {
+    const result = evaluateMove(facts(f => { f.target.ownership.filesystem.mounts[0][key] = value; }));
+    assert.deepEqual(own(result).map(item => [item.id, item.status]), [['target-filesystem', 'block']]); assert.match(own(result)[0].text, words); assert.equal(result.canStart, false);
+  }
+});
+test('a probe that could not run blocks as "could not be checked", never passes', () => {
+  const cases = [
+    [f => { delete f.source.ownership; }, ['owner-map', 'file-mode']],
+    [f => { delete f.target.ownership; }, ['owner-map', 'target-filesystem']],
+    [f => { f.source.ownership.modes = { checked: false, error: 'scan' }; }, ['file-mode']],
+    [f => { f.target.ownership.engine.mode = null; }, ['owner-map']],
+    [f => { f.target.ownership.filesystem = { error: 'probe' }; }, ['target-filesystem']],
+    [f => { f.target.ownership.filesystem.mounts[0].rootSquash = null; }, ['target-filesystem']],
+    [f => { f.source.ownership.modes.findings = [{ path: '/x', modes: ['setid'] }]; f.target.ownership.filesystem.features = null; }, ['file-mode']],
+  ];
+  for (const [change, ids] of cases) {
+    const result = evaluateMove(facts(change));
+    assert.deepEqual(own(result).map(item => item.id).sort(), ids.sort()); assert.ok(own(result).every(item => item.status === 'block' && /could not check/.test(item.text)));
+    assert.equal(result.canStart, false);
+  }
+});
+test('owner decision: findings are warnings that need "I checked these"; a failed or missing probe blocks and is not an acknowledgement case', () => {
+  assert.equal(evaluateMove(facts()).needsOwnershipCheck, false, 'nothing found, nothing to tick');
+  const remapped = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; }));
+  assert.equal(remapped.canStart, true); assert.equal(remapped.needsOwnershipCheck, true);
+  assert.ok(own(remapped).every(item => item.status === 'warn' && item.requiresAcknowledgement === true));
+  const lost = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.equal(lost.canStart, true); assert.equal(lost.needsOwnershipCheck, true);
+  const partial = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(partial.needsOwnershipCheck, true);
+  const failed = evaluateMove(facts(f => { delete f.source.ownership; }));
+  assert.equal(failed.canStart, false); assert.equal(failed.needsOwnershipCheck, false, 'a missing probe blocks; a tick cannot override it');
+  assert.notEqual(preflightHash(remapped), preflightHash(evaluateMove(facts())), 'the acknowledgement need is part of what was reviewed');
+  // A tick covers the notes that were shown: a new or different note (still needing a tick) changes the hash.
+  const both = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(both.needsOwnershipCheck, true);
+  assert.notEqual(preflightHash(both), preflightHash(remapped), 'an extra note needs a fresh review');
+  const otherPath = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/other', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.notEqual(preflightHash(otherPath), preflightHash(lost), 'a note about another path needs a fresh review');
+});
+test('a partly scanned folder is a warning that says so', () => {
+  const result = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.deepEqual(own(result).map(item => [item.id, item.status]), [['file-mode', 'warn']]); assert.match(own(result)[0].text, /first 20000 files/);
 });

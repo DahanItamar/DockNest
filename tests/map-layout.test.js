@@ -139,3 +139,9 @@ test('positions of removed nodes are dropped, kinds not loaded yet are kept',()=
  assert.equal(prunePositions(p,{server:['a','gone'],site:['s'],storage:['t'],alert:['c']}),p,'nothing removed: the same object, so nothing re-renders');
  assert.equal(prunePositions(p,{server:null,site:null,storage:null,alert:null}),p,'nothing loaded yet: everything is kept');
 });
+test('a database row says how it is backed up from the app data, never a fixed engine text',()=>{
+ const svc=[{container:'c',engine:'redis',version:'7.4.1'},{container:'p',engine:'postgres'}];
+ assert.deepEqual(databasesOf({id:'1',config:{services:svc}}).map(d=>d.mode),['Stopped file copy','Stopped file copy'],'switch off: every database stops');
+ assert.deepEqual(databasesOf({id:'1',config:{onlineDumps:true,services:svc}}).map(d=>d.mode),['Stopped file copy','Online copy, stays running'],'the engine capability decides, not the switch alone');
+ assert.deepEqual(databasesOf({id:'1',incremental:{enabled:true},config:{onlineDumps:true,services:svc}}).map(d=>d.mode),['Stopped file copy','Stopped file copy'],'incremental chains always stop');
+});

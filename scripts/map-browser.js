@@ -11,6 +11,7 @@ import {linkedChecks} from './linked-browser.js';
 // TEST_BASE_URL=http://127.0.0.1:5205. Set SHOTS_DIR to also write screenshots (1440x900 and 402x874, both themes).
 const base=process.env.TEST_BASE_URL||'http://127.0.0.1:5173',origin=new URL(base).origin,shots=process.env.SHOTS_DIR;
 if(shots)await mkdir(shots,{recursive:true});
+if(process.env.PANEL_SHOTS)await mkdir(process.env.PANEL_SHOTS,{recursive:true});
 // The shop site has a real UUID: the install API answers 400 for any other site id.
 const SHOP='5e0f3b1c-6a2d-4c8e-9f10-2b3c4d5e6f70';
 const long='very-long-site-name-'.repeat(8)+'.example.com';
@@ -99,6 +100,9 @@ function preview({siteId,targetServerId,options}){
 const nginx={id:'nginx',status:'block',title:'media-box needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported,reason:mock.unsupported?'This server packages offer Docker 20.10; this site needs 28 or newer. Install Docker from the Docker repository instead.':undefined}};
  if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['media-box needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
+ // Owner decision: findings about owners and file permissions are warnings that need "I checked these"; a probe that failed blocks.
+ if(targetServerId==='d'&&mock.ownership==='warn'){const c={id:'owner-map',status:'warn',title:'Owners and groups',text:'Docker on zeta-Srv runs with remapped user IDs (userns). The app may not read its own files. Check it after the move.'};return {...base,verdict:'ready-with-notes',needsOwnershipCheck:true,warnings:[{id:'owner-map',text:c.text,advanced:false,requiresConfirmation:false,requiresAcknowledgement:true}],advanced:{...base.advanced,checks:[c]}}}
+ if(targetServerId==='d'&&mock.ownership==='block'){const c={id:'owner-map',status:'block',title:'Owners and groups',text:'DockNest could not check which user IDs Docker uses on zeta-Srv. Update DockNest on both servers, then check again.'};return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',needsOwnershipCheck:false,blockers:[c.text],advanced:{...base.advanced,checks:[c]}}}
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
  return base;
 }
@@ -386,6 +390,32 @@ mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
  assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
  await shot(page,scheme,'1440-9-blocked');
  await d.getByRole('button',{name:'Cancel'}).click();mock.blockA=false;
+ // Owner and file-permission findings: a warning, and Move stays off until "I checked these" is ticked
+ mock.ownership='warn';
+ await dragSite(page,SHOP,'zeta-Srv');await save.click();
+ await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+ await d.getByText(/remapped user IDs/).waitFor();
+ assert.equal(await d.getByRole('alert').getByText(/remapped user IDs/).count(),0,'findings are a warning, not a block');
+ const goOwn=d.getByRole('button',{name:'Move',exact:true});
+ assert.equal(await goOwn.isDisabled(),true,'Move waits for I checked these');
+ await shot(page,scheme,'1440-9b-ownership');
+ await d.getByLabel('I checked these').check();assert.equal(await goOwn.isEnabled(),true);
+ await d.getByLabel('I checked these').uncheck();assert.equal(await goOwn.isDisabled(),true,'unticking disables Move again');
+ await d.getByLabel('I checked these').check();
+ await goOwn.click();
+ await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
+ assert.equal(mock.starts.at(-1).body.ownershipChecked,true,'the tick is sent to the server');
+ mock.phase='rolled_back';
+ await d.getByRole('heading',{name:'Move undone'}).waitFor({timeout:6000});
+ await d.getByRole('button',{name:'Close'}).click();
+ // A probe that failed blocks: no tick to offer
+ mock.ownership='block';
+ await dragSite(page,SHOP,'zeta-Srv');await save.click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ await d.getByRole('alert').getByText(/could not check which user IDs/).first().waitFor();
+ assert.equal(await d.getByLabel('I checked these').count(),0,'a failed probe offers no tick');
+ assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
+ await d.getByRole('button',{name:'Cancel'}).click();mock.ownership=undefined;
 }
 
 async function stateIsClean(page,label){
@@ -406,8 +436,10 @@ async function panelChecks(page,scheme){
  assert.equal(await panel.getByRole('heading',{name:'shop.example.com'}).evaluate(e=>document.activeElement===e),true,'panel title is focused on open');
  await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
  assert.equal(await panel.getByText('Generic').count()+await panel.getByText('app',{exact:true}).count(),0,'only detected databases are listed');
- await panel.getByText('Moves together with the app.').waitFor();
- await panel.getByText(/^Today .*, passed$/).waitFor();
+ // Databases are label/value rows; the mode comes from the app's data (no online-dumps switch: the stopped file copy)
+ await panel.locator('dt',{hasText:'Redis 7.4.1'}).waitFor();assert.equal(await panel.locator('dt',{hasText:'Redis 7.4.1'}).locator('xpath=following-sibling::dd').innerText(),'Stopped file copy');
+ // The header status line is the one source of the last backup: no separate Last backup row
+ await panel.getByText(/^Backed up Today /).waitFor();assert.equal(await panel.locator('dt',{hasText:/^Last backup$/}).count(),0,'no duplicate Last backup row');
  assert.equal(await panel.locator('dd',{hasText:/^3$/}).count(),1,'containers show a count, never indexes');
  assert.equal(await panel.getByText('1, 2, 3').count(),0);
  await panel.getByText('nas-backup').waitFor();await panel.getByText('office-box').waitFor();
@@ -1137,7 +1169,59 @@ try{
    const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();
    await asLink(panel.getByRole('button',{name:'Self-heal'}),'Self-heal at '+w,w);
    await asLink(panel.getByRole('button',{name:'Edit history'}),'Edit history at '+w,w);
+   // The panel footer: Move to and Edit are links, Open site is the one filled action
+   await asLink(panel.getByRole('button',{name:'Move to…'}),'Move to at '+w,w);
+   if(await panel.getByRole('button',{name:'Edit',exact:true}).count())await asLink(panel.getByRole('button',{name:'Edit',exact:true}),'Edit at '+w,w);
+   assert.equal(await panel.locator('.map-panel-foot button.primary').count(),1,'one filled action in the footer at '+w);
+   assert.equal(await panel.locator('.map-panel-foot button.primary').innerText(),'Open site');
    await context.close();
+  }
+ }
+ {
+  // n8n-style panel layout: one label column, one filled primary, quiet link actions, no overflow, no cards in cards
+  for(const scheme of ['light','dark']){
+   for(const w of [1280,390]){
+    const {context,page}=await open({width:w,height:900,scheme});
+    if(w>=768){await page.locator('.map-site[data-site="'+SHOP+'"]').focus();await page.keyboard.press('Enter')}
+    else{await page.locator('.map-list').waitFor();await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click()}
+    const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();
+    const m=await panel.evaluate(root=>{
+     const xs=[...root.querySelectorAll('.map-defs > div > dt')].map(e=>Math.round(e.getBoundingClientRect().x));
+     const vs=[...root.querySelectorAll('.map-defs > div > dd')].map(e=>Math.round(e.getBoundingClientRect().x));
+     const quiet=[...root.querySelectorAll('button.link-action')].map(e=>{const c=getComputedStyle(e);return {name:e.textContent,bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor}});
+     const filled=[...root.querySelectorAll('button.primary')].map(e=>e.textContent);
+     const cols=getComputedStyle(root.querySelector('.map-defs > div')).gridTemplateColumns.split(' ')[0];
+     const nested=[...root.querySelectorAll('.map-panel-body > section section, .map-dialog-body > section section')].length;
+     return {xs,vs,quiet,filled,cols,sw:document.documentElement.scrollWidth,pw:root.scrollWidth,cw:root.clientWidth,nested};
+    });
+    const L=scheme+' '+w;
+    assert.ok(m.xs.length>=5,L+': details rows exist');
+    assert.equal(new Set(m.xs).size,1,L+': label column x is equal across rows '+m.xs);
+    assert.equal(new Set(m.vs).size,1,L+': value column x is equal across rows '+m.vs);
+    assert.equal(m.cols,'104px',L+': label column is 104px');
+    assert.ok(m.quiet.length>=3,L+': link actions exist');
+    for(const q of m.quiet){assert.equal(q.bw,0,L+': '+q.name+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(q.bg),L+': '+q.name+' has no fill: '+q.bg)}
+    assert.deepEqual(m.filled,['Open site'],L+': exactly one filled primary');
+    assert.ok(m.sw<=w&&m.pw<=m.cw+1,L+': no horizontal overflow');
+    assert.equal(m.nested,0,L+': no cards in cards');
+    if(process.env.PANEL_SHOTS)await panel.screenshot({path:path.join(process.env.PANEL_SHOTS,'app-'+w+'-'+scheme+'.png')});
+    // The server panel (media-box misses nginx): status in the header line only, Open server the one filled action
+    await page.keyboard.press('Escape');await panel.waitFor({state:'detached'});
+    if(w>=768)await page.locator('.map-server[data-node="server:a"]').click();
+    else await page.getByRole('region',{name:'media-box'}).getByRole('button',{name:'Details'}).first().click();
+    const sp=w>=768?page.locator('.map-panel'):dialog(page);await sp.getByRole('heading',{name:'media-box'}).waitFor();await sp.getByText('Missing').first().waitFor();
+    const s=await sp.evaluate(root=>({filled:[...root.querySelectorAll('button.primary')].map(e=>e.textContent),
+     boxed:[...root.querySelectorAll('.map-panel-body button:not(.primary):not(.link-action):not(.icon-button), .map-dialog-body button:not(.primary):not(.link-action):not(.icon-button)')].filter(e=>parseFloat(getComputedStyle(e).borderTopWidth)>0).map(e=>e.textContent),
+     status:[...root.querySelectorAll('.map-defs dt')].filter(e=>/^Status$/.test(e.textContent)).length,cols:getComputedStyle(root.querySelector('.map-defs > div')).gridTemplateColumns.split(' ')[0],
+     sw:document.documentElement.scrollWidth,pw:root.scrollWidth,cw:root.clientWidth}));
+    assert.deepEqual(s.filled,['Open server'],L+': server panel has one filled primary');
+    assert.deepEqual(s.boxed,[],L+': no boxed secondary buttons in the server panel');
+    assert.equal(s.status,0,L+': server status shows once, in the header line');assert.equal(s.cols,'104px',L+': server label column');
+    assert.ok(s.sw<=w&&s.pw<=s.cw+1,L+': server panel has no horizontal overflow');
+    assert.equal(await page.getByText(/\bBeta\b/).count(),0,L+': no Beta label');
+    if(process.env.PANEL_SHOTS)await sp.screenshot({path:path.join(process.env.PANEL_SHOTS,'server-missing-'+w+'-'+scheme+'.png')});
+    await context.close();
+   }
   }
  }
  assert.deepEqual(errors,[],'page errors');
