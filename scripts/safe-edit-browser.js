@@ -325,7 +325,7 @@ async function boards187(width,scheme){
  await dlg(page).getByText('Use 60 to 600 seconds.').waitFor();
  assert.equal(await apply187(page).isDisabled(),true,'Apply is off below the minimum');
  assert.equal(await field.getAttribute('aria-invalid'),'true');
- await page.mouse.move(0,0); // park the pointer: the global input:hover border currently wins over [aria-invalid] while hovered (reported separately)
+ await field.hover();
  assert.equal(await field.evaluate(el=>getComputedStyle(el).borderTopColor),await page.evaluate(()=>{const s=document.createElement('i');s.style.color='var(--error)';document.body.append(s);const c=getComputedStyle(s).color;s.remove();return c}),'a red border');
  await shot(page,'187-04','limit-bad',width,scheme);await layout(page,'limit bad '+tag);
  await field.fill('601');assert.equal(await apply187(page).isDisabled(),true,'Apply is off above the maximum');

@@ -54,6 +54,7 @@
 
 /* Advanced settings (time limit) and a variable marked for removal. */
 .se-root .se-input[aria-invalid=true]{border-color:var(--error)}
+.se-root .se-input[aria-invalid=true]:hover:not(:disabled){border-color:var(--error)}
 .se-root .se-hint{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
 .se-root .se-hint.bad{color:var(--error)}
 .se-root .se-unit{display:flex;align-items:center;gap:8px}
