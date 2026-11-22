@@ -59,9 +59,9 @@ function newestBackup(siteId) {
     containers: (manifest.containers ?? []).map(container => ({ name: String(container.name ?? '').replace(/^\//, ''), image: container.image, mounts: (container.mounts ?? []).map(mount => ({ type: mount.type, destination: mount.destination })) })),
     // Databases saved as an online logical dump (docs/online-dumps.md): their data folders in the package are empty.
     dumps: dumpedContainers(manifest),
-    // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. Restore tests read
-    // the main backup.
-    verified: evidence ? { at: evidence.checkedAt } : null,
+    // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. The test records whether it read the
+    // main backup or an off-site copy (sourceRole); older tests read the main backup.
+    verified: evidence ? { at: evidence.checkedAt, source: evidence.sourceRole === 'copy' ? 'copy' : 'main' } : null,
   };
 }
 

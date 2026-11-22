@@ -17,7 +17,7 @@ const docsLink = (version, file) => `https://github.com/DahanItamar/DockNest/blo
 const step = (text, command, include) => (include.commands && command ? { text, command } : { text });
 
 export function statusText(app) {
-  if (app.backup?.verified) return `Verified: a restore test passed on ${formatDate(app.backup.verified.at)}, from the main backup.`;
+  if (app.backup?.verified) return `Verified: a restore test passed on ${formatDate(app.backup.verified.at)}, from the ${app.backup.verified.source === 'copy' ? 'off-site copy' : 'main backup'}.`;
   return app.backup ? 'Backed up, not tested yet.' : 'Not backed up yet.';
 }
 const testText = test => (!test ? 'No restore test yet.' : test.result === 'passed' ? `Passed on ${formatDate(test.finishedAt)}.` : test.result === 'failed' ? `Failed on ${formatDate(test.finishedAt)}.` : `Could not run on ${formatDate(test.finishedAt)}.`);
