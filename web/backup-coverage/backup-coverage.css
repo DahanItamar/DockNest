@@ -43,6 +43,7 @@ button.bc-main:focus-visible{outline:2px solid var(--focus-ring);outline-offset:
 @media(max-width:767px){
  .bc-head{flex-direction:column}
  .bc-head>button,.bc-server,.bc-panel .bc-server select{width:100%}
+ .bc-head>button.link-action{min-height:44px}
  .bc-status{flex-wrap:wrap;gap:0 8px}
  .bc-status .t-caption{white-space:normal}
  .bc-bar{flex-direction:column;align-items:flex-start;gap:0}

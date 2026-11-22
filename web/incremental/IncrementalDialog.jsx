@@ -17,7 +17,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
   return()=>{alive=false};
  },[client,site.id,tries]);
 
- if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setData(null);setTries(n=>n+1)}}>Try again</button></div></div>;
+ if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setData(null);setTries(n=>n+1)}}>Try again</button></div></div>;
  if(!data)return <div className="modal-body"><div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Loading settings…</StatusLabel></div></div>;
 
  const bad=enabled&&!validBackups(every),failed=failure=>{if(failure.status===401){onSessionExpired?.();return}setError(saveError(failure))};
@@ -51,6 +51,6 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
   {enabled&&nextFull&&data.fullNextMessage&&<AlertPanel variant="warning" title="Full backup planned">{data.fullNextMessage}</AlertPanel>}
   {!enabled&&data.enabled&&<AlertPanel variant="info" title="Existing chains stay">Turning this off makes the next backup full. Older backups can still be restored.</AlertPanel>}
   {error&&<AlertPanel variant="error" title={error.reason}>{error.action}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Save'}</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Save'}</button></div>
  </form>;
 }

@@ -29,7 +29,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
     {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" excerptSource={catalogued(failure.message)||!failure.message?null:{error:failure.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildServerReport({...facts,...opts,check:failure.check,errorClass:failure.errorClass,message:failure.message,explanation:EXPLAIN.server})}/></div>}>{failure.message}</AlertPanel>}
    </div>
    <footer className="card-footer server-card-actions">
-    <button disabled={busy} onClick={()=>onTest(server)}>Test connection</button>
+    <button type="button" className="link-action" disabled={busy} onClick={()=>onTest(server)}>Test connection</button>
     <button type="button" className="text-link" onClick={()=>onDiscover(server)}>Discover apps</button>
    </footer>
   </article>;

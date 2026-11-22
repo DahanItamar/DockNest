@@ -15,7 +15,7 @@ export function SkipDialog({item,busy,error,onConfirm,onClose}){
    <p>DockNest will stop listing this {item.kind} as not backed up. It stays unprotected. Nothing changes on the server, and you can undo this at any time.</p>
    <label className="field"><span>Note (optional)</span><input type="text" name="note" maxLength={NOTE_MAX} value={note} onChange={event=>setNote(event.target.value)} aria-describedby="bc-note-help"/><small id="bc-note-help">For example: a cache that is rebuilt on start. {note.length}/{NOTE_MAX}</small></label>
    {error&&<AlertPanel variant="error" title="The change was not saved">{error}</AlertPanel>}
-   <div className="modal-foot"><button type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Skip'}</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Skip'}</button></div>
   </form>
  </dialog>,document.body);
 }

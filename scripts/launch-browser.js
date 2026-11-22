@@ -127,12 +127,12 @@ async function shot(page,name,scheme){if(!shots)return;await page.mouse.move(2,2
 async function layoutOk(page){
  const r=await page.evaluate(()=>{
   const d=[...document.querySelectorAll('dialog[open]')].pop();if(!d)return {ok:true};
-  const bs=[...d.querySelectorAll('.map-dialog-foot button, .modal-foot button')].filter(b=>b.offsetParent!==null);
+  const bs=[...d.querySelectorAll('.map-dialog-foot button, .modal-foot button')].filter(b=>b.offsetParent!==null&&!b.classList.contains('link-action'));
   const hs=[...new Set(bs.map(b=>Math.round(b.getBoundingClientRect().height)))];
   const lines=bs.every(b=>b.getBoundingClientRect().height<64);
   return {sideways:document.documentElement.scrollWidth>innerWidth+1||d.scrollWidth>d.clientWidth+1,hs,lines};
  });
- assert.ok(!r.sideways,'sideways scroll');assert.ok(r.hs?.length<=1,'footer buttons differ in height: '+r.hs);assert.ok(r.lines!==false,'a footer button wraps');
+ assert.ok(!r.sideways,'sideways scroll');assert.ok(r.hs?.length<=1,'real footer buttons (text links are not boxes) differ in height: '+r.hs);assert.ok(r.lines!==false,'a footer button wraps');
 }
 const COMPOSE='services:\n  web:\n    image: demo/shop:1.5\n    ports:\n      - "8080:8080"\n  db:\n    image: postgres:16\n';
 async function tickShutdown(page){await dialog(page).getByLabel(/I verified that a normal stop cleanly closes/).check()}

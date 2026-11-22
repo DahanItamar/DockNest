@@ -23,7 +23,7 @@ export function ConsentDialog({client,onClose,onAnswered}){
   <h3>What is sent</h3><p>DockNest asks GitHub for the list of releases. Nothing about your servers, apps or users is sent.</p><p><ExtLink href={DOCS_SECURITY}>What is sent</ExtLink></p><p>A check runs right after you choose Yes, then once a day.</p>
   <h3>What stays the same</h3><ul className="plain-list"><li>Until you choose Yes, DockNest makes no requests to GitHub.</li><li>DockNest never installs an update by itself. An administrator must start it.</li><li>You can change this later in the Update Center.</li></ul>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
-  <div className="modal-foot"><button type="button" disabled={busy} onClick={()=>answer(false)}>No, keep checks off</button><button type="button" className="primary" disabled={busy} onClick={()=>answer(true)}>Yes, check daily</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" disabled={busy} onClick={()=>answer(false)}>No, keep checks off</button><button type="button" className="primary" disabled={busy} onClick={()=>answer(true)}>Yes, check daily</button></div>
  </UCDialog>;
 }
 export function WhatsNewDialog({data,onClose}){

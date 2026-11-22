@@ -73,7 +73,7 @@ const shot=async(page,name)=>{if(shots){await page.mouse.move(2,2);await page.sc
 const rect=l=>l.evaluate(e=>{const r=e.getBoundingClientRect();return {top:Math.round(r.top),bottom:Math.round(r.bottom),height:Math.round(r.height)}});
 
 async function footerButtons(dlg,label){
- const boxes=await dlg.locator('.map-dialog-foot button').evaluateAll(bs=>bs.map(b=>({h:Math.round(b.getBoundingClientRect().height),lines:Math.round(b.getBoundingClientRect().height/parseFloat(getComputedStyle(b).lineHeight)),ws:getComputedStyle(b).whiteSpace,scrollW:b.scrollWidth,clientW:b.clientWidth})));
+ const boxes=await dlg.locator('.map-dialog-foot button:not(.link-action)').evaluateAll(bs=>bs.map(b=>({h:Math.round(b.getBoundingClientRect().height),lines:Math.round(b.getBoundingClientRect().height/parseFloat(getComputedStyle(b).lineHeight)),ws:getComputedStyle(b).whiteSpace,scrollW:b.scrollWidth,clientW:b.clientWidth})));
  assert.ok(boxes.length>=1,label+': footer buttons');
  assert.equal(new Set(boxes.map(b=>b.h)).size,1,label+': equal button heights '+JSON.stringify(boxes));
  for(const b of boxes){assert.equal(b.ws,'nowrap',label+': nowrap');assert.ok(b.scrollW<=b.clientW,label+': button text fits')}

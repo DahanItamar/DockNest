@@ -81,7 +81,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  }
  const portsText=p=>`${p.from} to ${p.to}${p.changed?' (changed, the old number is taken)':''}`;
  const unknown='Not known yet';
- return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
+ return <Sheet className={blocked?undefined:"map-fit"} title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
   {blocked&&!own.some(c=>c.status==='block'&&c.text===why(preview))&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
   {own.map(c=><Note key={c.id+c.text} kind={c.status==='block'?'error':'warn'} icon={c.status==='block'?IconCircleX:IconAlertTriangle} role={c.status==='block'?'alert':undefined}>{c.text}</Note>)}
@@ -139,7 +139,7 @@ const STATUS_WORD={done:'done',running:'in progress',failed:'failed',pending:'wa
 
 function RemoveDialog({site,onCancel,onRemove,error,busy,prompt}){
  const [name,setName]=useState(''),[data,setData]=useState(false);
- return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
+ return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
   <p>The old copy of <b>{site.name}</b> is stopped and no longer needed. Removing it deletes the old containers. You will not be able to switch back.</p>
   <label className="map-check"><input type="checkbox" checked={data} onChange={e=>setData(e.target.checked)}/>Also delete the old data</label>
   {data&&<Note kind="error" icon={IconAlertTriangle}>The old data will be deleted and cannot be brought back.</Note>}
@@ -152,7 +152,7 @@ function RemoveDialog({site,onCancel,onRemove,error,busy,prompt}){
 
 function SwitchBackDialog({site,to,move,onCancel,onConfirm,error,busy,prompt}){
  const src=move?.sourceName||'the old server',when=move?.downtimeText||'a few minutes';
- return <Sheet title={`Switch back to ${src}?`} labelId="map-back-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Switch back</button></>}>
+ return <Sheet title={`Switch back to ${src}?`} labelId="map-back-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Switch back</button></>}>
   <p>The app goes offline for {when}. Changes made since the switch stay on {move?.targetName||to.name} (not copied back).</p>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {prompt}
@@ -184,9 +184,9 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  if(state==='waiting_dns'||state==='done'){
   const d=move.dns,done=state==='done';
   return <Sheet title={done?`${site.name} is live on ${to.name}`:`${site.name} is ready on ${to.name}`} labelId="map-done-title" onClose={onClose} actions={<>
-   {!done&&<button type="button" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
-   {acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}
-   {acts.askRemoveOldCopy&&<button type="button" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
+   {!done&&<button type="button" className="link-action" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
+   {acts.switchBack&&<button type="button" className="link-action" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}
+   {acts.askRemoveOldCopy&&<button type="button" className="link-action" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
    <button type="button" className="primary" onClick={onClose}>Close</button></>}>
    {done?<><Note kind="ok" icon={IconCircleCheck} role="status">The domain points to the new server. All done.</Note>
     {acts.askRemoveOldCopy?<p>It has been 7 days. <b>Remove old copy?</b> The old copy is stopped and still on {move.sourceName||'the old server'}.</p>:acts.switchBack&&<p className="map-caption">The old copy is kept and stopped. You can switch back within 7 days.</p>}</>
@@ -202,11 +202,11 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  const line=state==='cancelled'?(move.statusLine||'Nothing changed for your visitors.'):state==='rolled_back'?(move.statusLine||'Your app is back on the old server.'):(move?.statusLine||'Starting…');
  const cancelable=move&&acts.cancel&&!BUSY_WORD.has(state);
  const resolve=acts.resolve||[];
- const close=<button type="button" className={resolve.length?'':'primary'} onClick={onClose}>Close</button>;
+ const close=<button type="button" className={resolve.length?'link-action':'primary'} onClick={onClose}>Close</button>;
  let actions;
- if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
- else if(finished)actions=<>{acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}{close}</>;
- else actions=<><button type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
+ if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button className="link-action" type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
+ else if(finished)actions=<>{acts.switchBack&&<button className="link-action" type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}{close}</>;
+ else actions=<><button className="link-action" type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
  return <Sheet title={titles[state]||`Moving ${site.name}`} labelId="map-moving-title" onClose={finished?onClose:undefined} actions={actions}>
   {!finished&&<div className="map-bar" role="progressbar" aria-label="Move progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>}
   {bad?<Note kind="error" icon={IconCircleX} role="alert">{move.error||line}</Note>:<p className="map-status" role="status">{line}</p>}
@@ -219,7 +219,7 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
 
 // Phone: choose where to move a site. Same dialog look as the others.
 export function TargetDialog({site,servers,results,onPick,onCancel,verb='Move'}){
- return <Sheet title={`${verb} ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" onClick={onCancel}>Cancel</button>}>
+ return <Sheet title={`${verb} ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" className="link-action" onClick={onCancel}>Cancel</button>}>
   <ul className="map-targets">{servers.map(s=>{const r=results[s.id],bad=r&&(!r.ok||r.verdict==='blocked'),wait=!r;
    return <li key={s.id}><button type="button" disabled={bad||wait} onClick={()=>onPick(s.id)}><b>{s.name}</b><span className="map-caption">{bad?why(r):wait?'Checking…':'Ready'}</span></button></li>})}
    {!servers.length&&<li className="map-caption">There is no other server to move to.</li>}</ul>
@@ -240,7 +240,7 @@ export function InstallConfirmDialog({server,siteId,check,client,onCancel,onStar
   await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package,siteId);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
   setBusy(false);
  }
- return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
+ return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
   <p>DockNest installs {name} on {server.name}.{i.command?' It runs this command there:':''}</p>
   {i.command&&<CommandBox command={i.command}/>}
   <p className="map-caption">Nothing else on the server is changed.</p>
@@ -261,7 +261,7 @@ export function InstallProgressDialog({server,pkg,client,jobId,onClose,onCheckAg
  },[client,jobId]);
  const state=jobState(job),finished=state==='completed'||state==='failed',steps=jobSteps(job);
  const title=state==='completed'?`${name} is installed`:state==='failed'?`Installing ${name} stopped`:`Installing ${name}`;
- return <Sheet title={title} labelId="map-install-run-title" onClose={finished?onClose:undefined} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" disabled={!finished} onClick={onCheckAgain}>Check again</button></>}>
+ return <Sheet title={title} labelId="map-install-run-title" onClose={finished?onClose:undefined} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" disabled={!finished} onClick={onCheckAgain}>Check again</button></>}>
   {state==='failed'?<Note kind="error" icon={IconCircleX} role="alert">{job?.error||`${server.name} could not install ${name}. You can install it yourself and check again.`}</Note>
    :state==='completed'?<Note kind="ok" icon={IconCircleCheck} role="status">{name} is ready on {server.name}. Press Check again to continue.</Note>
    :<p className="map-status" role="status">{server.name} is installing {name}. You can close this and come back.</p>}
@@ -272,7 +272,7 @@ export function InstallProgressDialog({server,pkg,client,jobId,onClose,onCheckAg
 
 export function CommandDialog({server,check,onClose,onCheckAgain}){
  const i=check.install,name=PACKAGE_NAME[i.package];
- return <Sheet title={`Install ${name} yourself`} labelId="map-command-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={onCheckAgain}>Check again</button></>}>
+ return <Sheet title={`Install ${name} yourself`} labelId="map-command-title" onClose={onClose} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={onCheckAgain}>Check again</button></>}>
   <p>Run this command on {server.name}, then press Check again.</p>
   <CommandBox command={i.command}/>
   <p className="map-caption">DockNest does not run this command for you here.</p>

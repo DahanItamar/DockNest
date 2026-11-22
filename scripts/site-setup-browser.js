@@ -1,6 +1,7 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
+import {assertQuietFooters} from './footer-rule.js';
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -30,6 +31,7 @@ try{
  await page.setViewportSize({width:1440,height:1000});
  const openWizard=async()=>{await page.reload();await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules',exact:true}).click();await page.getByRole('button',{name:'Add app',exact:true}).click();await dialog.getByRole('button',{name:'Refresh containers',exact:true}).waitFor();};
  await openWizard();
+await assertQuietFooters(dialog,'Add app first step');
  await dialog.getByText('Hidden because other apps already back them up: example.org, Gallery.',{exact:true}).waitFor();
  for(const name of ['media','example.org'])assert.equal(await dialog.getByRole('button',{name:'Select app '+name,exact:true}).count(),0,name);
  await dialog.getByLabel('Find an app').fill('paperless');await dialog.getByText('1 more service already backed up in Paperless',{exact:true}).waitFor();
@@ -41,6 +43,7 @@ try{
  // The server refuses a container another app took meanwhile; the wizard shows its message.
  await page.unroute('**/api/sites');await page.route('**/api/sites',r=>r.fulfill({status:409,json:{error:'paper-web is already backed up in Paperless. Edit that app instead.',code:'CONTAINER_ALREADY_BACKED_UP'}}));
  await dialog.getByRole('button',{name:'Select app paperless',exact:true}).click();await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+await assertQuietFooters(dialog,'Add app second step');
  await dialog.getByLabel('Public website URL').fill('https://paper.example.org');await dialog.getByLabel('Application health URL').fill('http://127.0.0.1:8000/');await dialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).fill('/root/paperless/compose.yml');await dialog.getByRole('button',{name:'Continue',exact:true}).click();
  for(const name of [/reviewed external dependencies/,/normal stop/,/No containers or processes outside/])await dialog.getByRole('checkbox',{name}).check();
  await dialog.getByRole('button',{name:'Add app',exact:true}).click();

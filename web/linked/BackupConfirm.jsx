@@ -7,6 +7,6 @@ export function BackupConfirm({site,items,busy,onCancel,onConfirm,onOpenApp}){
  return <div className="modal-body lw-confirm">
   <p>DockNest backs up the files and databases of <b>{site.name}</b>. The app stays online.</p>
   <LinkedWarning items={items} onOpenApp={onOpenApp}/>
-  <div className="modal-foot"><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Back up now</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Back up now</button></div>
  </div>;
 }

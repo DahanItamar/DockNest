@@ -51,7 +51,7 @@ function ConfirmUpdateDialog({client,from,version,releasedAt,jobs,retryOf,onClos
     <label className="field"><span>Authenticator code</span><input name="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={authFailed||undefined} aria-describedby={authFailed?'uc-confirm-error':undefined}/><small>6 digits, or a saved recovery code</small></label>
    </div>
    {error&&<div id="uc-confirm-error" className="dlg-alert"><AlertPanel variant="error">{error}</AlertPanel></div>}
-   <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" aria-disabled={!ready||busy||undefined} aria-describedby="uc-start-hint">{busy?'Starting…':'Start update'}</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" aria-disabled={!ready||busy||undefined} aria-describedby="uc-start-hint">{busy?'Starting…':'Start update'}</button></div>
    {!ready&&<p id="uc-start-hint" className="submit-hint">Enter your password and a 6-digit code</p>}
   </form>
  </UCDialog>;
