@@ -2,18 +2,22 @@ import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} fro
 import {formatBytes} from '../../shared/format-bytes.js';
 import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck,IconLink} from '@tabler/icons-react';
 import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
-import {IconTrash,IconBell} from '@tabler/icons-react';
+import {IconTrash,IconBell,IconWorld,IconWorldOff} from '@tabler/icons-react';
+import {useDomains} from './domains-client.js';
+import {domainStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domains-model.js';
+import {DomainPanel,AppDomains,DomainRows} from './Domains.jsx';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
 import {loadPositions,savePositions,prunePositions} from './saved-layout.js';
-import {createMovesClient,blocked,why,friendly} from './moves-client.js';
+import {createMovesClient,blocked,why,friendly,ackNotes} from './moves-client.js';
 import {createLaunchClient,stateText} from './launch-client.js';
 import {createSelfHealClient} from '../self-heal/self-heal-client.js';
 import {SelfHealSheet} from '../self-heal/SelfHealSheet.jsx';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
+import {KeysSection,Padlock,keyState} from '../keys/keys.jsx';
 import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './LaunchFlow.jsx';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
@@ -66,7 +70,7 @@ function LinkCaption({links,nameOf}){
  const text=linkSummary(links,nameOf);
  return text?<p className="map-caption lk-line"><IconLink size={14} stroke={1.75} aria-hidden="true"/>{text}</p>:null;
 }
-function MapList({cov,servers,nameOf,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
+function MapList({cov,servers,nameOf,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo,domainsOf:appDomains,statusOf,looseDomains=[],onDomain}){
  return <div className="map-list">
  {undo}
  {canAdd&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
@@ -76,13 +80,15 @@ function MapList({cov,servers,nameOf,groups,storage,canMove,canAdd,onMoveTo,onDe
    <div className="map-list-head">{server?<h2><RowOpen chip icon={IconServer} label={'Details for '+server.name} onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}><span className="row-title" id={id}>{server.name}</span></RowOpen></h2>:<><span className="icon-chip"><IconServer size={20} stroke={1.75} aria-hidden="true"/></span><h2 id={id}>Not on a server</h2></>}</div>
    {server&&<div className="map-list-meta">{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span>{cov&&server.status==='connected'&&<CoverageLine entry={cov[server.id]}/>}</div>}
    {server&&canMove&&<div className="map-list-actions"><button type="button" className="text-link" onClick={e=>onAddSite(server.id,e.currentTarget)}><IconPlus size={16} stroke={2} aria-hidden="true"/>Add app</button></div>}
-   {sites.length?<ul>{sites.map(s=><li key={s.id}><RowOpen icon={props=><SiteIcon site={s} size={props.size}/>} label={'Details for '+s.name} onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></RowOpen>{canMove&&server&&<OverflowMenu label={'More actions for '+s.name} items={[{label:'Move to…',onSelect:()=>onMoveTo(s.id,document.activeElement)}]}/>}<LinkCaption links={linksOf(servers,s).links} nameOf={nameOf}/></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><RowOpen icon={props=><SiteIcon site={s} size={props.size}/>} label={'Details for '+s.name} onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></RowOpen>{canMove&&server&&<OverflowMenu label={'More actions for '+s.name} items={[{label:'Move to…',onSelect:()=>onMoveTo(s.id,document.activeElement)}]}/>}<LinkCaption links={linksOf(servers,s).links} nameOf={nameOf}/>{appDomains&&<DomainRows list={appDomains(s)} statusOf={statusOf} onOpen={onDomain}/>}</li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
   </section>;
  })}
  {storage.length>0&&<section className="map-list-group" aria-labelledby="map-list-storage">
   <div className="map-list-head"><IconDatabaseExport size={20} stroke={1.75} aria-hidden="true"/><div><h2 id="map-list-storage">Backup storage</h2></div></div>
   <div className="map-list-store">{storage.map(t=>{const f=storageFacts(t);return <div key={t.id}><RowOpen label={'Details for '+t.name} onClick={e=>onDetails({kind:'storage',id:t.id},e.currentTarget)}><span className="map-name">{t.name}</span><span className="map-caption">{f.text}</span></RowOpen>{f.pct!==null&&<div className="map-meter" role="meter" aria-label={t.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}</div>})}</div>
  </section>}
+ {looseDomains.filter(r=>r.nowhere).length>0&&<section className="map-list-group" aria-labelledby="map-list-loose"><div className="map-list-head"><IconWorldOff size={20} stroke={1.75} aria-hidden="true"/><div><h2 id="map-list-loose">Domains that point nowhere</h2></div></div><DomainRows list={looseDomains.filter(r=>r.nowhere)} statusOf={statusOf} onOpen={onDomain} title="Not reaching one of your servers"/></section>}
+ {looseDomains.filter(r=>!r.nowhere).length>0&&<section className="map-list-group" aria-labelledby="map-list-other"><div className="map-list-head"><IconWorld size={20} stroke={1.75} aria-hidden="true"/><div><h2 id="map-list-other">Other domains</h2></div></div><DomainRows list={looseDomains.filter(r=>!r.nowhere)} statusOf={statusOf} onOpen={onDomain} title="Not part of one of your apps"/></section>}
  {alertsList}
  </div>;
 }
@@ -112,9 +118,19 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const loadAlerts=useCallback(()=>{if(!mayAlert||!api){setCanAlert(false);setAlerts(NO_ALERTS);return Promise.resolve()}return alertsClient.load().then(r=>{setCanAlert(true);setAlerts({nodes:listOf(r?.nodes),rules:listOf(r?.rules),connections:listOf(r?.connections),providers:listOf(r?.providers),role:r?.role||null})}).catch(e=>{if(e.status===403){setCanAlert(false);setAlerts(NO_ALERTS)}})},[alertsClient,mayAlert,api]);
  useEffect(()=>{loadAlerts();const t=setInterval(loadAlerts,30000);return()=>clearInterval(t)},[loadAlerts]);
  const alertsOn=canAlert&&mayAlert,alertLayout=useMemo(()=>({channels:alerts.nodes,rules:alerts.rules}),[alerts]);
+// Domains (docs/domains.md): read for operators and administrators, shown as a column on the Map and under each app. Nothing is checked until someone presses Check.
+ const canDomains=!!api&&(user?.role==='admin'||user?.role==='operator'),domKey=useMemo(()=>sites.map(x=>x.id+':'+domainsOf(x).join(',')).join('|'),[sites]);
+ const dom=useDomains(api,canDomains,domKey);
+ const domToggleKey='docknest-map-domains:'+(user?.id||'');
+ const [domOn,setDomOn]=useState(()=>{try{return localStorage.getItem(domToggleKey)!=='off'}catch{return true}});
+ const toggleDomains=()=>setDomOn(v=>{try{localStorage.setItem(domToggleKey,v?'off':'on')}catch{}return !v});
+ const domRows=useMemo(()=>Object.fromEntries((dom.view?.domains||[]).map(r=>[r.domain,r])),[dom.view]);
+ const serverIdSet=useMemo(()=>new Set(servers.map(x=>x.id)),[servers]);
+ const domLayout=useMemo(()=>domOn&&dom.view?layoutDomains(dom.view,serverIdSet):[],[domOn,dom.view,serverIdSet]);
+ const statusOf=r=>domainStatus(r,{checking:!!dom.checking[r.domain],error:dom.errors[r.domain]});
  const livePos=useMemo(()=>dragPos?{...positions,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}:positions,[positions,dragPos]);
  const links=useMemo(()=>linkPairs(servers),[servers]);
- const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:livePos}),[servers,sites,storage,backupOf,links,alertLayout,livePos]);
+ const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:livePos,domains:domLayout}),[servers,sites,storage,backupOf,links,alertLayout,livePos,domLayout]);
  // When the arrangement changes (Tidy up, Save changes, a reconnect, new data) nodes glide to their new places and the lines follow every frame.
  // A fresh page, a node being dragged by hand and "reduce motion" all place nodes at once.
  const anim=useRef(null),shown=useRef(null),[tick,setTick]=useState(0);
@@ -133,7 +149,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   raf=requestAnimationFrame(step);
   return()=>cancelAnimationFrame(raf);
  },[target]);
- const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:shown.current}):target,[target,tick]);
+ const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:shown.current,domains:domLayout}):target,[target,tick]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
  const nameOf=useMemo(()=>appNameOf(sites),[sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
@@ -142,7 +158,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const client=useMemo(()=>createMovesClient(api||(()=>Promise.reject(new Error('Moving is not available.')))),[api]);
  // One change at a time: edit = {siteId, targetId} (a pending move) or {siteId, targetId:null, loose:{x,y}} (line pulled off, not connected)
  const [panel,setPanel]=useState(null);
- function openPanel(p,el){opener.current=el;setFlow(null);setGhost(null);if(['server','site','storage','alert','docknest'].includes(p.kind))setSel({type:'node',key:p.kind==='docknest'?'docknest:root':p.kind+':'+p.id});setPanel(p)}
+ function openPanel(p,el){opener.current=el;setFlow(null);setGhost(null);if(['server','site','storage','alert','docknest','domain'].includes(p.kind))setSel({type:'node',key:p.kind==='docknest'?'docknest:root':p.kind+':'+p.id});setPanel(p)}
  function closePanel(back=true){setPanel(null);setGhost(null);setSel(null);if(back)setTimeout(()=>opener.current?.focus?.(),0)}
  useEffect(()=>{if(!panel||narrow)return;const h=e=>{if(e.key==='Escape'&&!e.defaultPrevented&&!document.querySelector('dialog[open]'))closePanel(true)};document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h)},[panel,narrow]);
  const [shFlow,setShFlow]=useState(null),shClient=useMemo(()=>createSelfHealClient(api||(()=>Promise.reject(new Error('Self-heal is not available.')))),[api]);
@@ -175,14 +191,16 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
-  const {envRewrite,askBeforeSwitch,moveAnyway,dnsMode}=options;
+  const {envRewrite,askBeforeSwitch,moveAnyway,ownershipChecked,dnsMode}=options;
   setFlow(f=>({...f,busy:true,error:''}));
   try{
    let p=flow.preview;
    // Advanced choices change the plan, so ask for a fresh preview that includes them.
    if(envRewrite.length||askBeforeSwitch||dnsMode==='cloudflare')p=await client.preview(flow.siteId,flow.targetId,{dnsMode,envRewrite,askBeforeSwitch});
    if(blocked(p)){setFlow(f=>({...f,preview:p,busy:false}));return;}
-   await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway});
+   // The fresh preview names other owner or permission notes than the ones ticked: show them before anything starts.
+   if(ownershipChecked&&ackNotes(p)!==ackNotes(flow.preview)){setFlow(f=>({...f,preview:p,busy:false,error:'Something changed on the servers. Please review and press Move again.'}));return;}
+   await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway,ownershipChecked});
    setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
   }catch(e){
    if(e.code==='REAUTH_REQUIRED'){setFlow(f=>({...f,busy:false}));throw e;}
@@ -241,8 +259,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  // Nodes that were removed lose their saved place, once their kind has loaded.
  useEffect(()=>{
   const loaded=servers.length>0||sites.length>0,ids=list=>list.map(x=>x.id);
-  setPositions(p=>prunePositions(p,{server:loaded?ids(servers):null,site:loaded?ids(sites):null,storage:targets?ids(storage):null,alert:canAlert?ids(alerts.nodes):null}));
- },[servers,sites,targets,storage,canAlert,alerts.nodes]);
+  setPositions(p=>prunePositions(p,{server:loaded?ids(servers):null,site:loaded?ids(sites):null,storage:targets?ids(storage):null,alert:canAlert?ids(alerts.nodes):null,domain:dom.view?dom.view.domains.map(r=>r.domain):null}));
+ },[servers,sites,targets,storage,canAlert,alerts.nodes,dom.view]);
  const snap=()=>({positions,edit});
  function pushHist(){H.current.past.push(snap());if(H.current.past.length>50)H.current.past.shift();H.current.future=[];bump(n=>n+1)}
  function restore(from,to,word){const h=H.current;if(!h[from].length)return;h[to].push(snap());const v=h[from].pop();setPositions(v.positions);setEdit(v.edit);bump(n=>n+1);setNote(word)}
@@ -309,7 +327,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   else if(port){const id=port.dataset.portSite;precheck(id);const [px,py]=toCanvas(e);gesture.current={type:'drag',id,x:e.clientX,y:e.clientY,moved:false};setDrag({id,px,py,over:null});}
   else{
    const node=e.target.closest?.('[data-node]')||null,nk=node?.dataset.node,kind=nk?nk.split(':')[0]:'',n=nk&&layout.keys?.[nk];
-   if(canMove&&n&&['server','site','storage','alert','docknest'].includes(kind))gesture.current={type:'node',key:nk,node,sx:e.clientX,sy:e.clientY,ox:n.x,oy:n.y,moved:false};
+   if(canMove&&n&&['server','site','storage','alert','docknest','domain'].includes(kind))gesture.current={type:'node',key:nk,node,sx:e.clientX,sy:e.clientY,ox:n.x,oy:n.y,moved:false};
    else gesture.current={type:'pan',x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,moved:false,node};
   }
   e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -402,12 +420,13 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const siteWarn=s=>!byId.servers[s.serverId]||unconnected?.siteId===s.id||lastJob(s.id)?.status==='failed';
  // "Today 03:00, passed" / "Yesterday 23:00, failed"; older days use the app's date format
  const when=v=>{const d=new Date(v);if(isNaN(d))return '';const day=new Date(d).setHours(0,0,0,0),today=new Date().setHours(0,0,0,0),time=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return day===today?'Today '+time:day===today-864e5?'Yesterday '+time:formatDate(v,{shortTime:true})};
- const lastResult=id=>{const j=lastJob(id);return j?.status==='failed'?'failed':j?'passed':lastBackup(id)?'passed':''};
  const tool=(label,pkg,v,server)=>{
   if(v===undefined)return null;
   if(v)return [label,typeof v==='string'?v:'Installed'];
-  return [label,<span className="map-missing"><span>Missing</span>{canMove&&<button type="button" onClick={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'install',context:'server',check:{serverId:server.id,install:{package:pkg,command:'',supported:true}}})}}>Install {pkg}</button>}</span>];
+  return [label,<span className="map-missing"><span>Missing</span>{canMove&&<button type="button" className="link-action" onClick={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'install',context:'server',check:{serverId:server.id,install:{package:pkg,command:'',supported:true}}})}}>Install {pkg}</button>}</span>];
  };
+ // The rows of one app: every domain it lists, with what DockNest knows of each.
+ const appDomainRows=s=>[...new Set([...domainsOf(s),...(dom.view?.domains||[]).filter(r=>r.siteId===s.id).map(r=>r.domain)])].map(d=>domRows[d]).filter(Boolean);
  function panelBody(){
   if(!panel)return null;
   const close=()=>closePanel(true);
@@ -415,27 +434,28 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} onDragItem={canMove?i=>{dragItem.current={...i,serverId:panel.id}}:undefined} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}} onNewSite={canMove?e=>{closePanel(false);setFlow({kind:'launch',serverId:panel.id})}:undefined}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
+   const appRows=appDomainRows(s);
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
-   return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" onClick={()=>onSafeEdit(s)}>Edit</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} icon={<SiteIcon site={s} size={20}/>} sub={<StatusLabel state={failed?'failed':lb?'success':'queued'}>{failed?'Last backup failed':lb?'Backed up '+when(lb.capturedAt):'Not backed up yet'}</StatusLabel>} onClose={close} footer={<>{((canMove&&home)||(canMove&&onSafeEdit&&s.config?.kind!=='static'))&&<span className="link-row">{canMove&&home&&<button type="button" className="link-action" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" className="link-action" onClick={()=>onSafeEdit(s)}>Edit</button>}</span>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
-    {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
-    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
+    <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length>0&&!appRows.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/></section>
+    <AppDomains list={appRows} statusOf={statusOf} onOpen={(r,el)=>openPanel({kind:'domain',id:r.domain},el)}/>
     <LinkedSection site={s} servers={servers} nameOf={nameOf} onOpen={(id,el)=>openPanel({kind:'site',id},el)}/>
+    <KeysSection site={s} canEdit={canMove} api={api} onChanged={onRefresh}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>
-    {api&&s.config?.kind!=='static'&&<button type="button" className="map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
-    {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the app.</p></section>}
-    {onEditHistory&&<button type="button" className="map-found" onClick={()=>onEditHistory(s)}>Edit history</button>}
+    {dbs.length>0&&<section className="map-sec"><h3 className="map-group-title">Databases</h3><Defs rows={dbs.map(d=>[d.label,d.mode])}/></section>}
     {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
+    {((api&&s.config?.kind!=='static')||onEditHistory)&&<section className="map-sec"><h3 className="map-group-title">Tools</h3><span className="link-row">{api&&s.config?.kind!=='static'&&<button type="button" className="link-action" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}{onEditHistory&&<button type="button" className="link-action" onClick={()=>onEditHistory(s)}>Edit history</button>}</span></section>}
    </SidePanel>;
   }
   if(panel.kind==='server'&&byId.servers[panel.id]){
    const sv=byId.servers[panel.id],c=sv.capabilities||{},mine=sites.filter(x=>x.serverId===sv.id).length,free=bytes(c.freeBytes);
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
-   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
-    <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/>
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} icon={<IconServer size={20} stroke={1.5} aria-hidden="true"/>} sub={serverStatus(sv)} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
+    <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/></section>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
     {showCov&&sv.status==='connected'&&<MapCoverage api={api} server={sv} coverage={coverage} onSessionExpired={onSessionExpired} onAddApp={(serverId,names)=>{closePanel(false);onAddSite?.(serverId,names)}} onOpenApp={siteId=>{if(byId.sites[siteId])openPanel({kind:'site',id:siteId},opener.current)}}/>}
-    {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button>}
+    {canMove&&<section className="map-sec"><h3 className="map-group-title">Tools</h3><span className="link-row"><button type="button" className="link-action" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button></span></section>}
     {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
@@ -450,6 +470,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const ch=panel.kind==='alert'?alerts.nodes.find(c=>c.id===panel.id):null;if(panel.kind==='alert'&&!ch)return null;
    return <AlertPanel key={(ch?.id||'new')+':'+panel.n} narrow={narrow} node={ch} rules={alerts.rules} connections={alerts.connections} providers={alerts.providers} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} connClient={connClient} role={alerts.role||user?.role} onClose={close} onReload={loadAlerts} onSaved={async(saved,created)=>{if(created&&ghost)setPositions(p=>({...p,['alert:'+saved.id]:{x:ghost.x,y:ghost.y}}));await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
   }
+  if(panel.kind==='domain'&&domRows[panel.id]){
+   const r=domRows[panel.id],site=byId.sites[r.siteId];
+   return <DomainPanel key={r.domain} row={r} narrow={narrow} ctx={{serverName:id=>byId.servers[id]?.name||'the server',siteName:site?.name||'the app'}} checking={!!dom.checking[r.domain]} error={dom.errors[r.domain]} canCheck={canDomains} onCheck={d=>dom.check(d)} onClose={close} onConnections={onOpenConnections?()=>{closePanel(false);onOpenConnections()}:undefined} onOpenApp={byId.sites[r.siteId]?id=>{closePanel(false);onOpenSite?.(byId.sites[id])}:undefined}/>;
+  }
   if(panel.kind==='storage'&&byId.storage[panel.id]){
    const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={t.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenStorage?.(t)}}>Open storage</button>}>
@@ -459,8 +483,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }
   return null;
  }
- const panelKey=!panel?null:panel.kind==='alert'?'alert:'+panel.id:panel.kind==='docknest'?'docknest:root':['server','site','storage'].includes(panel.kind)?panel.kind+':'+panel.id:null;
- const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.linkPaths.map(p=>['l'+p.id,'site:'+p.a,'site:'+p.b]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
+ const panelKey=!panel?null:panel.kind==='alert'?'alert:'+panel.id:panel.kind==='docknest'?'docknest:root':['server','site','storage','domain'].includes(panel.kind)?panel.kind+':'+panel.id:null;
+ const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.linkPaths.map(p=>['l'+p.id,'site:'+p.a,'site:'+p.b]),...layout.domainPaths.filter(p=>p.serverId).map(p=>['d'+p.id,'domain:'+p.id,'server:'+p.serverId]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
  const actKey=hot||(sel?.type==='node'?sel.key:null),actLine=!hot&&sel?.type==='line'?sel.id:null,lit=new Set(),litNodes=new Set();
  if(actLine){const e=ends.find(x=>x[0]===actLine);if(e){lit.add(e[0]);litNodes.add(e[1]);litNodes.add(e[2])}}
  else if(actKey){litNodes.add(actKey);for(const [id,a,b] of ends)if(a===actKey||b===actKey){lit.add(id);litNodes.add(a);litNodes.add(b)}}
@@ -469,7 +493,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
  const alertsList=alertsOn&&<AlertsList nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} sourceName={sourceName} onOpen={(n,el)=>openPanel({kind:'alert',id:n.id},el)} onEditRule={editRule} onDelete={requestDelete} onAdd={el=>addNode(el)} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
  const undoBar=undone&&<div className="map-undo" role="status"><span>{undone.name} is deleted.</span><button type="button" onClick={undoDelete}>Undo</button></div>;
- if(narrow)return <div className="map-root">{strip}{api&&<div className="map-toolbar">{covToggle}</div>}<MapList cov={showCov?coverage.byServer:null} servers={servers} nameOf={nameOf} groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
+ const claimed=new Set(sites.flatMap(x=>appDomainRows(x).map(r=>r.domain))),nowhereSet=new Set(dom.view?.groups?.pointsNowhere||[]),looseRows=canDomains&&dom.view?dom.view.domains.filter(r=>!claimed.has(r.domain)).map(r=>({...r,nowhere:nowhereSet.has(r.domain)})):[];
+ if(narrow)return <div className="map-root">{strip}{api&&<div className="map-toolbar">{covToggle}</div>}<MapList cov={showCov?coverage.byServer:null} servers={servers} nameOf={nameOf} groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList} domainsOf={canDomains&&dom.view?appDomainRows:undefined} statusOf={statusOf} looseDomains={looseRows} onDomain={(r,el)=>openPanel({kind:'domain',id:r.domain},el)}/>{panelBody()}{dialogs}</div>;
 
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
@@ -485,6 +510,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   const label=`${s.name}. ${siteFacts(s)}. ${lost?'Not connected.':moving?`Will move to ${byId.servers[pending.targetId]?.name}.`:home?`Connected to ${home.name}.`:'Not on a server.'} Press Enter for details${canMove&&home?', or Delete to disconnect it':''}.`;
   return <article key={r.id} {...hov('site:'+r.id)} data-node={'site:'+r.id} data-site={r.id} tabIndex={0} aria-label={label} onKeyDown={e=>{if(enter(e,{kind:'site',id:r.id}))return;if(canMove&&home&&(e.key==='Delete'||e.key==='Backspace')&&!edit){e.preventDefault();e.stopPropagation();disconnect(r.id)}}} className={'map-site'+nodeCls('site:'+r.id)+(canMove&&home?' movable':'')+(lost?' lost':'')+(moving?' chosen':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
    <SiteIcon site={s} size={32}/>
+   <Padlock state={keyState(s)}/>
    {warn?<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>:<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>}
    <span className="map-label"><b className="map-name">{s.name}</b><span className={'map-caption'+(lost?' warn':'')}>{lost||!home?'Not connected':siteFacts(s)}</span></span>
   </article>;
@@ -502,11 +528,12 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    <div className="map-canvas" style={{transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} style={{left:layout.x0,top:layout.y0}} viewBox={`${layout.x0} ${layout.y0} ${layout.width} ${layout.height}`}>
      <defs>
-      {['','-warn','-pending','-rule'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
+      {['','-warn','-pending','-rule','-dok','-dwn','-der','-dnc'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
      </defs>
      <g aria-hidden="true" className="decor">
      {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} data-wire={p.id} className={'wire'+lineCls('w'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
      {layout.backupPaths.map(p=><path key={'b'+p.id} className={'backup'+lineCls('b'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
+     {layout.domainPaths.map(p=>{const r=domRows[p.id];if(!r)return null;const st=lineState(statusOf(r));return p.stub?<path key={'d'+p.id} className={'dstub '+p.stub+lineCls('d'+p.id)} d={p.d}/>:<path key={'d'+p.id} className={'dwire st-'+st+lineCls('d'+p.id)} markerEnd={'url(#map-arrow-d'+st+')'} d={p.d}/>})}
      {layout.linkPaths.map(p=><path key={'l'+p.id} className={'link'+lineCls('l'+p.id)} d={p.d}/>)}
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
@@ -523,6 +550,15 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
     </div>}
     {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={alertsOn?'docknest:':undefined} className={'map-port out'+(alertsOn?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
+    {layout.nowhere.map(h=><div key={'t'+h.kind} className="map-dtitle" style={{left:h.x,top:h.y,width:h.w,height:28}}>{h.kind==='nowhere'&&<IconWorldOff size={14} stroke={1.75} aria-hidden="true"/>}{h.title}</div>)}
+    {layout.domains.map(n=>{const r=domRows[n.id];if(!r)return null;const st=statusOf(r),word=DOMAIN_WORD[st];return <React.Fragment key={'dn'+n.id}>
+     <div {...hov('domain:'+n.id)} data-node={'domain:'+n.id} tabIndex={0} aria-label={`${n.id}. ${word}. Press Enter for the path from this domain to your app.`} onKeyDown={e=>enter(e,{kind:'domain',id:n.id})} className={'map-dnode'+(st==='queued'||st==='running'?' dashed':'')+nodeCls('domain:'+n.id)} style={item(n)} title={n.id}>
+      <IconWorld size={24} stroke={1.5} aria-hidden="true"/>
+      {React.createElement(st==='success'?IconCircleCheck:st==='failed'?IconAlertTriangle:st==='needs-review'?IconAlertTriangle:IconClock,{className:'map-badge dom-'+st,size:16,stroke:2,'aria-hidden':'true'})}
+      <span className="map-label"><b className="map-name">{n.id}</b><span className="sr-only">{word}</span></span>
+     </div>
+     {n.loose&&<span aria-hidden="true" className={'map-port loose '+(n.loose==='nowhere'?'dead':'pending')} style={at(n.out.x+44,n.out.y)}/>}
+    </React.Fragment>})}
     {layout.alerts.map(r=>{const ch=alerts.nodes.find(c=>c.id===r.id),pv=providerOf(alerts.providers,ch.provider),needs=ch.needsConnection,failed=ch.lastSend==='failed',bad=failed||needs;return <React.Fragment key={'n'+r.id}>
      <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${pv?.label||ch.provider} alerts${needs?'. Needs a connection':failed?'. The last message could not be sent':''}. Press Enter for details${alertsOn?', or Delete to delete it':''}.`} onKeyDown={e=>{if(enter(e,{kind:'alert',id:r.id}))return;if(alertsOn&&(e.key==='Delete'||e.key==='Backspace')&&e.target===e.currentTarget){e.preventDefault();e.stopPropagation();requestDelete(ch,e.currentTarget)}}} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
       {alertsOn&&<button type="button" className="cx-del" tabIndex={-1} aria-label={'Delete '+ch.name} title={'Delete '+ch.name} onPointerDown={e=>e.stopPropagation()} onPointerUp={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();requestDelete(ch,e.currentTarget.parentElement)}}><IconTrash size={16} stroke={1.75} aria-hidden="true"/></button>}
@@ -560,6 +596,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      <span className="map-label"><b className="map-name" title={tg.name}>{tg.name}</b><span className="map-caption">{f.text}</span></span></div>})}
    </div>
    {clipped&&<div className="map-fade" aria-hidden="true"/>}
+   {canDomains&&dom.view?.domains?.length>0&&<button type="button" className="map-domtoggle" aria-pressed={domOn} onPointerDown={e=>e.stopPropagation()} onClick={toggleDomains}><IconWorld size={18} stroke={1.75} aria-hidden="true"/>Domains</button>}
    <div className="map-controls" onPointerDown={e=>e.stopPropagation()}>
     <IconButton label="Zoom in" icon={IconPlus} onClick={()=>zoomCentre(1.25)}/>
     <IconButton label="Zoom out" icon={IconMinus} onClick={()=>zoomCentre(0.8)}/>

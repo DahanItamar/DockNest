@@ -1,7 +1,10 @@
 # Online database dumps
 
-Since 3.0.0. Opt-in per app: `config.onlineDumps: true` (through the app API; there is no switch in the app settings
-yet). Without it, and for every app saved before 3.0.0, each database stops cleanly and its files are copied, exactly as
+Since 3.0.0. Opt-in per app: the switch "Keep the database running during backup" under Advanced backup settings, Databases
+(or `config.onlineDumps: true` through the app API). The switch applies to the whole app; each database row says "Online copy,
+stays running" or "Always stopped for a file copy" from the engine capability the API reports (`databaseEngines` in the state,
+`shared/database-engines.js`), and the switch is off and disabled when no database of the app can take an online copy. Check
+readiness answers from the saved settings. The review step shows a "Database backup" row. Without it, and for every app saved before 3.0.0, each database stops cleanly and its files are copied, exactly as
 before ([database contracts](database-contracts.md)).
 
 ## What it does

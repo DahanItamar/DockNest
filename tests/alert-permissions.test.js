@@ -62,6 +62,7 @@ test('setting off: operators and other roles get 403 ALERTS_ADMIN_REQUIRED on ev
   }
   const state = (await operator('GET', '/state')).body;
   assert.equal(state.alertsAccess, false);
+  assert.ok(Array.isArray(state.databaseEngines) && state.databaseEngines.some(item => item.id === 'postgres' && item.onlineCopy === true));
   for (const key of ['nodes', 'connections', 'rules', 'alerts']) assert.equal(key in state, false, `no ${key} in the Map payload`);
   assert.equal((await admin('GET', '/state')).body.alertsAccess, true);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_nodes').get().n, 1, 'nothing changed');
