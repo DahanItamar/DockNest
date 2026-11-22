@@ -19,8 +19,8 @@ const PG=['shop-db','postgres','16.2','shop_db','postgres:16'];
 const SCENARIOS={
  g1:{name:'G1-dumps-off',dbs:[PG]},
  g2:{name:'G2-dumps-on',on:true,dbs:[PG]},
- g3:{name:'G3-dumps-partial',on:true,dbs:[PG,['shop-cache','redis','7.2.0','sessions','redis:7.2']]},
- g4:{name:'G4-dumps-unavailable',dbs:[['shop-cache','redis','7.2.0','queue','redis:7.2'],['shop-mongo','mongo','7.0.14','notes','mongo:7']]},
+ g3:{name:'G3-dumps-partial',on:true,dbs:[PG,['shop-cache','mongo','7.0.14','sessions','mongo:7']]},
+ g4:{name:'G4-dumps-unavailable',dbs:[['shop-cache','mongo','6.0.16','queue','mongo:6'],['shop-mongo','mongo','7.0.14','notes','mongo:7']]},
  g5:{name:'G5-dumps-blocked',on:true,check:'blocked',dbs:[['shop-db','mariadb','11.4.2','blog_db','mariadb:11.4']]},
  g6:{name:'G6-dumps-incremental',on:true,incremental:true,dbs:[PG]},
  g7:{name:'G7-dumps-review',on:true,review:true,dbs:[PG]},
@@ -113,7 +113,7 @@ for(const [key,sc] of Object.entries(SCENARIOS))for(const width of [1280,390])fo
   else if(sc.incremental)assert.match(text,/Stopped for a file copy \(see below\)/,label+' '+container);
   else if(sc.check!=='blocked')assert.match(text,/Online copy, stays running/,label+' '+container);
  }
- if(key==='g4')assert.match(caption,/This switch covers PostgreSQL, MySQL and MariaDB\./,'G4 names what the switch covers');
+ if(key==='g4')assert.match(caption,/This switch covers PostgreSQL, MySQL, MariaDB and Redis./,'G4 names what the switch covers');
  if(key==='g6')await block(page).getByText('Incremental backups are on for Shop').waitFor();
  // The readiness action: a text link, no border or background; it answers from the saved settings.
  const link=block(page).getByRole('button',{name:'Check readiness to see which databases will use it'});
@@ -138,8 +138,8 @@ for(const [key,sc] of Object.entries(SCENARIOS))for(const width of [1280,390])fo
  await context.close();
 }
 
-// A capability the backend flips to true (Redis online copy later) changes the Redis row with no other change.
-const flipped=ENGINES.map(e=>e.id==='redis'?{id:e.id,label:e.label,onlineCopy:true}:e);
+// A capability the backend flips to true (MongoDB online copy later) changes the MongoDB row with no other change.
+const flipped=ENGINES.map(e=>e.id==='mongo'?{id:e.id,label:e.label,onlineCopy:true}:e);
 {
  const {context,page}=await open({sc:SCENARIOS.g3,width:1280,scheme:'light',engines:flipped});
  await reachDatabases(page);
@@ -147,7 +147,7 @@ const flipped=ENGINES.map(e=>e.id==='redis'?{id:e.id,label:e.label,onlineCopy:tr
  assert.doesNotMatch(await block(page).innerText(),/Always stopped/);
  await context.close();
 }
-// Only Redis, with Redis capable: the switch is available.
+// Only Redis, which now takes an online copy: the switch is available.
 {
  const {context,page}=await open({sc:{name:'x',dbs:[['shop-cache','redis','7.2.0','q','redis:7.2']]},width:1280,scheme:'light',engines:flipped});
  await reachDatabases(page);

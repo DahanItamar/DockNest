@@ -2,9 +2,9 @@ import {ENGINE_IDS,engineLabel} from '../shared/database-engines.js';
 import {imageLooksLikeDatabase} from '../shared/database-image.js';
 // The Databases block of the app settings (docs/online-dumps.md). Which engine can keep running comes from the capability
 // list the API reports (state.databaseEngines, from shared/database-engines.js); nothing here names an engine as incapable.
-const IMAGE_WORDS=[['mariadb','mariadb'],['mysql','mysql'],['postgres','postgres'],['redis','redis'],['mongo','mongo']];
+const IMAGE_WORDS=[['mariadb','mariadb'],['mysql','mysql'],['postgres','postgres'],['redis','redis'],['valkey','redis'],['mongo','mongo']];
 export const engineOfImage=image=>{
- if(!imageLooksLikeDatabase(image))return null;
+ if(!imageLooksLikeDatabase(image)&&!/(^|[/])valkey([:@]|$)/.test(String(image||'').toLowerCase()))return null;
  const name=String(image||'').toLowerCase().split('@')[0].split('/').at(-1).split(':')[0];
  return (IMAGE_WORDS.find(([word])=>name.includes(word))||IMAGE_WORDS.find(([word])=>String(image).toLowerCase().includes(word))||[])[1]||null;
 };

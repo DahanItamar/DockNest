@@ -18,11 +18,11 @@ export function groupForList(servers=[],sites=[]){
 // They are shown in the site's details panel, never as nodes: they always move together with the site.
 // How the database is backed up: an online copy only when the app's switch is on, the engine can take one (the shared
 // capability table) and incremental backups are off; otherwise the stopped file copy (docs/online-dumps.md).
-const dbMode=(site,s)=>site?.config?.onlineDumps===true&&engineOnlineCopy(s.engine)&&site?.incremental?.enabled!==true?'Online copy, stays running':'Stopped file copy';
+const dbMode=(site,s)=>site?.config?.onlineDumps===true&&engineOnlineCopy(s.engine)&&s.persistence!=='cache'&&s.persistence!=='cache'&&site?.incremental?.enabled!==true?'Online copy, stays running':'Stopped file copy';
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
  return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,mode:dbMode(site,s),
-  label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
+  label:(s.flavor==='valkey'?'Valkey':engineLabel(s.engine))+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')+(s.engine==='redis'&&s.persistence==='cache'?' · cache only':s.engine==='redis'&&s.persistence==='disk'?' · saved to disk':'')}));
 }
 // The domains an app lists. Their DNS verdicts come from /api/domains (web/map/domains-model.js).
 export const domainsOf=site=>Array.isArray(site?.config?.domains)?site.config.domains.filter(d=>typeof d==='string'&&d):[];

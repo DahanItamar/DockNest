@@ -17,7 +17,7 @@ from .databases import (
 DUMP_ENGINE_NAMES={'postgres':'PostgreSQL','mysql':'MySQL','mariadb':'MariaDB','redis':'Redis','mongo':'MongoDB'}
 DUMP_ARTIFACT=re.compile(r'database-\d{1,3}\.tar')
 # Files inside a dump artifact: the engine's dump files, a listing and the data-folder settings files it carries.
-DUMP_MEMBER=re.compile(r'(?:globals\.sql|all-databases\.sql|database-\d{1,3}\.pgdump|listing\.json|config/\.?[a-z][a-z_.-]{0,40}\.conf|config/\.?[a-z][a-z_.-]{0,40}\.cnf)')
+DUMP_MEMBER=re.compile(r'(?:globals\.sql|all-databases\.sql|dump\.rdb|database-\d{1,3}\.pgdump|listing\.json|config/\.?[a-z][a-z_.-]{0,40}\.conf|config/\.?[a-z][a-z_.-]{0,40}\.cnf)')
 DUMP_CONFIG_LIMIT=1024*1024
 DUMP_INIT_SECONDS=600
 DUMP_LOAD_SECONDS=21600
@@ -30,6 +30,8 @@ def dump_timeout(cfg):
 def official_entrypoint(c):
     """The official images set up an empty data folder on first start; a restore of a dump relies on that."""
     entrypoint=(c.get('Config') or {}).get('Entrypoint') or []
+    # The Valkey image runs it under tini: [tini, --, docker-entrypoint.sh].
+    if len(entrypoint)==3 and isinstance(entrypoint[0],str) and posixpath.basename(entrypoint[0])=='tini' and entrypoint[1]=='--':entrypoint=entrypoint[2:]
     return len(entrypoint)==1 and isinstance(entrypoint[0],str) and posixpath.basename(entrypoint[0])=='docker-entrypoint.sh'
 
 def dump_data_folder(service,c):
@@ -47,6 +49,7 @@ def dump_blocker(service,c,containers):
     engine=ENGINES.get(service['engine'])
     name=DUMP_ENGINE_NAMES.get(service['engine'],'This database')
     if engine is None or not engine.dump_format:return name+' has no online dump yet'
+    if service.get('persistence')=='cache':return 'it keeps nothing on disk'
     if not official_entrypoint(c):return 'its image does not use the official entrypoint that sets up an empty database on restore'
     data,host,problem=dump_data_folder(service,c)
     if problem:return problem
@@ -106,7 +109,7 @@ def take_dump(service,c,data,host,root,index,timeout):
             fd=os.open(work/'config'/filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o600)
             with os.fdopen(fd,'wb') as output:output.write(content)
             carried.append(filename)
-        listing={'engine':service['engine'],'format':record['format'],'databases':record.get('databases',[]),'dataDirectory':data,'config':carried}
+        listing={'engine':service['engine'],'format':record['format'],'databases':record.get('databases',[]),'dataDirectory':data,'config':carried,**record.get('listing',{})}
         fd=os.open(work/'listing.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o600)
         with os.fdopen(fd,'w') as output:json.dump(listing,output)
         names=sorted(p.relative_to(work).as_posix() for p in work.rglob('*') if p.is_file())

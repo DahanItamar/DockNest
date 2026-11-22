@@ -7,7 +7,7 @@ export const DATABASE_ENGINES = Object.freeze([
   { id: 'postgres', onlineCopy: true, label: 'PostgreSQL', check: 'table', releaseEvidence: 'engines' },
   { id: 'mysql', onlineCopy: true, label: 'MySQL', check: 'table', releaseEvidence: 'engines' },
   { id: 'mariadb', onlineCopy: true, label: 'MariaDB', check: 'table', releaseEvidence: 'engines' },
-  { id: 'redis', onlineCopy: false, onlineCopyReason: 'has no online copy yet', label: 'Redis', check: 'key', releaseEvidence: 'redis' },
+  { id: 'redis', onlineCopy: true, label: 'Redis', check: 'key', releaseEvidence: 'redis' },
   { id: 'mongo', onlineCopy: false, onlineCopyReason: 'has no online copy yet', label: 'MongoDB', check: 'collection', releaseEvidence: 'mongo', testedVersions: Object.freeze(['6.0', '7.0', '8.0']) },
 ].map(engine => Object.freeze(engine)));
 
