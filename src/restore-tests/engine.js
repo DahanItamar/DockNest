@@ -164,7 +164,7 @@ export function cancelRestoreTest(testId, actor) {
 
 // ---------- verdicts and evidence ----------
 function evidenceFor(test, result, failedStep, checks) {
-  const base = { testId: test.id, internet: !!test.limits.internet, checks: checks.length, ...(test.limits.sourceTargetId ? { sourceTargetId: test.limits.sourceTargetId } : {}) };
+  const base = { testId: test.id, internet: !!test.limits.internet, checks: checks.length, sourceRole: test.progress?.source?.role === 'copy' || (!test.progress?.source && test.limits.sourceTargetId) ? 'copy' : 'main', ...(test.limits.sourceTargetId ? { sourceTargetId: test.limits.sourceTargetId } : {}) };
   const evidence = [];
   const authentic = checks.find(item => item.kind === 'authentic');
   // A failed authentication is recorded at once like a scrub does (copy_backup), so only a pass is added here.

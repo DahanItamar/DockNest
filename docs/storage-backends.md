@@ -35,9 +35,9 @@ Recovery after a crash re-authenticates whichever file exists before adopting it
 
 ### Append-only SFTP (since 3.0.0)
 
-An append-only SFTP account lets DockNest add new backups but not delete or change them. If ransomware or an intruder
+An append-only SFTP account lets DockNest add new backups but not delete or overwrite them. If ransomware or an intruder
 takes over the DockNest server, it holds the same SFTP credential, so it can't delete or overwrite the backups either.
-The storage server enforces this, not DockNest.
+A finished backup file can still be renamed. The storage server enforces this, not DockNest.
 
 **Detection.** Every connection test (adding a destination, **Test**, **Use for backups**) checks the write mode. The
 test writes a throwaway probe file under a fresh random name in the DockNest-owned folder `<root>/.docknest-probe/`,

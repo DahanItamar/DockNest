@@ -85,7 +85,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Keys safe on screen: a padlock on the Map and a Keys line on each app card show whether the keys are in the last backup; the app panel lists each key's name, place and short fingerprint (never the key), and Self Backup shows the Recovery kit check.
 - Backups are encrypted with AES-256-GCM.
 - Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
-- Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites and keeps working with it. While the storage server enforces this, ransomware that reaches DockNest cannot delete or change backups already stored there (files written before need to be made read-only on the server).
+- Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites and keeps working with it. While the storage server enforces this, ransomware that reaches DockNest cannot delete or overwrite backups already stored there (files written before need to be made read-only on the server).
 - SSH host keys are pinned and checked before connecting.
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.

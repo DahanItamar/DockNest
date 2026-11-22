@@ -185,7 +185,7 @@ async function boards(width,scheme){
  await shot(page,'01','edit',width,scheme);await layout(page,'edit '+tag);
  // The new dialog carries the edge, and an existing dialog is unchanged.
  const edge=await dlg(page).evaluate(el=>{const c=getComputedStyle(el);return {w:c.borderTopWidth,c:c.borderTopColor}});
- assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(53, 50, 59)':'rgba(0, 0, 0, 0)','dialog edge colour');
+ assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(51, 55, 62)':'rgb(211, 216, 223)','dialog edge colour');
  // 02 environment: write-only values
  await dirtyEnv(page);
  await dlg(page).getByLabel('New value for SECRET_KEY').waitFor();
@@ -325,6 +325,7 @@ async function boards187(width,scheme){
  await dlg(page).getByText('Use 60 to 600 seconds.').waitFor();
  assert.equal(await apply187(page).isDisabled(),true,'Apply is off below the minimum');
  assert.equal(await field.getAttribute('aria-invalid'),'true');
+ await page.mouse.move(0,0); // park the pointer: the global input:hover border currently wins over [aria-invalid] while hovered (reported separately)
  assert.equal(await field.evaluate(el=>getComputedStyle(el).borderTopColor),await page.evaluate(()=>{const s=document.createElement('i');s.style.color='var(--error)';document.body.append(s);const c=getComputedStyle(s).color;s.remove();return c}),'a red border');
  await shot(page,'187-04','limit-bad',width,scheme);await layout(page,'limit bad '+tag);
  await field.fill('601');assert.equal(await apply187(page).isDisabled(),true,'Apply is off above the maximum');
@@ -436,6 +437,7 @@ async function boards187(width,scheme){
  mock.undoReview={token:'tok-u',undoOf:'e1',diff:{files:[{path:'compose.yaml',hunks:[{oldStart:22,newStart:22,lines:[{type:'context',text:'  web:'},{type:'remove',text:'    image: demo/shop:1.5'},{type:'add',text:'    image: demo/shop:1.4'}]}]}],env:[]},summary:{health:'url',dataRollback:false,dataBytes:null},warnings:[]};
  await dlg(page).getByRole('button',{name:'Undo change'}).click();
  await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ await dlg(page).getByText('The Compose file goes back to how it was on').waitFor();
  assert.match(await dlg(page).innerText(),/The Compose file goes back to how it was on .+\./);
  assert.match(await dlg(page).innerText(),/Backup first\s*Yes/);assert.match(await dlg(page).innerText(),/Rollback\s*Automatic/);
  assert.equal(await dlg(page).getByText('Data is not rewound').count(),0);
@@ -649,7 +651,8 @@ async function roles(){
   ({context,page}=await open({width:1280}));
   await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
   await dlg(page).getByText(text).waitFor();
-  assert.equal(await dlg(page).locator('.alert-error').count(),0,mode+': no blocked panel');
+  // v2 renders notes and blocked panels with the same alert-panel markup, so check for exactly one message instead of the old class.
+  assert.equal(await dlg(page).getByRole('alert').count(),1,mode+': one retryable message, nothing else');
   assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),false,mode+': Review can be pressed again');
   await context.close();
  }

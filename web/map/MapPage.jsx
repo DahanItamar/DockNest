@@ -1,5 +1,6 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {formatBytes} from '../../shared/format-bytes.js';
+import {backupStorageOf} from './backup-storage.js';
 import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck,IconLink} from '@tabler/icons-react';
 import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
 import {IconTrash,IconBell,IconWorld,IconWorldOff} from '@tabler/icons-react';
@@ -104,12 +105,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  // state does not name one per backup, so a site with backups or an active schedule uses the active destination.
  useEffect(()=>{if(!canMove||!api)return;let live=true;api('/storage-targets').then(r=>{if(live&&Array.isArray(r?.targets))setTargets(r)}).catch(()=>{});return()=>{live=false}},[canMove,api]);
  const storage=useMemo(()=>targets?.targets||[],[targets]);
- const backupOf=useMemo(()=>{
-  const out={},active=targets?.activeTargetId,known=new Set(storage.map(t=>t.id));
-  for(const b of backups||[]){const t=b.targetId||b.storageTargetId||active;if(b.siteId&&known.has(t)&&!out[b.siteId])out[b.siteId]=t}
-  for(const p of policies||[])if(p.enabled&&p.siteId&&!out[p.siteId]&&known.has(active))out[p.siteId]=active;
-  return out;
- },[backups,policies,targets,storage]);
+ const backupOf=useMemo(()=>backupStorageOf({sites,backups:backups||[],policies:policies||[],activeTargetId:targets?.activeTargetId,known:new Set(storage.map(t=>t.id))}),[backups,policies,sites,targets,storage]);
  // Alerts (administrators, and operators while an administrator lets them): nodes, lines, Connections and the provider
  // list from /api/alerts. Nothing is drawn until a node exists. A 403 (the setting was turned off) hides every alert part.
  const mayAlert=user?.role==='admin'||!!alertsAccess,fail=()=>Promise.reject(new Error('Alerts are not available.'));

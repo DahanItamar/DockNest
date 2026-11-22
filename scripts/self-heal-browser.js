@@ -84,10 +84,10 @@ async function board(name,over,{scheme,width}){
  const {context,page}=await open({scheme,width,height:width<600?844:800});
  const dlg=await openSheet(page,width),tag=`${name}-${width===1280?'desktop':'phone'}-${scheme}`;
  await noOverflow(page,tag);await footerButtons(dlg,tag);
- // Dark gets the 1px dialog edge, light stays borderless
+ // v2: both themes carry the 1px dialog edge (the border token)
  const edge=await dlg.evaluate(d=>{const c=getComputedStyle(d);return {w:c.borderTopWidth,color:c.borderTopColor}});
  assert.equal(edge.w,'1px',tag+': dialog-edge width');
- if(scheme==='light')assert.match(edge.color,/rgba\(0, 0, 0, 0\)|transparent/,tag+': light edge is transparent');
+ if(scheme==='light')assert.equal(edge.color,'rgb(211, 216, 223)',tag+': light edge is the v2 border token');
  else assert.doesNotMatch(edge.color,/rgba\(0, 0, 0, 0\)/,tag+': dark edge is visible');
  await shot(page,tag);
  if(name==='05-self-heal-settings'){
@@ -331,7 +331,7 @@ async function realApi(){
  }finally{listener.closeAllConnections?.();await new Promise(resolve=>listener.close(resolve))}
 }
 
-browser=await chromium.launch();
+browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 if(REAL){try{await realApi();assert.deepEqual(errors,[],'no page errors');console.log('Self-heal browser suite passed against the real API.')}finally{await browser.close()}process.exit(0)}
 try{
  for(const scheme of ['light','dark'])for(const width of [1280,390]){
