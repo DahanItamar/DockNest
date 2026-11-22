@@ -52,14 +52,26 @@ test('golden structure: header, xref offsets of every object, object count and t
   const objects = readObjects(pdf);
   assert.equal(objects.size, Number(count) - 1);
   assert.match(objects.get(1).dictionary, /^<< \/Type \/Catalog \/Pages 2 0 R /);
-  assert.match(objects.get(2).dictionary, /\/Type \/Pages \/Kids \[[\d 0R]+\] \/Count 2 >>$/);
+  assert.match(objects.get(2).dictionary, /\/Type \/Pages \/Kids \[[\d 0R]+\] \/Count 1 >>$/);
   const fonts = [...objects.values()].filter(object => /\/Subtype \/Type0 /.test(object.dictionary));
   assert.ok(fonts.length >= 3 && fonts.every(object => /\/Encoding \/Identity-H \/DescendantFonts \[\d+ 0 R\] \/ToUnicode \d+ 0 R/.test(object.dictionary)));
   assert.ok([...objects.values()].some(object => /\/Subtype \/CIDFontType2 .*\/CIDToGIDMap \/Identity/.test(object.dictionary)));
-  for (const forbidden of ['/JavaScript', '/JS ', '/AcroForm', '/EmbeddedFile', '/Launch', '/URI', '/OpenAction', '/AA ']) assert.ok(!text.includes(forbidden), forbidden);
+  for (const forbidden of ['/JavaScript', '/JS ', '/AcroForm', '/EmbeddedFile', '/Launch', '/OpenAction', '/AA ']) assert.ok(!text.includes(forbidden), forbidden);
   assert.deepEqual(renderPdf(sample, { title: 'Recovery Guide', createdAt }), pdf, 'the same input gives the same bytes');
   assert.match(readText(pdf), /Start here[\s\S]*1\.\nOpen Storage\.[\s\S]*git clone --branch v3\.0\.0/);
-  assert.match(readText(pdf), /Page 1 of 2[\s\S]*Page 2 of 2/);
+  assert.match(readText(pdf), /Page 1 of 1/);
+  // The only links are the two DockNest credit links, real URI annotations, and nothing from the input.
+  assert.deepEqual([...text.matchAll(/\/URI \(([^)]*)\)/g)].map(match => match[1]).sort(), ['https://github.com/DahanItamar/DockNest', 'https://trydocknest.com']);
+  assert.equal([...text.matchAll(/\/Subtype \/Link/g)].length, 2);
+  assert.match(readText(pdf), /Made with DockNest[\s\S]*github\.com\/DahanItamar\/DockNest[\s\S]*trydocknest\.com/);
+});
+test('sections flow on: the title shares page 1, a short section needs no page of its own, and the credit is on every page', () => {
+  const filler = Array.from({ length: 36 }, (_, index) => ({ type: 'paragraph', text: `Line ${index + 1} of the guide.` }));
+  const pdf = renderPdf([...sample, { type: 'heading', text: 'Next', newPage: true }, { type: 'paragraph', text: 'Short.' }, ...filler], { title: 'Recovery Guide', createdAt });
+  const text = pdf.toString('latin1'), pages = Number(/\/Count (\d+) >>/.exec(text)[1]);
+  assert.equal(pages, 2);
+  assert.equal([...text.matchAll(/\/URI \(https:\/\/trydocknest\.com\)/g)].length, pages, 'one credit link per page');
+  assert.match(readText(pdf), /Next\nShort\./);
 });
 
 test('escaping: injected PDF operators, brackets, backslashes and control characters stay text', () => {
