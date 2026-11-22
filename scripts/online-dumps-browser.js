@@ -138,8 +138,8 @@ for(const [key,sc] of Object.entries(SCENARIOS))for(const width of [1280,390])fo
  await context.close();
 }
 
-// A capability the backend flips to true (Redis online copy later) changes the Redis row with no other change.
-const flipped=ENGINES.map(e=>e.id==='redis'?{id:e.id,label:e.label,onlineCopy:true}:e);
+// A capability the backend flips to true (MongoDB online copy later) changes the MongoDB row with no other change.
+const flipped=ENGINES.map(e=>e.id==='mongo'?{id:e.id,label:e.label,onlineCopy:true}:e);
 {
  const {context,page}=await open({sc:SCENARIOS.g3,width:1280,scheme:'light',engines:flipped});
  await reachDatabases(page);
@@ -147,7 +147,7 @@ const flipped=ENGINES.map(e=>e.id==='redis'?{id:e.id,label:e.label,onlineCopy:tr
  assert.doesNotMatch(await block(page).innerText(),/Always stopped/);
  await context.close();
 }
-// Only Redis, with Redis capable: the switch is available.
+// Only Redis, which now takes an online copy: the switch is available.
 {
  const {context,page}=await open({sc:{name:'x',dbs:[['shop-cache','redis','7.2.0','q','redis:7.2']]},width:1280,scheme:'light',engines:flipped});
  await reachDatabases(page);
