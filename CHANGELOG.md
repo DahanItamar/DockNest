@@ -68,6 +68,14 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 - On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
 - Safe Edit: an invalid field keeps its red border when you hover it.
+- The Map shows `example.com` and `www.example.com` as one domain, with the www name inside it and one status for both.
+- On the Map, a subdomain hangs under its domain and only the domain connects to the server (subdomain, domain, server). A subdomain that runs on another server connects to its own server and says "part of" its domain.
+- Lines from domains end in one input dot on the server, like the output dot on its right, instead of an arrowhead each.
+- The Map opens whole and centred instead of at a cut-off corner.
+- The "+" next to an app on the Map opens the Add to the map panel instead of doing nothing.
+- A domain moves with its app on the Map: drag its dot onto another server to start the app's move, see it dashed at the new server while the move runs, and find it there afterwards. A domain with no app, or used by several apps, says so and moves nothing.
+- A static website that nginx serves from a folder is shown as a note with an "Add as app" link, not as a failed proxy.
+- The Recovery Guide PDF is denser (no half-empty pages), carries the DockNest mark and a credit with working links to GitHub and trydocknest.com.
 
 ## [2.16.4] - 2026-11-14
 

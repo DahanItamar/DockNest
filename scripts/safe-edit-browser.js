@@ -75,7 +75,7 @@ const json=(route,body,status=200)=>route.fulfill({status,json:body});
 let browser;const errors=[];
 
 async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
- const context=await browser.newContext({viewport:{width,height:width<500?844:800},reducedMotion:'reduce',colorScheme:scheme});
+ const context=await browser.newContext({viewport:{width,height:width<500?844:1400},reducedMotion:'reduce',colorScheme:scheme});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  await context.addInitScript(()=>{const si=window.setInterval,ci=window.clearInterval;window.__iv=new Set();window.setInterval=(f,t,...a)=>{const id=si(f,t,...a);if(t===3000)window.__iv.add(id);return id};window.clearInterval=id=>{window.__iv.delete(id);return ci(id)}});
  const page=await context.newPage(),offOrigin=[];
@@ -753,7 +753,7 @@ async function realApi(){
   throw new Error('the edit did not finish');
  };
  try{
-  const context=await browser.newContext({viewport:{width:1280,height:800},reducedMotion:'reduce'});
+  const context=await browser.newContext({viewport:{width:1280,height:1400},reducedMotion:'reduce'});
   await context.addCookies([{name:'dbm_session',value:token,url:base}]);
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();

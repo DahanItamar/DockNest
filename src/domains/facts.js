@@ -26,6 +26,8 @@ const port = value => (Number.isInteger(value) && value > 0 && value < 65536 ? v
 const name = value => (typeof value === 'string' && CONTAINER.test(value) ? value : null);
 const upstream = value => (typeof value === 'string' && UPSTREAM.test(value) && Number(/:(\d+)$/.exec(value)?.[1] ?? 1) < 65536 ? value : null);
 const address = value => (typeof value === 'string' && isIP(value) ? value : null);
+// A static site's folder: an absolute path of plain characters (shown to the owner, never used to read anything).
+const docRoot = value => (typeof value === 'string' && /^\/[\w@%+=:,./-]{0,198}$/.test(value) && !value.includes('..') ? value : null);
 const flag = value => (typeof value === 'boolean' ? value : null);
 
 function route(raw) {
@@ -33,7 +35,7 @@ function route(raw) {
   const domains = list(raw.domains, domainName, 50);
   if (!domains.length) return null;
   return { proxy: raw.proxy, ...(name(raw.container) ? { container: raw.container } : {}), domains, upstreams: list(raw.upstreams, upstream, 20),
-    containers: list(raw.containers, name, 30), static: raw.static === true, understood: raw.understood !== false,
+    containers: list(raw.containers, name, 30), static: raw.static === true, ...(raw.static === true && docRoot(raw.root) ? { root: docRoot(raw.root) } : {}), understood: raw.understood !== false,
     listen: list(raw.listen, port, 10), certificates: list(raw.certificates, value => (typeof value === 'string' && LINEAGE.test(value) ? value : null), 10) };
 }
 // Certbot certificates of this server with the renewal failure category; probe ('tls') facts by host name.

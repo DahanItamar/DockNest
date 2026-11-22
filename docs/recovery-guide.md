@@ -64,7 +64,7 @@ Mono and Noto Sans Hebrew (in `assets/fonts/`, SIL Open Font License), embedded 
 Hebrew and other right-to-left text is laid out right to left, also when it is mixed with English words and numbers on
 one line. Commands are folded to fit the box, measured with its font, with a `\` at the end of the line, so they still work when
 copied; a command line is never wrapped any other way. The PDF
-has no scripts, forms, attachments or links.
+has no scripts, forms or attachments, and no links except the two DockNest credit links in the footer (the GitHub repository and trydocknest.com).
 
 ## Login notes
 

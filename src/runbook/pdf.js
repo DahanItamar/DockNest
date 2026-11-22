@@ -4,27 +4,63 @@
 // the guide holds login details. Text uses the embedded TrueType fonts as Type0/CIDFontType2 with Identity-H and a
 // ToUnicode map, so it can be selected and searched; right-to-left lines are reordered by bidi.js and carry their
 // logical text as ActualText. Every text is written as glyph ids in hex, and every other string through pdfString(), so
-// no byte of input ever becomes a PDF operator. No JavaScript, forms, embedded files, actions or links.
-import { deflateSync } from 'node:zlib';
+// no byte of input ever becomes a PDF operator. No JavaScript, forms, embedded files or actions. The only links are the
+// two DockNest credit links in the footer (fixed addresses, never from input).
+import { deflateSync, inflateSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { font } from './fonts.js';
 import { visualOrder, paragraphLevel, hasRightToLeft, CONTROLS } from './bidi.js';
 
+// The DockNest mark (public/brand/mark.png, the brand file of the web app) as a lossless image with its own alpha mask. The file is much larger than
+// the 15 pt it is drawn at, so it stays sharp. Read once; a PNG this reader does not know is skipped, never an error for the guide.
+const MARK = { height: 15 };
+let markCache;
+function markImage() {
+  if (markCache !== undefined) return markCache;
+  try {
+    const png = readFileSync(new URL('../../public/brand/mark.png', import.meta.url));
+    if (png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('not a PNG');
+    let width = 0, height = 0; const parts = [];
+    for (let at = 8; at < png.length;) {
+      const length = png.readUInt32BE(at), type = png.toString('latin1', at + 4, at + 8), body = png.subarray(at + 8, at + 8 + length);
+      if (type === 'IHDR') { width = body.readUInt32BE(0); height = body.readUInt32BE(4); if (body[8] !== 8 || body[9] !== 6 || body[12] !== 0) throw new Error('unsupported PNG'); }
+      if (type === 'IDAT') parts.push(body);
+      at += 12 + length;
+    }
+    const raw = inflateSync(Buffer.concat(parts)), row = width * 4, pixels = Buffer.alloc(row * height);
+    for (let y = 0; y < height; y++) {
+      const filter = raw[y * (row + 1)], line = raw.subarray(y * (row + 1) + 1, (y + 1) * (row + 1)), out = pixels.subarray(y * row, (y + 1) * row), prior = y ? pixels.subarray((y - 1) * row, y * row) : Buffer.alloc(row);
+      for (let x = 0; x < row; x++) {
+        const a = x >= 4 ? out[x - 4] : 0, b = prior[x], c = x >= 4 ? prior[x - 4] : 0;
+        const predictor = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? (a + b) >> 1 : (() => { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); return pa <= pb && pa <= pc ? a : pb <= pc ? b : c; })();
+        out[x] = (line[x] + predictor) & 255;
+      }
+    }
+    const rgb = Buffer.alloc(width * height * 3), alpha = Buffer.alloc(width * height);
+    for (let index = 0; index < width * height; index++) { rgb[index * 3] = pixels[index * 4]; rgb[index * 3 + 1] = pixels[index * 4 + 1]; rgb[index * 3 + 2] = pixels[index * 4 + 2]; alpha[index] = pixels[index * 4 + 3]; }
+    markCache = { width, height, rgb, alpha };
+  } catch { markCache = null; }
+  return markCache;
+}
+
 export const LIMITS = Object.freeze({ pages: 2000, bytes: 64 * 1024 * 1024 });
-const PAGE = { width: 595.28, height: 841.89, margin: 56, top: 70, bottom: 62 };
+const PAGE = { width: 595.28, height: 841.89, margin: 56, top: 62, bottom: 56 };
+// Spacing steps: 4 within a block, 8 between blocks, 16 and 24 before headings.
+export const CREDIT = { text: 'Made with DockNest', links: [{ label: 'github.com/DahanItamar/DockNest', url: 'https://github.com/DahanItamar/DockNest' }, { label: 'trydocknest.com', url: 'https://trydocknest.com' }] };
 const WIDTH = PAGE.width - 2 * PAGE.margin;
 const STYLES = {
-  title: { font: 'bold', size: 26, lead: 32 },
-  subtitle: { font: 'regular', size: 13, lead: 18 },
-  h1: { font: 'bold', size: 17, lead: 22, before: 16, after: 6 },
-  h2: { font: 'bold', size: 12.5, lead: 17, before: 10, after: 4 },
-  body: { font: 'regular', size: 10.5, lead: 14.5, after: 6 },
+  title: { font: 'bold', size: 24, lead: 28 },
+  subtitle: { font: 'regular', size: 12, lead: 16 },
+  h1: { font: 'bold', size: 16, lead: 20, before: 24, after: 8 },
+  h2: { font: 'bold', size: 12, lead: 16, before: 16, after: 4 },
+  body: { font: 'regular', size: 10.5, lead: 14, after: 8 },
   cell: { font: 'regular', size: 9, lead: 12 },
   head: { font: 'bold', size: 9, lead: 12 },
-  mono: { font: 'mono', size: 8.5, lead: 11.5 },
+  mono: { font: 'mono', size: 8.5, lead: 12 },
   small: { font: 'regular', size: 8, lead: 10 },
 };
-const COLORS = { text: '0.13 0.15 0.18', muted: '0.42 0.45 0.5', warning: '0.62 0.25 0.02', secret: '0.72 0.07 0.1', box: '0.94 0.95 0.97', rule: '0.82 0.84 0.87' };
+const COLORS = { link: '0.05 0.27 0.65', text: '0.13 0.15 0.18', muted: '0.42 0.45 0.5', warning: '0.62 0.25 0.02', secret: '0.72 0.07 0.1', box: '0.94 0.95 0.97', rule: '0.82 0.84 0.87' };
 const FALLBACK = ['regular', 'hebrew'];
 const tooLarge = () => Object.assign(new Error('The Recovery Guide is too large to make as a PDF. Choose fewer apps.'), { status: 413 });
 const number = value => (Math.round(value * 100) / 100).toString();
@@ -54,7 +90,7 @@ function measure(text, style) {
 }
 // A command box: a list item's box (the narrowest) holds lines up to COMMAND_WIDTH. Commands are folded to fit before
 // they get here (src/runbook/commands.js); a command line is never re-wrapped, as that would break it when copied.
-const BOX = { pad: 6, indent: 20 }, COMMAND_WIDTH = WIDTH - BOX.indent - 2 * BOX.pad;
+const BOX = { pad: 8, indent: 20 }, COMMAND_WIDTH = WIDTH - BOX.indent - 2 * BOX.pad;
 export const commandFits = line => measure(line, STYLES.mono) <= COMMAND_WIDTH;
 
 class Layout {
@@ -64,6 +100,7 @@ class Layout {
     this.page = []; this.pages.push(this.page); this.y = PAGE.height - PAGE.top;
   }
   ensure(height) { if (this.y - height < PAGE.bottom) this.newPage(); }
+  left() { return this.y - PAGE.bottom; }
   width(text, style) { return measure(text, style); }
   // Logical lines that fit `width`; a word longer than a line is broken between characters.
   wrap(text, style, width) {
@@ -103,26 +140,30 @@ class Layout {
   rect(x, y, width, height, color) { this.page.push(`${color} rg ${number(x)} ${number(y)} ${number(width)} ${number(height)} re f`); }
   rule(y) { this.page.push(`${COLORS.rule} RG 0.6 w ${PAGE.margin} ${number(y)} m ${number(PAGE.margin + WIDTH)} ${number(y)} l S`); }
 
-  paragraph(text, style = STYLES.body, { indent = 0, color } = {}) {
+  paragraph(text, style = STYLES.body, { indent = 0, color, after = style.after ?? 0 } = {}) {
     const base = paragraphLevel(text), width = WIDTH - indent;
     for (const line of this.wrap(text, style, width)) {
       this.ensure(style.lead); this.y -= style.lead;
       this.line(line, style, { x: PAGE.margin + indent, width, align: base ? 'right' : 'left', base, color });
     }
-    this.y -= style.after ?? 0;
+    this.y -= after;
   }
   heading(text, level) {
     const style = level === 1 ? STYLES.h1 : STYLES.h2;
-    this.ensure(style.before + style.lead + STYLES.body.lead * 2);
+    this.ensure(style.before + style.lead + STYLES.body.lead * 3);
     this.y -= style.before; this.paragraph(text, style);
   }
   // `wrap`: a value box (a login detail), whose long lines may wrap; a command line that does not fit is an error.
-  command(text, indent = 0, { wrap = false } = {}) {
-    const style = STYLES.mono, pad = BOX.pad, width = WIDTH - indent - 2 * pad, lines = [];
+  commandLines(text, indent = 0, wrap = false) {
+    const style = STYLES.mono, width = WIDTH - indent - 2 * BOX.pad, lines = [];
     for (const line of String(text).split('\n')) {
       if (!wrap && measure(line, style) > width) throw new Error('A Recovery Guide command is wider than its box');
       this.wrap(line, style, width).forEach((part, index) => lines.push(index ? '  ' + part : part));
     }
+    return lines;
+  }
+  command(text, indent = 0, { wrap = false } = {}) {
+    const style = STYLES.mono, pad = BOX.pad, lines = this.commandLines(text, indent, wrap);
     this.ensure(style.lead * Math.min(lines.length, 3) + pad * 2);
     this.rect(PAGE.margin + indent, this.y - pad, WIDTH - indent, pad, COLORS.box); this.y -= pad;
     for (const line of lines) {
@@ -137,12 +178,15 @@ class Layout {
     items.forEach((item, index) => {
       const entry = typeof item === 'string' ? { text: item } : item, label = `${index + 1}.`, base = paragraphLevel(entry.text), style = STYLES.body;
       const lines = this.wrap(entry.text, style, WIDTH - indent);
+      // A small step (text and its command box) stays on one page; a big one may break.
+      const need = lines.length * style.lead + (entry.command ? this.commandLines(entry.command, base ? 0 : indent).length * STYLES.mono.lead + 2 * BOX.pad + 12 : 0);
+      if (need <= 160) this.ensure(need);
       lines.forEach((line, row) => {
         this.ensure(style.lead); this.y -= style.lead;
         if (!row) this.line(label, STYLES.body, base ? { x: PAGE.margin + WIDTH - indent + 4, width: indent - 4 } : { x: PAGE.margin });
         this.line(line, style, { x: base ? PAGE.margin : PAGE.margin + indent, width: WIDTH - indent, align: base ? 'right' : 'left', base });
       });
-      this.y -= 3;
+      this.y -= 4;
       if (entry.command) this.command(entry.command, base ? 0 : indent);
     });
     this.y -= STYLES.body.after;
@@ -168,16 +212,17 @@ class Layout {
     }
     this.y -= STYLES.body.after * 2;
   }
+  // The title block opens the first page; the guide goes on right below it (no page of its own).
   titlePage({ title, subtitle, lines = [] }) {
-    this.y = PAGE.height - 250;
-    this.paragraph(title, STYLES.title); this.y -= 6;
-    if (subtitle) this.paragraph(subtitle, STYLES.subtitle, { color: COLORS.muted });
-    this.y -= 24;
+    this.paragraph(title, STYLES.title, { after: 4 });
+    if (subtitle) this.paragraph(subtitle, STYLES.subtitle, { color: COLORS.muted, after: 8 });
     for (const line of lines) this.paragraph(line);
-    this.newPage();
+    this.rule(this.y + 4); this.y -= 8;
   }
 }
 
+// A section that asks for a new page gets one only when less than this much of the page is left, so no page is left half empty.
+const NEW_PAGE_BELOW = 120;
 const FONT_ORDER = ['regular', 'bold', 'mono', 'hebrew'];
 const fontIndex = key => FONT_ORDER.indexOf(key) + 1;
 
@@ -190,10 +235,21 @@ function frame(layout, index, total, { header, secrets }) {
     layout.y = PAGE.height - 15; layout.line('Contains secrets: login details to your backup storage. Keep this file like a password.', STYLES.small, { color: '1 1 1', width: WIDTH });
     layout.y = PAGE.height - 40;
   }
-  layout.line(header, STYLES.small, { color: COLORS.muted, base: paragraphLevel(header), align: paragraphLevel(header) ? 'right' : 'left' });
+  const mark = markImage(), markWidth = mark ? MARK.height * mark.width / mark.height : 0, rtl = paragraphLevel(header);
+  if (mark) layout.page.push(`q ${number(markWidth)} 0 0 ${number(MARK.height)} ${PAGE.margin} ${number(layout.y - 4)} cm /Im1 Do Q`);
+  layout.line(header, STYLES.small, { color: COLORS.muted, base: rtl, align: rtl ? 'right' : 'left', ...(rtl ? {} : { x: PAGE.margin + (mark ? markWidth + 8 : 0) }) });
   layout.y = 34; layout.line(`Page ${index + 1} of ${total}`, STYLES.small, { color: COLORS.muted, align: 'right' });
+  // The credit: fixed text and two real links (rectangles under the words, underlined).
+  const links = []; let x = PAGE.margin;
+  layout.line(CREDIT.text, STYLES.small, { color: COLORS.muted, x }); x += measure(CREDIT.text, STYLES.small) + 8;
+  for (const link of CREDIT.links) {
+    const width = measure(link.label, STYLES.small);
+    layout.line(link.label, STYLES.small, { color: COLORS.link, x, reorder: false });
+    layout.page.push(`${COLORS.link} RG 0.5 w ${number(x)} ${number(layout.y - 2)} m ${number(x + width)} ${number(layout.y - 2)} l S`);
+    links.push({ rect: [x, layout.y - 4, x + width, layout.y + 8], url: link.url }); x += width + 8;
+  }
   const ops = layout.page; [layout.page, layout.y] = saved;
-  return ops;
+  return { ops, links };
 }
 
 function toUnicode(map) {
@@ -212,7 +268,7 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
   const layout = new Layout();
   for (const block of document) {
     if (block.type === 'title') layout.titlePage(block);
-    else if (block.type === 'heading') { if (block.newPage && layout.y < PAGE.height - PAGE.top) layout.newPage(); layout.heading(block.text, block.level ?? 1); }
+    else if (block.type === 'heading') { if (block.newPage && layout.left() < NEW_PAGE_BELOW && layout.y < PAGE.height - PAGE.top) layout.newPage(); layout.heading(block.text, block.level ?? 1); }
     else if (block.type === 'paragraph') layout.paragraph(block.text, STYLES.body, { color: COLORS[block.tone] });
     else if (block.type === 'list') layout.list(block.items);
     else if (block.type === 'command') layout.command(block.text, 0, { wrap: block.wrap });
@@ -228,7 +284,13 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
   const stream = (dictionary, data) => { const packed = deflateSync(data); return Buffer.concat([Buffer.from(`<< ${dictionary ? dictionary + ' ' : ''}/Length ${packed.length} /Filter /FlateDecode >>\nstream\n`), packed, Buffer.from('\nendstream')]); };
   add(null); add(null); // 1: catalog, 2: page tree (filled in below)
   const info = add(`<< /Title ${pdfString(title)} /Producer (DockNest) /CreationDate (D:${createdAt.replace(/[-:T]/g, '').slice(0, 14)}Z) >>`);
-  const resources = [];
+  const resources = [], mark = markImage();
+  let markObject = 0;
+  if (mark) {
+    const common = `/Type /XObject /Subtype /Image /Width ${mark.width} /Height ${mark.height} /BitsPerComponent 8`;
+    const mask = add(stream(`${common} /ColorSpace /DeviceGray`, mark.alpha));
+    markObject = add(stream(`${common} /ColorSpace /DeviceRGB /SMask ${mask} 0 R`, mark.rgb));
+  }
   for (const key of FONT_ORDER.filter(item => layout.used.has(item))) {
     const face = font(key), glyphs = layout.used.get(key), scale = 1000 / face.unitsPerEm;
     const file = add(stream(`/Length1 ${face.bytes.length}`, face.bytes));
@@ -239,8 +301,9 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
     resources.push(`/F${fontIndex(key)} ${add(`<< /Type /Font /Subtype /Type0 /BaseFont /${face.name} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] /ToUnicode ${unicode} 0 R >>`)} 0 R`);
   }
   const kids = layout.pages.map((ops, index) => {
-    const contents = add(stream('', Buffer.from([...ops, ...frames[index]].join('\n'))));
-    return add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] /Resources << /Font << ${resources.join(' ')} >> >> /Contents ${contents} 0 R >>`);
+    const contents = add(stream('', Buffer.from([...ops, ...frames[index].ops].join('\n'))));
+    const annotations = frames[index].links.map(link => add(`<< /Type /Annot /Subtype /Link /Rect [${link.rect.map(number).join(' ')}] /Border [0 0 0] /F 4 /A << /S /URI /URI ${pdfString(link.url)} >> >>`));
+    return add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] /Resources << /Font << ${resources.join(' ')} >>${markObject ? ` /XObject << /Im1 ${markObject} 0 R >>` : ''} >> /Contents ${contents} 0 R /Annots [${annotations.map(item => `${item} 0 R`).join(' ')}] >>`);
   });
   objects[0] = '<< /Type /Catalog /Pages 2 0 R /ViewerPreferences << /DisplayDocTitle true >> >>';
   objects[1] = `<< /Type /Pages /Kids [${kids.map(kid => `${kid} 0 R`).join(' ')}] /Count ${kids.length} >>`;

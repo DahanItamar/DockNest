@@ -68,6 +68,7 @@ const cases = [
   ['proxy', 'warn:no-app', c => { c.sites = []; }],
   ['proxy', 'ok:static', c => { Object.assign(route(c), { static: true, upstreams: [], containers: [] }); Object.assign(c.sites[0], { kind: 'static', containers: [] }); }],
   ['proxy', 'fail:routes-elsewhere', c => { Object.assign(route(c), { static: true, upstreams: [], containers: [] }); }],
+  ['proxy', 'warn:static-no-app', c => { Object.assign(route(c), { static: true, upstreams: [], containers: [], root: '/var/www/shop' }); c.sites = []; }, hop => assert.deepEqual(hop.params, { proxy: 'nginx', serverId: 'a', root: '/var/www/shop' })],
   // App
   ['app', 'unknown:skipped', c => { route(c).containers = ['other-web']; }],
   ['app', 'unknown:no-app', c => { c.sites = []; }],
