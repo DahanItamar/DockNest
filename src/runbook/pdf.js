@@ -6,10 +6,43 @@
 // logical text as ActualText. Every text is written as glyph ids in hex, and every other string through pdfString(), so
 // no byte of input ever becomes a PDF operator. No JavaScript, forms, embedded files or actions. The only links are the
 // two DockNest credit links in the footer (fixed addresses, never from input).
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { font } from './fonts.js';
 import { visualOrder, paragraphLevel, hasRightToLeft, CONTROLS } from './bidi.js';
+
+// The DockNest mark (public/brand/mark.png, the brand file of the web app) as a lossless image with its own alpha mask. The file is much larger than
+// the 15 pt it is drawn at, so it stays sharp. Read once; a PNG this reader does not know is skipped, never an error for the guide.
+const MARK = { height: 15 };
+let markCache;
+function markImage() {
+  if (markCache !== undefined) return markCache;
+  try {
+    const png = readFileSync(new URL('../../public/brand/mark.png', import.meta.url));
+    if (png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('not a PNG');
+    let width = 0, height = 0; const parts = [];
+    for (let at = 8; at < png.length;) {
+      const length = png.readUInt32BE(at), type = png.toString('latin1', at + 4, at + 8), body = png.subarray(at + 8, at + 8 + length);
+      if (type === 'IHDR') { width = body.readUInt32BE(0); height = body.readUInt32BE(4); if (body[8] !== 8 || body[9] !== 6 || body[12] !== 0) throw new Error('unsupported PNG'); }
+      if (type === 'IDAT') parts.push(body);
+      at += 12 + length;
+    }
+    const raw = inflateSync(Buffer.concat(parts)), row = width * 4, pixels = Buffer.alloc(row * height);
+    for (let y = 0; y < height; y++) {
+      const filter = raw[y * (row + 1)], line = raw.subarray(y * (row + 1) + 1, (y + 1) * (row + 1)), out = pixels.subarray(y * row, (y + 1) * row), prior = y ? pixels.subarray((y - 1) * row, y * row) : Buffer.alloc(row);
+      for (let x = 0; x < row; x++) {
+        const a = x >= 4 ? out[x - 4] : 0, b = prior[x], c = x >= 4 ? prior[x - 4] : 0;
+        const predictor = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? (a + b) >> 1 : (() => { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); return pa <= pb && pa <= pc ? a : pb <= pc ? b : c; })();
+        out[x] = (line[x] + predictor) & 255;
+      }
+    }
+    const rgb = Buffer.alloc(width * height * 3), alpha = Buffer.alloc(width * height);
+    for (let index = 0; index < width * height; index++) { rgb[index * 3] = pixels[index * 4]; rgb[index * 3 + 1] = pixels[index * 4 + 1]; rgb[index * 3 + 2] = pixels[index * 4 + 2]; alpha[index] = pixels[index * 4 + 3]; }
+    markCache = { width, height, rgb, alpha };
+  } catch { markCache = null; }
+  return markCache;
+}
 
 export const LIMITS = Object.freeze({ pages: 2000, bytes: 64 * 1024 * 1024 });
 const PAGE = { width: 595.28, height: 841.89, margin: 56, top: 62, bottom: 56 };
@@ -202,7 +235,9 @@ function frame(layout, index, total, { header, secrets }) {
     layout.y = PAGE.height - 15; layout.line('Contains secrets: login details to your backup storage. Keep this file like a password.', STYLES.small, { color: '1 1 1', width: WIDTH });
     layout.y = PAGE.height - 40;
   }
-  layout.line(header, STYLES.small, { color: COLORS.muted, base: paragraphLevel(header), align: paragraphLevel(header) ? 'right' : 'left' });
+  const mark = markImage(), markWidth = mark ? MARK.height * mark.width / mark.height : 0, rtl = paragraphLevel(header);
+  if (mark) layout.page.push(`q ${number(markWidth)} 0 0 ${number(MARK.height)} ${PAGE.margin} ${number(layout.y - 4)} cm /Im1 Do Q`);
+  layout.line(header, STYLES.small, { color: COLORS.muted, base: rtl, align: rtl ? 'right' : 'left', ...(rtl ? {} : { x: PAGE.margin + (mark ? markWidth + 8 : 0) }) });
   layout.y = 34; layout.line(`Page ${index + 1} of ${total}`, STYLES.small, { color: COLORS.muted, align: 'right' });
   // The credit: fixed text and two real links (rectangles under the words, underlined).
   const links = []; let x = PAGE.margin;
@@ -249,7 +284,13 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
   const stream = (dictionary, data) => { const packed = deflateSync(data); return Buffer.concat([Buffer.from(`<< ${dictionary ? dictionary + ' ' : ''}/Length ${packed.length} /Filter /FlateDecode >>\nstream\n`), packed, Buffer.from('\nendstream')]); };
   add(null); add(null); // 1: catalog, 2: page tree (filled in below)
   const info = add(`<< /Title ${pdfString(title)} /Producer (DockNest) /CreationDate (D:${createdAt.replace(/[-:T]/g, '').slice(0, 14)}Z) >>`);
-  const resources = [];
+  const resources = [], mark = markImage();
+  let markObject = 0;
+  if (mark) {
+    const common = `/Type /XObject /Subtype /Image /Width ${mark.width} /Height ${mark.height} /BitsPerComponent 8`;
+    const mask = add(stream(`${common} /ColorSpace /DeviceGray`, mark.alpha));
+    markObject = add(stream(`${common} /ColorSpace /DeviceRGB /SMask ${mask} 0 R`, mark.rgb));
+  }
   for (const key of FONT_ORDER.filter(item => layout.used.has(item))) {
     const face = font(key), glyphs = layout.used.get(key), scale = 1000 / face.unitsPerEm;
     const file = add(stream(`/Length1 ${face.bytes.length}`, face.bytes));
@@ -262,7 +303,7 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
   const kids = layout.pages.map((ops, index) => {
     const contents = add(stream('', Buffer.from([...ops, ...frames[index].ops].join('\n'))));
     const annotations = frames[index].links.map(link => add(`<< /Type /Annot /Subtype /Link /Rect [${link.rect.map(number).join(' ')}] /Border [0 0 0] /F 4 /A << /S /URI /URI ${pdfString(link.url)} >> >>`));
-    return add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] /Resources << /Font << ${resources.join(' ')} >> >> /Contents ${contents} 0 R /Annots [${annotations.map(item => `${item} 0 R`).join(' ')}] >>`);
+    return add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE.width} ${PAGE.height}] /Resources << /Font << ${resources.join(' ')} >>${markObject ? ` /XObject << /Im1 ${markObject} 0 R >>` : ''} >> /Contents ${contents} 0 R /Annots [${annotations.map(item => `${item} 0 R`).join(' ')}] >>`);
   });
   objects[0] = '<< /Type /Catalog /Pages 2 0 R /ViewerPreferences << /DisplayDocTitle true >> >>';
   objects[1] = `<< /Type /Pages /Kids [${kids.map(kid => `${kid} 0 R`).join(' ')}] /Count ${kids.length} >>`;
