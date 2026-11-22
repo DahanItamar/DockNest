@@ -29,7 +29,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 **Storage and backups**
 - Online database dumps (opt-in per app, a switch under Advanced backup settings; each database says whether it can stay running): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
-- Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or change stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
+- Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or overwrite stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
 - Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
 
 **Sign-in**
@@ -55,6 +55,8 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Fixed
 
+- The Map shows the backup storage an app really uses: the app's own main destination, not always the default one.
+- The Recovery Guide says whether a restore test read the main backup or the off-site copy.
 - Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
 - A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 - On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
