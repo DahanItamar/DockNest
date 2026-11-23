@@ -94,7 +94,7 @@ export function recoveryBySite(siteId = null, now = Date.now()) {
     steps.get(row.test_id).push(row);
   }
   const latest = new Map(db.prepare(`SELECT b.site_id,b.size FROM backups b WHERE b.id=(SELECT n.id FROM backups n WHERE n.site_id=b.site_id ORDER BY n.captured_at DESC,n.id DESC LIMIT 1)${siteId ? ' AND b.site_id=?' : ''}`).all(...args).map(row => [row.site_id, row]));
-  const sizes = new Map(db.prepare('SELECT id,size FROM backups').all().map(row => [row.id, row]));
+  const sizes = new Map(db.prepare(`SELECT b.id,b.size FROM backups b JOIN (${PASSED_NEWEST.replace('LIMIT 1)', `LIMIT 1)${scope}`)}) t ON t.backup_id=b.id`).all(...args).map(row => [row.id, row]));
   const cadences = new Map(db.prepare('SELECT site_id,cadence FROM restore_test_settings').all().map(row => [row.site_id, row.cadence]));
   const out = new Map();
   for (const test of tests) {
