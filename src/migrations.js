@@ -317,6 +317,17 @@ export const runbookStateSchema = `
 CREATE TABLE IF NOT EXISTS runbook_state (id INTEGER PRIMARY KEY CHECK (id = 1),digest TEXT CHECK (digest IS NULL OR length(digest) = 64),parts TEXT CHECK (parts IS NULL OR length(parts) <= 1048576),made_at TEXT,made_by TEXT CHECK (made_by IS NULL OR length(made_by) <= 64),notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000));
 CREATE TABLE IF NOT EXISTS app_login_notes (site_id TEXT PRIMARY KEY REFERENCES sites(id),sealed TEXT NOT NULL CHECK (length(sealed) <= 16384),updated_at TEXT NOT NULL,updated_by TEXT NOT NULL CHECK (length(updated_by) <= 64));
 `;
+// Client reports (docs/client-reports.md): three new tables and their indexes only, so 2.16 code ignores them. Recipients
+// are sealed with the master key. The PDF itself is never stored (only its size and SHA-256).
+export const clientReportsSchema = `
+CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY,name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),agency TEXT CHECK (agency IS NULL OR length(agency) <= 80),contact TEXT CHECK (contact IS NULL OR length(contact) <= 120),accent TEXT CHECK (accent IS NULL OR length(accent) <= 32),include TEXT NOT NULL DEFAULT '{}' CHECK (length(include) <= 512),schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK (schedule_enabled IN (0,1)),timezone TEXT NOT NULL DEFAULT 'UTC',connection_id TEXT REFERENCES connections(id) ON DELETE SET NULL,recipients TEXT NOT NULL DEFAULT '[]' CHECK (length(recipients) <= 1024),next_due_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS client_apps (client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,PRIMARY KEY (client_id,site_id));
+CREATE TABLE IF NOT EXISTS client_reports (id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,period_start TEXT NOT NULL,period_end TEXT NOT NULL,trigger TEXT NOT NULL CHECK (trigger IN ('manual','schedule')),status TEXT NOT NULL CHECK (status IN ('made','sending','sent','failed')),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TEXT,size INTEGER,sha256 TEXT,error TEXT CHECK (error IS NULL OR length(error) <= 200),created_at TEXT NOT NULL,sent_at TEXT);
+CREATE INDEX IF NOT EXISTS client_apps_site ON client_apps(site_id);
+CREATE INDEX IF NOT EXISTS client_reports_client ON client_reports(client_id,created_at);
+CREATE INDEX IF NOT EXISTS client_reports_due ON client_reports(status,next_attempt_at);
+CREATE INDEX IF NOT EXISTS clients_due ON clients(next_due_at) WHERE schedule_enabled = 1;
+`;
 // Restore test source (docs/restore-tests.md, "Testing a copy"): the copy destination a site's restore tests read from.
 // Additive only: one nullable column. NULL, the value of every existing row, means the main package, exactly as before,
 // and older releases never read or write the column.
@@ -464,6 +475,8 @@ export const migrations = [
   // Recovery Guide (docs/recovery-guide.md): two new tables, so 2.16 code ignores them.
   { version: 25, name: 'runbook-state', compatible: true, up: db => db.exec(runbookStateSchema) },
   { version: 26, name: 'restore-test-source', compatible: true, up: restoreTestSource },
+  // Client reports (docs/client-reports.md): three new tables, so 2.16 code ignores them; a downgrade leaves them untouched.
+  { version: 27, name: 'client-reports', compatible: true, up: db => db.exec(clientReportsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
