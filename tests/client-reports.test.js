@@ -232,7 +232,7 @@ test('schedule: a due client gets last month queued once; failures retry after 1
   const node = id(); db.prepare("INSERT INTO alert_nodes(id,provider,name,connection_id,created_at,updated_at) VALUES(?,'email','Mail',?,?,?)").run(node, emailConnection, now(), now());
   db.prepare("INSERT INTO alert_lines(id,node_id,source_kind,source_id,events,enabled,created_at,updated_at) VALUES(?,?,'docknest',NULL,?,1,?,?)").run(id(), node, JSON.stringify(['report.failed']), now(), now());
   const outbox = () => db.prepare("SELECT COUNT(*) AS n FROM alert_outbox WHERE event='report.failed'").get().n;
-  const connects = []; const original = { connect: smtpIo.connect, resolve: smtpIo.resolve }; smtpIo.resolve = async () => '93.184.216.34'; smtpIo.connect = async () => { connects.push(1); throw new Error('refused by test'); };
+  const connects = []; const original = { connect: smtpIo.connect, resolve: smtpIo.resolve }; smtpIo.resolve = async () => '127.0.0.1'; smtpPolicy.allowLoopback = true; smtpIo.connect = async () => { connects.push(1); throw new Error('refused by test'); };
   try {
     const t0 = Date.parse('2026-12-01T08:05:00Z');
     assert.equal(send.queueDueReports(Date.parse('2026-12-01T07:00:00Z')), 0, 'not due yet');
@@ -253,7 +253,7 @@ test('schedule: a due client gets last month queued once; failures retry after 1
     assert.equal(send.queueDueReports(t0 + 1000), 0);
     const alert = db.prepare("SELECT message FROM alert_outbox WHERE event='report.failed'").get().message;
     assert.match(alert, /Scheduled Client/); assert.equal(alert.includes('example.com'), false);
-  } finally { Object.assign(smtpIo, original); }
+  } finally { Object.assign(smtpIo, original); smtpPolicy.allowLoopback = false; }
 });
 
 test('schedule: no Connection or recipient fails at once with a fixed sentence; an oversize PDF is refused with the documented text', async () => {
