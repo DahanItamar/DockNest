@@ -45,8 +45,7 @@
 /* logos */
 @media(max-width:1023px){.lg-brandpanel{display:none}.lg-split{grid-template-columns:1fr;min-height:100dvh}}
 @media(max-width:480px){.lg-formside{padding:16px 16px 32px}.lg-head{padding:16px}}
-.lg-logo{display:block;max-width:100%;aspect-ratio:2015/395;background:currentColor;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-position:left center;mask-position:left center}
-.lg-logo{color:var(--heading);-webkit-mask-image:url(/brand/logo.png);mask-image:url(/brand/logo.png)}
+.lg-bp-top .brand-image,.lg-head-brand .brand-image{width:176px;height:auto}.lg-bp-top .brand-lockup,.lg-head-brand .brand-lockup{align-items:flex-start;gap:0}.lg-head-brand{display:none}
 
 
 /* Login-only monochrome tokens. Scoped to the auth pages, nothing global. */
@@ -115,10 +114,9 @@
 
 /* Header row: wordmark (phone only) left, theme toggle right, same row and side padding as the form. */
 .lg-head{align-items:center}
-.lg-head-logo{display:none;height:calc(var(--spacing)*3);width:auto;aspect-ratio:2015/395;margin:0}
 .auth-page .auth-card.lg-col>:first-child{margin-top:auto}
 @media(min-width:1024px){.lg-left .lg-head{padding:40px 40px 0}.lg-bp-top{display:flex;align-items:center;height:var(--control-height);min-height:0}}
-@media(max-width:1023px){.lg-head{padding:var(--spacing) var(--edge)}.lg-head>.lg-head-logo{display:block}}
+@media(max-width:1023px){.lg-head{padding:var(--spacing) var(--edge)}.lg-head>.lg-head-brand{display:block}.lg-head-brand .brand-image{width:150px}}
 .lg-head .theme-toggle{margin-left:auto}
 
 /* Typing animation scope: no focus border on password and code inputs. Caret and the active-box tint show position. */

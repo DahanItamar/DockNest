@@ -1,7 +1,7 @@
 import React,{useEffect,useId,useMemo,useState} from 'react';
 import {PasswordInput} from "./password-input.jsx";
 import {Eye,EyeOff,CircleX} from './icons.jsx';
-import {ThemeToggle} from './brand.jsx';
+import {Brand,ThemeToggle} from './brand.jsx';
 
 // Sign-in, first-run setup and enrollment share this split screen. Styles live in auth.css and are scoped to .auth-page.
 export function authErrorMessage(e){
@@ -26,10 +26,10 @@ export function AuthLayout({children,back}){
  },[]);
  return <div className="auth-shell auth-page lg-t2"><div className="lg-split">
   <aside className="lg-brandpanel" aria-label="DockNest"><FloatingPaths/>
-   <div className="lg-bp-top"><span className="lg-logo" role="img" aria-label="DockNest" style={{width:176}}/></div>
-   <div className="lg-bp-bottom"><p className="lg-bp-line"><span className="lg-s lg-rise">Backups you can prove.</span><span className="lg-s lg-rise lg-rise2">Servers you can move.</span></p><p className="lg-bp-cap">Self-hosted Docker backup and restore</p></div>
+   <div className="lg-bp-top"><Brand/></div>
+   <div className="lg-bp-bottom"><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p><p className="lg-bp-cap">Backups that test themselves.</p></div>
   </aside>
-  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-logo lg-head-logo" role="img" aria-label="DockNest"/><ThemeToggle/></header>
+  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-head-brand"><Brand/></span><ThemeToggle/></header>
    <main className="auth-main lg-formside"><div className="lg-col auth-card">{back}{children}</div></main>
   </div>
  </div></div>;
