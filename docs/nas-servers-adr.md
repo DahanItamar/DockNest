@@ -41,7 +41,7 @@ TrueNAS apps) are not recognized, so owners get a wall of "plain container" apps
      --label org.docknest.helper=1 -v /var/run/docker.sock:/var/run/docker.sock` plus **identity bind mounts**: every
      host path the call needs is mounted at the same path inside (`--mount type=bind,src=X,dst=X,bind-propagation=rslave`),
      so the helper sees host paths unchanged and no path translation exists. The mount list is computed by DockNest
-     from the app's stored mounts, the Docker root dir and the staging base, and validated against a deny-list
+     from the app's stored mounts and the staging base (the Docker root dir, `/var/lib/docker`, is on the deny-list and is never mounted: fail closed; named-volume data is reached through `docker` itself), and validated against a deny-list
      (`/`, `/proc`, `/sys`, `/dev`, `/boot` except the Unraid template folder below, `/etc`).
    - Network is `none` except for helper operations that need it (restore test probes, domain checks), which get
      `--network host`.
