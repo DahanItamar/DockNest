@@ -284,11 +284,11 @@ class RestartReasonTests(unittest.TestCase):
         self.assertIn('shop is not running', self.reason(self.record(running=False)))
         self.assertIn('shop reports unhealthy', self.reason(self.record(health={'Status': 'unhealthy', 'Log': [{}]})))
         self.assertIn('shop reports starting', self.reason(self.record(health={'Status': 'starting', 'Log': [{'ExitCode': 1}]})))
-    def test_nothing_specific_keeps_the_old_text(self):
-        self.assertEqual(self.reason(self.record(health={'Status': 'healthy'})), 'inspect remote watchdog and recovery.json')
-        self.assertEqual(self.reason(self.record()), 'inspect remote watchdog and recovery.json')
-        with patch.object(helper, 'inspect', side_effect=RuntimeError('x')): self.assertEqual(helper.restart_reason(['x']), 'inspect remote watchdog and recovery.json')
-        self.assertEqual(helper.restart_reason([]), 'inspect remote watchdog and recovery.json')
+    def test_nothing_specific_gives_no_reason_so_the_old_text_stays(self):
+        self.assertIsNone(self.reason(self.record(health={'Status': 'healthy'})))
+        self.assertIsNone(self.reason(self.record()))
+        with patch.object(helper, 'inspect', side_effect=RuntimeError('x')): self.assertIsNone(helper.restart_reason(['x']))
+        self.assertIsNone(helper.restart_reason([]))
     def test_the_sentence_holds_names_only(self):
         record = self.record(health={'Status': 'starting', 'Log': []}); record['Config'] = {'Env': ['TOKEN=' + 'x' * 5]}; record['State']['Health']['Log'] = []
         self.assertNotIn('TOKEN', self.reason(record))
