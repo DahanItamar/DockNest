@@ -86,10 +86,14 @@ class Runtime:
         """The command line for one engine call. Rootful Docker is exactly ['docker', ...args]."""
         args=[str(a) for a in args]
         if self.engine=='docker' and not self.rootless:return ['docker',*args]
-        if self.engine=='docker':return ['docker','--host','unix:///run/user/%d/docker.sock'%self.uid,*args]
+        if args and args[0] in ('create','run'):args=[args[0],'--pull','never',*args[1:]]  # a copy never pulls: its images come from the backup
         if not self.rootless:return ['podman',*args]
-        # env -i: nothing of root's environment reaches the user's podman; PATH is fixed.
-        return ['runuser','-u',self.user,'--','env','-i','PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home,'podman',*args]
+        # A rootless engine is always driven AS its user, never by root: root's Docker CLI would send root's registry logins to
+        # whatever answers on a socket the user controls. env -i keeps root's environment out; PATH is fixed; a copy never
+        # pulls an image (the images come from the backup).
+        environment=['PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home]
+        if self.engine=='docker':environment.append('DOCKER_HOST=unix:///run/user/%d/docker.sock'%self.uid)
+        return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
     def check_socket(self,lstat=os.lstat):
         """A rootless Docker socket is checked again right before each use: it must still be a socket of this user."""
         path='/run/user/%d/docker.sock'%self.uid
@@ -201,7 +205,9 @@ def check_runtime_source(runtime,path,lstat=os.lstat):
         current+='/'+part
         try:info=lstat(current)
         except OSError:raise RuntimeRefused('A source folder of this app cannot be read.')
-        if stat.S_ISLNK(info.st_mode):raise RuntimeRefused('A source folder of this app goes through a link, which needs a reviewed capture adapter.')
+        if stat.S_ISLNK(info.st_mode):
+            if runtime.home and (runtime.home==current or runtime.home.startswith(current+'/')):raise RuntimeRefused('The home folder of '+str(runtime.user)+' goes through a link ('+current+', as on Fedora Atomic where /home is /var/home). DockNest cannot use it yet.')
+            raise RuntimeRefused('A source folder of this app goes through a link, which needs a reviewed capture adapter.')
     return path
 def host_id_map(runtime,subuid_text=None,subgid_text=None,group=None):
     """The ID map of a rootless runtime on this server (docs ADR decision 5). Refused when anything is missing."""
@@ -246,29 +252,71 @@ def restore_target(manifest,requested,resolve=None,host_map=None):
     source_map=manifest['idMap']
     same=all(source_map.get(key)==target_map.get(key) for key in ('uid','gid','subuid','subgid'))
     return target,(None if same else (source_map,target_map))
-def translate_tree(directory,source,target,lchown=None,lstat=os.lstat,limit=2000000):
+def translate_tree(directory,source,target,chown=None,fwalk=None,stat_at=None,opener=None,limit=2000000):
     """Re-own every entry under `directory` (which must be a real folder) from the source map to the target map.
-    All owners are translated first, and the first file with an owner that cannot be mapped refuses the whole restore
-    before anything is changed. Links are re-owned, never followed."""
-    lchown=lchown or os.lchown
-    plan=[];first=None
-    def visit(path):
-        info=lstat(path)
-        try:plan.append((path,translate_id(info.st_uid,source,target,'uid'),translate_id(info.st_gid,source,target,'gid')))
+    The first pass reads every owner and refuses the whole restore, naming the first file, when one cannot be mapped (host
+    root included). The second pass re-owns children before parents, always through a directory file descriptor and
+    never following a link (os.fwalk with follow_symlinks=False, chown with dir_fd and follow_symlinks=False), and it
+    checks each entry still has the owner the first pass read, so a link swapped in meanwhile is re-owned as a link or
+    refused, never followed to another file. Needs a platform with fwalk (Linux)."""
+    chown=chown or os.chown;fwalk=fwalk or getattr(os,'fwalk',None);stat_at=stat_at or os.stat
+    if fwalk is None:raise RuntimeRefused('Re-owning restored files needs Linux.')
+    opener=opener or (lambda path:os.open(path,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0)))
+    def owner(info):
+        return translate_id(info.st_uid,source,target,'uid'),translate_id(info.st_gid,source,target,'gid')
+    try:top=opener(directory)
+    except OSError:raise RuntimeRefused('A restore folder cannot be a link or missing.')
+    try:
+        plan=[];first=None;count=0
+        for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
+            for name in files+dirs:
+                count+=1
+                if count>limit:raise RuntimeRefused('A backup holds too many files to restore with ID translation.')
+                info=stat_at(name,dir_fd=fd,follow_symlinks=False)
+                try:plan.append((dirpath,name,info.st_uid,info.st_gid)+owner(info))
+                except RuntimeRefused:
+                    if first is None:first=posixpath.join(dirpath,name)
+        rootinfo=stat_at('.',dir_fd=top,follow_symlinks=False)
+        try:root_owner=owner(rootinfo)
         except RuntimeRefused:
-            nonlocal first
-            if first is None:first=path
-    if stat.S_ISLNK(lstat(directory).st_mode):raise RuntimeRefused('A restore folder cannot be a link.')
-    visit(directory)
-    for current,dirs,files in os.walk(directory,followlinks=False):
-        for name in dirs+files:
-            visit(os.path.join(current,name))
-            if len(plan)>limit:raise RuntimeRefused('A backup holds too many files to restore with ID translation.')
-    if first is not None:
-        relative=os.path.relpath(first,directory)
-        raise RuntimeRefused(UNMAPPABLE+' First file: '+(relative if len(relative)<=200 else relative[:200]))
-    for path,uid,gid in plan:lchown(path,uid,gid)
-    return len(plan)
+            if first is None:first=directory
+        if first is not None:
+            relative=posixpath.relpath(first,directory)
+            raise RuntimeRefused(UNMAPPABLE+' First file: '+(relative if len(relative)<=200 else relative[:200]))
+        wanted={(dirpath,name):(uid,gid,new_uid,new_gid) for dirpath,name,uid,gid,new_uid,new_gid in plan}
+        changed=0
+        for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
+            for name in files+dirs:
+                uid,gid,new_uid,new_gid=wanted.get((dirpath,name),(None,)*4)
+                info=stat_at(name,dir_fd=fd,follow_symlinks=False)
+                if uid is None or (info.st_uid,info.st_gid)!=(uid,gid):raise RuntimeRefused('The restored files changed while their owners were being translated.')
+                chown(name,new_uid,new_gid,dir_fd=fd,follow_symlinks=False);changed+=1
+        chown('.',root_owner[0],root_owner[1],dir_fd=top,follow_symlinks=False)
+        return changed+1
+    finally:
+        try:os.close(top)
+        except (OSError,TypeError):pass
+def chmod_folder(path,mode,opener=None,fchmod=None):
+    """chmod of a real folder through a descriptor opened without following a link."""
+    opener=opener or (lambda value:os.open(value,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0)))
+    try:fd=opener(str(path))
+    except OSError:raise RuntimeRefused('A restore folder cannot be a link or missing.')
+    try:(fchmod or os.fchmod)(fd,mode)
+    finally:
+        try:os.close(fd)
+        except (OSError,TypeError):pass
+def refuse_links(path,lstat=os.lstat,allow_missing=True):
+    """No link in any component of an absolute path, else a refusal (a missing last component is fine when allowed)."""
+    if not isinstance(path,str) or not path.startswith('/'):raise RuntimeRefused('A restored file has a path DockNest cannot use.')
+    current=''
+    for part in path.strip('/').split('/'):
+        current+='/'+part
+        try:info=lstat(current)
+        except FileNotFoundError:
+            if allow_missing and current==path:return
+            raise RuntimeRefused('A restored file cannot be read.')
+        except OSError:raise RuntimeRefused('A restored file cannot be read.')
+        if stat.S_ISLNK(info.st_mode):raise RuntimeRefused('A restored database file goes through a link, so DockNest did not read it as root.')
 def engine_architecture():
     runtime=current_runtime()
     if runtime.engine=='docker':return docker('info','--format','{{.Architecture}}').decode().strip()
@@ -291,7 +339,8 @@ def rootless_data_root(runtime,job,base=RUNTIME_DATA_BASE,lstat=os.lstat,mkdir=o
         path=posixpath.join(path,part) if part else path
         try:info=lstat(path)
         except FileNotFoundError:
-            mkdir(path,0o711);chmod(path,0o711);info=lstat(path)
+            try:mkdir(path,0o711);chmod(path,0o711);info=lstat(path)
+            except FileNotFoundError:raise RuntimeRefused('The folder for rootless restores cannot be made: '+posixpath.dirname(path)+' does not exist on this server.')
         except OSError:raise RuntimeRefused('The restore folder cannot be checked.')
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to use.')
         if part==job and listdir(path):raise RuntimeRefused('The restore folder is not empty.')

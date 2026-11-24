@@ -21,7 +21,23 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(helper.Runtime().describe(), {'engine': 'docker', 'rootless': False})
     def test_other_engines(self):
         self.assertEqual(helper.Runtime('podman').argv('ps'), ['podman', 'ps'])
-        self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').argv('ps'), ['docker', '--host', 'unix:///run/user/1001/docker.sock', 'ps'])
+        self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').argv('ps'),
+            ['runuser', '-u', 'app', '--', 'env', '-i', 'PATH=' + helper.RUNTIME_PATH, 'XDG_RUNTIME_DIR=/run/user/1001', 'HOME=/home/app', 'DOCKER_HOST=unix:///run/user/1001/docker.sock', 'docker', 'ps'])
+    def test_rootless_engines_never_run_as_root_and_never_pull(self):
+        for engine in ('docker', 'podman'):
+            runtime = helper.Runtime(engine, True, 'app', 1001, '/home/app')
+            argv = runtime.argv('create', '--name', 'x', 'image-id')
+            self.assertEqual(argv[:5], ['runuser', '-u', 'app', '--', 'env'], engine)
+            self.assertNotEqual(argv[0], engine); self.assertNotIn('--host', argv)
+            self.assertEqual(argv[argv.index(engine) + 1:argv.index(engine) + 4], ['create', '--pull', 'never'])
+            self.assertNotIn('--pull', runtime.argv('ps'))
+        self.assertEqual(helper.Runtime('podman').argv('create', 'x'), ['podman', 'create', '--pull', 'never', 'x'])  # a copy never pulls, rootful Podman too
+        self.assertEqual(helper.Runtime().argv('create', 'x'), ['docker', 'create', 'x'])  # rootful Docker unchanged
+    def test_rootless_docker_runs_through_runuser_not_the_root_cli(self):
+        runtime = helper.Runtime('docker', True, 'app', 1001, '/home/app')
+        with patch.object(helper, 'run', return_value=b'') as run, patch.object(runtime, 'check_socket'):
+            runtime.cli('ps')
+        self.assertEqual(run.call_args[0][0][0], 'runuser')
         self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').argv('ps', '-a'),
             ['runuser', '-u', 'app', '--', 'env', '-i', 'PATH=' + helper.RUNTIME_PATH, 'XDG_RUNTIME_DIR=/run/user/1001', 'HOME=/home/app', 'podman', 'ps', '-a'])
     def test_compose_goes_through_the_engine(self):

@@ -15,7 +15,7 @@ from .discovery import (
     cgroup_delegated, temporary_mounts, tmpfs_argument)
 from .restore import (
     MountLayoutError, chain_length, chain_paths, external_restore_plan, extract_mount, image_archives,
-    mount_bytes, network_peers, restore_network_plan, safe_extract, unpack_verified)
+    mount_bytes, network_peers, refuse_restored_links, restore_network_plan, safe_extract, unpack_verified)
 from .move import (
     save_state)
 from .dumps import (
@@ -23,7 +23,7 @@ from .dumps import (
 from .install import (
     systemd_present)
 from .runtime import (
-    RuntimeRefused, current_runtime, engine_architecture, remove_rootless_data_root, resolve_runtime, restore_target, rootless_data_root, rootless_hardening_problem, runtime_is_default, translate_tree)
+    RuntimeRefused, chmod_folder, current_runtime, engine_architecture, remove_rootless_data_root, resolve_runtime, restore_target, rootless_data_root, rootless_hardening_problem, runtime_is_default, translate_tree)
 # Mutable state lives in common and is never copied by import: STOPPING, RUNTIME
 # </build:header>
 # ---- Automatic restore tests (docs/restore-tests.md) ----
@@ -414,9 +414,8 @@ def restore_test_restore(req):
                 raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
             except ValueError as error:raise backup_side(error)
             if data_root!=root and source not in owned:
-                os.chmod(source.parent,0o711)
-                try:
-                    if translation:translate_tree(str(source),translation[0],translation[1])
+                chmod_folder(source.parent,0o711)
+                try:translate_tree(str(source),*(translation or (manifest['idMap'],manifest['idMap'])))
                 except RuntimeRefused as error:raise TestOutcome('failed',str(error),checks)
                 owned.add(source)
             try:mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
@@ -428,6 +427,9 @@ def restore_test_restore(req):
         if not service.get('sqliteFiles'):continue
         original=next(c for c in containers if c['Id']==service['container'])
         restored={**original,'Mounts':[{**mount,'Source':str(sources[(mount['Type'],mount['Source'])])} for mount in original['Mounts']]}
+        if manifest.get('runtime') is not None:
+            try:refuse_restored_links(service,restored)
+            except RuntimeRefused as error:raise TestOutcome('failed',str(error),checks)
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         target=original['Name'].lstrip('/')
         if actual!=service.get('expectedSqliteChecks'):

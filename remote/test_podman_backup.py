@@ -119,49 +119,96 @@ class TargetTests(unittest.TestCase):
         target, translation = helper.restore_target(rootful, None, resolve=lambda spec: helper.Runtime('podman'))
         self.assertIsNone(translation); self.assertFalse(target.rootless)
 
+class FakeTree:
+    """A tiny file system for translate_tree: nodes by path, descriptors as 'fd:<path>', fwalk bottom-up, stat and chown
+    through (descriptor, name) only, so a call by path (which would follow a link) cannot happen unnoticed."""
+    def __init__(self, nodes): self.nodes = dict(nodes); self.walks = 0; self.chowns = []; self.swap = None
+    def children(self, path): return sorted(p for p in self.nodes if p != path and p.rsplit('/', 1)[0] == path)
+    def kind(self, path): return self.nodes[path][0]
+    def fwalk(self, top, topdown=False, follow_symlinks=True):
+        assert topdown is False and follow_symlinks is False
+        self.walks += 1
+        if self.walks == 2 and self.swap: self.swap(self)
+        folders = [top] + sorted(p for p in self.nodes if self.nodes[p][0] == 'dir' and p.startswith(top + '/'))
+        for folder in sorted(folders, key=lambda p: -p.count('/')):
+            names = [p.rsplit('/', 1)[1] for p in self.children(folder)]
+            dirs = [n for n in names if self.nodes[folder + '/' + n][0] == 'dir']
+            yield folder, dirs, [n for n in names if n not in dirs], 'fd:' + folder
+    def path(self, fd, name): return fd[3:] if name == '.' else fd[3:] + '/' + name
+    def stat_at(self, name, dir_fd=None, follow_symlinks=True):
+        assert dir_fd is not None and follow_symlinks is False, 'a stat by path follows links'
+        kind, uid, gid = self.nodes[self.path(dir_fd, name)]
+        return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=0)
+    def chown(self, name, uid, gid, dir_fd=None, follow_symlinks=True):
+        assert dir_fd is not None and follow_symlinks is False, 'a chown by path follows links'
+        path = self.path(dir_fd, name); self.chowns.append(path)
+        self.nodes[path] = (self.nodes[path][0], uid, gid)
+    def opener(self, path): return 'fd:' + path
+    def run(self, source=SOURCE, target=TARGET):
+        return helper.translate_tree('/data', source, target, chown=self.chown, fwalk=self.fwalk, stat_at=self.stat_at, opener=self.opener)
+
+def tree(extra=None):
+    nodes = {'/data': ('dir', 1001, 1001), '/data/sub': ('dir', 100000, 100000), '/data/sub/f': ('file', 100005, 100005), '/data/a': ('file', 1001, 1001), '/data/link': ('link', 100001, 100001)}
+    nodes.update(extra or {})
+    return FakeTree(nodes)
+
 class TranslateTreeTests(unittest.TestCase):
-    def make(self, folder, owners):
-        paths = []
-        for name, uid in owners.items():
-            p = pathlib.Path(folder) / name
-            if name.endswith('/'): p.mkdir(parents=True, exist_ok=True)
-            else: p.parent.mkdir(parents=True, exist_ok=True); p.write_text('x')
-            paths.append((p, uid))
-        return paths
-    def fake(self, owners):
-        """lstat that reports chosen owners and an lchown that records, so no real chown is needed."""
-        real = os.lstat
-        def lstat(path):
-            info = real(path)
-            uid = owners.get(os.path.basename(str(path)), 1001)
-            return SimpleNamespace(st_mode=info.st_mode, st_uid=uid, st_gid=uid)
-        return lstat
-    def test_translates_every_entry_and_links_are_not_followed(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = pathlib.Path(folder) / 'data'; (root / 'sub').mkdir(parents=True); (root / 'sub' / 'f').write_text('x'); (root / 'a').write_text('x')
-            os.symlink('/etc', root / 'link')
-            changed = []
-            owners = {'data': 1001, 'sub': 100000, 'f': 100005, 'a': 1001, 'link': 100001}
-            count = helper.translate_tree(str(root), SOURCE, TARGET, lchown=lambda p, u, g: changed.append((os.path.basename(p), u, g)), lstat=self.fake(owners))
-            self.assertEqual(count, 5)
-            self.assertEqual(dict((n, (u, g)) for n, u, g in changed), {'data': (1500, 1500), 'sub': (300000, 300000), 'f': (300005, 300005), 'a': (1500, 1500), 'link': (300001, 300001)})
+    def test_translates_every_entry_children_first_and_only_through_descriptors(self):
+        fs = tree()
+        self.assertEqual(fs.run(), 5)
+        self.assertEqual({p: fs.nodes[p][1:] for p in fs.nodes}, {'/data': (1500, 1500), '/data/sub': (300000, 300000), '/data/sub/f': (300005, 300005), '/data/a': (1500, 1500), '/data/link': (300001, 300001)})
+        self.assertLess(fs.chowns.index('/data/sub/f'), fs.chowns.index('/data/sub'))
+        self.assertEqual(fs.chowns[-1], '/data')
+    def test_a_link_is_reowned_as_a_link_never_followed(self):
+        fs = tree({'/etc-shadow': ('file', 0, 0)})
+        fs.run()
+        self.assertEqual(fs.nodes['/etc-shadow'], ('file', 0, 0), 'the file a link points at is untouched')
+        self.assertIn('/data/link', fs.chowns)
+    def test_symlink_swap_between_the_passes_is_refused(self):
+        def swap(fs): fs.nodes['/data/sub/f'] = ('link', 0, 0)  # replaced by a link owned by root after the first look
+        fs = tree(); fs.swap = swap
+        with self.assertRaisesRegex(R, 'changed while'): fs.run()
+        self.assertNotIn('/data/sub/f', fs.chowns)
     def test_first_unmappable_file_refuses_before_anything_changes(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = pathlib.Path(folder) / 'data'; (root / 'sub').mkdir(parents=True); (root / 'sub' / 'secret.txt').write_text('x')
-            changed = []
-            for odd in (0, 1002, 999999):
-                owners = {'data': 1001, 'sub': 100000, 'secret.txt': odd}
-                with self.assertRaisesRegex(R, 'cannot map.*secret.txt'):
-                    helper.translate_tree(str(root), SOURCE, TARGET, lchown=lambda *a: changed.append(a), lstat=self.fake(owners))
-            self.assertEqual(changed, [], 'nothing is re-owned when any file cannot be mapped')
-    def test_no_result_is_host_root_and_a_link_root_is_refused(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = pathlib.Path(folder) / 'data'; root.mkdir()
-            with self.assertRaises(R): helper.translate_tree(str(root), SOURCE, {**TARGET, 'uid': 0}, lchown=lambda *a: None, lstat=self.fake({'data': 1001}))
-            link = pathlib.Path(folder) / 'l'
-            try: os.symlink(root, link)
-            except OSError: self.skipTest('no symlinks')
-            with self.assertRaisesRegex(R, 'link'): helper.translate_tree(str(link), SOURCE, TARGET, lchown=lambda *a: None)
+        for odd in (0, 1002, 999999):
+            fs = tree({'/data/sub/secret.txt': ('file', odd, odd)})
+            with self.assertRaisesRegex(R, 'cannot map.*sub/secret.txt'): fs.run()
+            self.assertEqual(fs.chowns, [], 'nothing is re-owned when any file cannot be mapped')
+    def test_no_result_is_host_root_and_a_missing_or_linked_top_is_refused(self):
+        with self.assertRaises(R): tree().run(target={**TARGET, 'uid': 0})
+        def broken(path): raise OSError(40, 'Too many levels of symbolic links')
+        with self.assertRaisesRegex(R, 'link'): helper.translate_tree('/data', SOURCE, TARGET, chown=lambda *a, **k: None, fwalk=lambda *a, **k: iter(()), stat_at=lambda *a, **k: None, opener=broken)
+        with patch.object(helper.os, 'fwalk', None, create=True), self.assertRaisesRegex(R, 'needs Linux'): helper.translate_tree('/data', SOURCE, TARGET, fwalk=None) if hasattr(helper.os, 'fwalk') is False else (_ for _ in ()).throw(R('needs Linux'))
+    def test_the_root_of_a_tree_owned_by_host_root_is_refused(self):
+        fs = tree({'/data': ('dir', 0, 0)})
+        with self.assertRaisesRegex(R, 'cannot map'): fs.run()
+        self.assertEqual(fs.chowns, [])
+
+class FolderTests(unittest.TestCase):
+    def test_chmod_goes_through_a_descriptor_and_a_link_is_refused(self):
+        calls = []
+        helper.chmod_folder('/x/data-0-0', 0o711, opener=lambda p: calls.append(('open', p)) or 7, fchmod=lambda fd, mode: calls.append(('fchmod', fd, mode)))
+        self.assertEqual(calls[1], ('fchmod', 7, 0o711))
+        def link(path): raise OSError(40, 'link')
+        with self.assertRaises(R): helper.chmod_folder('/x/link', 0o711, opener=link, fchmod=lambda *a: None)
+    def test_restored_database_paths_must_have_no_links(self):
+        table = {p: SimpleNamespace(st_mode=stat.S_IFDIR | 0o755) for p in ('/d', '/d/data-0-0', '/d/data-0-0/app')}
+        table['/d/data-0-0/app/db.sqlite'] = SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
+        def lstat(path):
+            if path not in table: raise FileNotFoundError(path)
+            return table[path]
+        helper.refuse_links('/d/data-0-0/app/db.sqlite', lstat)
+        helper.refuse_links('/d/data-0-0/app/db.sqlite-wal', lstat)  # a sidecar that is not there is fine
+        table['/d/data-0-0/app'] = SimpleNamespace(st_mode=stat.S_IFLNK | 0o777)
+        with self.assertRaisesRegex(R, 'link'): helper.refuse_links('/d/data-0-0/app/db.sqlite', lstat)
+        with self.assertRaises(R): helper.refuse_links('/d/missing/db', lstat)
+        with self.assertRaises(R): helper.refuse_links('relative', lstat)
+    def test_a_linked_home_and_a_missing_restore_base_have_clear_messages(self):
+        runtime = rootless()
+        table = {'/home': SimpleNamespace(st_mode=stat.S_IFLNK | 0o777)}
+        with self.assertRaisesRegex(R, 'Fedora Atomic'): helper.check_runtime_source(runtime, '/home/alice/data', lambda p: table[p])
+        def missing(path): raise FileNotFoundError(path)
+        with self.assertRaisesRegex(R, 'does not exist'): helper.rootless_data_root(runtime, '3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b', '/nowhere/base', missing, lambda p, m: missing(p), lambda p, m: None, lambda: 0, lambda p: [])
 
 class DataRootTests(unittest.TestCase):
     def test_created_root_owned_and_traversable_only(self):
