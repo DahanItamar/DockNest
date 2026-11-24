@@ -59,6 +59,9 @@ import { keysSafeRoutes } from './keys-safe/routes.js';
 import { keysView } from './keys-safe/padlock.js';
 import { serverLinksView } from './server-links.js';
 import { withoutNasFacts } from './nas/readiness.js';
+import { connectCapabilities, ConnectRefused } from './nas/connect.js';
+import { inspectNas } from './nas/service.js';
+import { NAS_WIZARD, loginHint } from './nas/guidance.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -215,7 +218,7 @@ for (const [name, { table, time, only }] of Object.entries(histories)) app.get('
   const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null, chains = backups ? chainViews(page) : null;
   res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id), ...chains.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
-app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
+app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand,nas:NAS_WIZARD}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
   const result=await prepareServerKey();
   audit(req.user.id,'server.key_prepared');
@@ -224,8 +227,10 @@ app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), as
 app.post('/api/servers/connect', requireAdmin, rateLimit('server-connect',5), async (req,res) => {
   const data=serverSchema.parse(req.body), serverId=id();
   const server={id:serverId,host:data.host,port:data.port,username:data.username,private_key:seal(data.privateKey),host_key:fingerprint(data.hostKey)};
-  const capabilities=await testServer(server);
-  if(capabilities.uid!==0)return res.status(409).json({error:'SSH connected, but this backup engine requires a root SSH account to preserve volume ownership. Run the setup command as root and connect using root.'});
+  // Root keeps today's rules. A non-root user is accepted only on a detected NAS with passwordless sudo (src/nas/connect.js).
+  let capabilities;
+  try{capabilities=await connectCapabilities(server,{inspect:inspectNas,test:testServer});}
+  catch(error){if(error instanceof ConnectRefused)return res.status(409).json({error:error.message,...(error.fix?{fix:error.fix}:{})});throw error;}
   db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(serverId,data.name,data.host,data.port,data.username,server.private_key,server.host_key,'connected',JSON.stringify(capabilities),now(),data.note);
   audit(req.user.id,'server.connected',serverId);
   res.status(201).json(safeServer(getServer(serverId)));
@@ -261,7 +266,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
     let previous = {}; try { previous = JSON.parse(server.capabilities || '{}') || {}; } catch { previous = {}; }
     db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...withoutNasFacts(result) }), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
-  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
+  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); const hint = loginHint(server, error); if (hint) error.message = hint; throw Object.assign(error, serverTestFailure(error)); }
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });

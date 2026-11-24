@@ -25,7 +25,7 @@ from .restore import (
 from .routing import (
     proxy_routes)
 from .staging import (
-    cleanup_staging, install_boot_recovery, list_staging)
+    cleanup_staging, install_boot_recovery, list_staging, nas_staging_facts)
 from .move import (
     MOVES_ROOT, deploy_restore, deploy_status, deploy_teardown, move_certificate, move_facts,
     move_finalize_target, move_id, move_remove_old, move_resume_source, move_retire_source, move_stop_target,
@@ -137,7 +137,7 @@ def main(req):
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates()})
+        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
     elif op=='discover':
         cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.

@@ -28,13 +28,16 @@ import { takeCertificates } from './alerts/certificates.js';
 import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
 import { recordScan, cleanScan } from './keys-safe/store.js';
 import { takeRouting, withoutRouting } from './domains/check.js';
+import { parseCapabilities } from './nas/command.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
 // facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
 // other roles only read.
-export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
+// A NAS server also names its persistent working folder, so free space is read there and not from '/' (RAM on Unraid).
+const nasStagingBase=server=>{const base=parseCapabilities(server)?.stagingBase;return typeof base==='string'&&/^\/[A-Za-z0-9_@. \/-]{1,200}$/.test(base)&&!base.includes('..')?base:null;};
+export const testServer=async server=>{const stagingBase=nasStagingBase(server);return takeCertificates({serverId:server.id},await remote(server,{operation:'test',...(stagingBase?{stagingBase}:{})}));};
 // App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
 // configuration files of the apps on that server. The scans are recorded here and never returned.
 const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);}catch(error){console.error(`Key scan of an app could not be recorded: ${error.code??error.name}`);}};

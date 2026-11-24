@@ -38,6 +38,32 @@ def staging_base(cfg):
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts or str(base) in FORBIDDEN_STAGING:raise ValueError('Use a dedicated absolute staging directory')
     return base
+RAM_FILESYSTEMS={'tmpfs','ramfs','rootfs'}
+def filesystem_type(path):
+    """Filesystem type of the longest /proc/mounts entry that holds the path ('' when unknown)."""
+    best,kind='',''
+    try:
+        for line in open('/proc/mounts',encoding='utf8',errors='replace'):
+            fields=line.split()
+            if len(fields)<3:continue
+            point=fields[1].replace('\040',' ')
+            if (str(path)==point or str(path).startswith(point.rstrip('/')+'/')) and len(point)>=len(best):best,kind=point,fields[2]
+    except OSError:pass
+    return kind
+def nas_staging_facts(base):
+    """NAS only: the persistent working folder DockNest chose at connect. Free space is read there, never from '/'
+    (Unraid keeps '/' in RAM). Refuses a link, a folder that is not ours alone or one on a RAM filesystem."""
+    path=staging_base({'stagingRoot':base})
+    if str(path.parent) in ('/','/mnt','/var','/tmp'):raise ValueError('The NAS staging folder must be inside a storage pool or volume')
+    path.mkdir(parents=True,exist_ok=True,mode=0o700)
+    info=os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or path.resolve()!=path:raise ValueError('The NAS staging folder cannot be a symbolic link')
+    if info.st_uid!=os.geteuid():raise ValueError('The NAS staging folder must be owned by the account DockNest runs as')
+    if stat.S_IMODE(info.st_mode)&0o077:os.chmod(path,0o700)
+    kind=filesystem_type(path)
+    if kind in RAM_FILESYSTEMS:raise ValueError('The NAS staging folder is on memory storage and would be lost on reboot')
+    usage=shutil.disk_usage(path)
+    return {'stagingBase':str(path),'freeBytes':usage.free,'stagingWritable':os.access(path,os.W_OK),'stagingFilesystem':kind or None}
 def is_regular(path):
     try:return stat.S_ISREG(os.lstat(path).st_mode)
     except OSError:return False

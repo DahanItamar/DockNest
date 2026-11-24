@@ -124,3 +124,8 @@ test('runtime: rootful Docker argv unchanged, rootless argv fixed, unknown ID ma
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for runtime verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('NAS staging base: free space comes from the persistent working folder, never from memory storage',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_nas_staging.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for NAS staging verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
