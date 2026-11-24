@@ -137,12 +137,19 @@ class FakeTree:
     def path(self, fd, name): return fd[3:] if name == '.' else fd[3:] + '/' + name
     def stat_at(self, name, dir_fd=None, follow_symlinks=True):
         assert dir_fd is not None and follow_symlinks is False, 'a stat by path follows links'
-        kind, uid, gid = self.nodes[self.path(dir_fd, name)]
-        return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=0)
+        node = self.nodes[self.path(dir_fd, name)]
+        kind, uid, gid = node[:3]
+        ino = node[3] if len(node) > 3 else hash(self.path(dir_fd, name))
+        links = sum(1 for other in self.nodes.values() if len(other) > 3 and other[3] == ino) if len(node) > 3 else 1
+        mode = {'dir': stat.S_IFDIR, 'link': stat.S_IFLNK}.get(kind, stat.S_IFREG)
+        return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode, st_dev=1, st_ino=ino, st_nlink=links + getattr(self, 'outside', {}).get(ino, 0))
     def chown(self, name, uid, gid, dir_fd=None, follow_symlinks=True):
         assert dir_fd is not None and follow_symlinks is False, 'a chown by path follows links'
         path = self.path(dir_fd, name); self.chowns.append(path)
-        self.nodes[path] = (self.nodes[path][0], uid, gid)
+        node = self.nodes[path]
+        # A hard link is one inode: every name that shares it changes owner together, as on a real file system.
+        for other, value in list(self.nodes.items()):
+            if other == path or (len(node) > 3 and len(value) > 3 and value[3] == node[3]): self.nodes[other] = (value[0], uid, gid) + tuple(value[3:])
     def opener(self, path): return 'fd:' + path
     def run(self, source=SOURCE, target=TARGET):
         return helper.translate_tree('/data', source, target, chown=self.chown, fwalk=self.fwalk, stat_at=self.stat_at, opener=self.opener)
@@ -159,6 +166,49 @@ class TranslateTreeTests(unittest.TestCase):
         self.assertEqual({p: fs.nodes[p][1:] for p in fs.nodes}, {'/data': (1500, 1500), '/data/sub': (300000, 300000), '/data/sub/f': (300005, 300005), '/data/a': (1500, 1500), '/data/link': (300001, 300001)})
         self.assertLess(fs.chowns.index('/data/sub/f'), fs.chowns.index('/data/sub'))
         self.assertEqual(fs.chowns[-1], '/data')
+    def test_hard_links_are_one_inode_and_not_a_change(self):
+        # Two names of one file (the fixture app makes such a pair): re-owning the first changes the owner the second shows.
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7), '/data/three': ('file', 1001, 1001, 8), '/data/sub/four': ('file', 1001, 1001, 8)})
+        fs.run()
+        self.assertEqual({fs.nodes[p][1:3] for p in ('/data/sub/one', '/data/sub/two')}, {(300005, 300005)})
+        self.assertEqual({fs.nodes[p][1:3] for p in ('/data/three', '/data/sub/four')}, {(1500, 1500)})
+        self.assertEqual(sum(1 for p in fs.chowns if p in ('/data/sub/one', '/data/sub/two')), 1, 'one inode, one chown')
+        self.assertEqual(sum(1 for p in fs.chowns if p in ('/data/three', '/data/sub/four')), 1)
+    def test_a_hard_link_that_shows_another_owner_than_its_inode_is_refused(self):
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7)})
+        real = fs.chown
+        def chown(name, uid, gid, dir_fd=None, follow_symlinks=True):
+            real(name, uid, gid, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+            for other in ('/data/sub/one', '/data/sub/two'):  # a name of the inode is swapped for another owner meanwhile
+                node = fs.nodes[other]; fs.nodes[other] = (node[0], 0, 0) + tuple(node[3:])
+        with self.assertRaisesRegex(R, 'changed while'):
+            helper.translate_tree('/data', SOURCE, TARGET, chown=chown, fwalk=fs.fwalk, stat_at=fs.stat_at, opener=fs.opener)
+    def test_a_name_outside_the_restore_folder_refuses_the_restore(self):
+        # The file has three links but only two names inside the folder: the third is somewhere else on the server.
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7)})
+        fs.outside = {7: 1}
+        with self.assertRaisesRegex(R, 'linked from outside'): fs.run()
+        self.assertEqual(fs.chowns, [], 'nothing is re-owned')
+        # A single name with a link elsewhere is the same case.
+        solo = tree({'/data/sub/only': ('file', 100005, 100005, 9)})
+        solo.outside = {9: 1}
+        with self.assertRaisesRegex(R, 'linked from outside'): solo.run()
+        self.assertEqual(solo.chowns, [])
+        # Directories always have more links than names counted: they are not files with names.
+        self.assertEqual(tree().run(), 5, 'a tree with directories and no extra links is fine')
+    def test_a_name_whose_inode_was_swapped_after_the_first_chown_is_refused(self):
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7)})
+        real_stat = fs.stat_at
+        seen = {'n': 0}
+        def stat_at(name, dir_fd=None, follow_symlinks=True):
+            info = real_stat(name, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+            if fs.walks == 2 and name in ('one', 'two'):
+                seen['n'] += 1
+                if seen['n'] == 2: info.st_ino = 99  # the second name is now a different file that happens to carry the new owner
+                if seen['n'] == 2: info.st_uid, info.st_gid = 300005, 300005
+            return info
+        with self.assertRaisesRegex(R, 'changed while'):
+            helper.translate_tree('/data', SOURCE, TARGET, chown=fs.chown, fwalk=fs.fwalk, stat_at=stat_at, opener=fs.opener)
     def test_a_link_is_reowned_as_a_link_never_followed(self):
         fs = tree({'/etc-shadow': ('file', 0, 0)})
         fs.run()
