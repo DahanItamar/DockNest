@@ -151,6 +151,9 @@ test('the image build pins its base by digest and sends only an allow-listed con
   const froms = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map(match => match[1]);
   assert.equal(froms.length, 3, "build, pinned rclone download, runtime");
   for (const from of froms) assert.match(from, /^node:24-bookworm-slim@sha256:[a-f0-9]{64}$/);
+  // The runtime stage needs the system certificates, or rclone fails every HTTPS call with an x509 error.
+  const runtime = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
+  assert.match(runtime, /apt-get install -y --no-install-recommends [^\n]*\bca-certificates\b/);
   const ignore = (await readFile(new URL('../.dockerignore', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').split('\n').filter(line => line && !line.startsWith('#'));
   assert.equal(ignore[0], '*', 'everything is excluded first');
   const allowed = ignore.filter(line => line.startsWith('!')).map(line => line.slice(1).replace(/\/$/, ''));

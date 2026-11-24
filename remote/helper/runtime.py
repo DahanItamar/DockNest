@@ -331,13 +331,16 @@ def translate_tree(directory,source,target,chown=None,fwalk=None,stat_at=None,op
     try:top=opener(directory)
     except OSError:raise RuntimeRefused('A restore folder cannot be a link or missing.')
     try:
-        plan=[];first=None;count=0
+        plan=[];first=None;count=0;links={}
         for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
             for name in files+dirs:
                 count+=1
                 if count>limit:raise RuntimeRefused('A backup holds too many files to restore with ID translation.')
                 info=stat_at(name,dir_fd=fd,follow_symlinks=False)
-                try:plan.append((dirpath,name,info.st_uid,info.st_gid)+owner(info))
+                # A file with several names (a hard link) is one inode: re-owning it through one name re-owns all of them.
+                key=(info.st_dev,info.st_ino) if getattr(info,'st_nlink',1)>1 and not stat.S_ISDIR(info.st_mode) else None
+                if key is not None:links[key]=(links.get(key,(0,info.st_nlink))[0]+1,info.st_nlink)
+                try:plan.append((dirpath,name,info.st_uid,info.st_gid)+owner(info)+(key,))
                 except RuntimeRefused:
                     if first is None:first=posixpath.join(dirpath,name)
         rootinfo=stat_at('.',dir_fd=top,follow_symlinks=False)
@@ -347,14 +350,22 @@ def translate_tree(directory,source,target,chown=None,fwalk=None,stat_at=None,op
         if first is not None:
             relative=posixpath.relpath(first,directory)
             raise RuntimeRefused(UNMAPPABLE+' First file: '+(relative if len(relative)<=200 else relative[:200]))
-        wanted={(dirpath,name):(uid,gid,new_uid,new_gid) for dirpath,name,uid,gid,new_uid,new_gid in plan}
-        changed=0
+        # Every name of a multiply linked file must be inside this folder: a name outside it (the file's inode is shared with something
+        # else on the server) would be re-owned too, which a restore never does.
+        if any(nlink>seen for seen,nlink in links.values()):raise RuntimeRefused('A restored file is also linked from outside the restore folder.')
+        wanted={(dirpath,name):(uid,gid,new_uid,new_gid,key) for dirpath,name,uid,gid,new_uid,new_gid,key in plan}
+        changed=0;done={}
         for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
             for name in files+dirs:
-                uid,gid,new_uid,new_gid=wanted.get((dirpath,name),(None,)*4)
+                uid,gid,new_uid,new_gid,key=wanted.get((dirpath,name),(None,)*5)
                 info=stat_at(name,dir_fd=fd,follow_symlinks=False)
+                if key is not None and key in done:
+                    # Another name of this inode was re-owned a moment ago: it must now carry exactly the new owner.
+                    if (info.st_dev,info.st_ino)!=key or (info.st_uid,info.st_gid)!=done[key]:raise RuntimeRefused('The restored files changed while their owners were being translated.')
+                    continue
                 if uid is None or (info.st_uid,info.st_gid)!=(uid,gid):raise RuntimeRefused('The restored files changed while their owners were being translated.')
                 chown(name,new_uid,new_gid,dir_fd=fd,follow_symlinks=False);changed+=1
+                if key is not None:done[key]=(new_uid,new_gid)
         chown('.',root_owner[0],root_owner[1],dir_fd=top,follow_symlinks=False)
         return changed+1
     finally:

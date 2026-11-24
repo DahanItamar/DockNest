@@ -4,10 +4,12 @@ import { mkdtemp, writeFile, rm, copyFile, readFile, readdir, stat } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
+import net from 'node:net';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 // The rclone binary is a fake (tests/fake-rclone.js): no network and no accounts.
+process.env.DOCKNEST_TEST_AUTH_PORT = String(await new Promise(resolvePort => { const probe = net.createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolvePort(port)); }); }));
 const root = await mkdtemp(join(tmpdir(), 'docknest-rclone-')), fakeDir = join(root, 'fake');
 await (await import('node:fs/promises')).mkdir(fakeDir);
 await copyFile(new URL('./fake-rclone.js', import.meta.url), join(fakeDir, 'rclone.js'));
@@ -254,6 +256,8 @@ test('sign-in A: the pasted address is checked, rebuilt from code and state and 
   const body = await done.text();
   assert.deepEqual(Object.keys(JSON.parse(body)).sort(), ['account', 'backend', 'tokenExpiresAt']);
   assert.ok(!body.includes('issued-access') && !body.includes('issued-refresh'));
+  assert.equal(JSON.parse(body).account, 'f***@e***.invalid', 'the account is masked on the sign-in answer too');
+  assert.ok(!body.includes('fake.user'));
   const forwarded = (await readFile(join(fakeDir, 'auth-requests.jsonl'), 'utf8')).trim().split('\n');
   assert.deepEqual(forwarded, ['/?state=' + state + '&code=fixture-code-12345'], 'only code and state are forwarded');
   assert.equal(oauth.sessionCount(), 1);

@@ -6,6 +6,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300).
 
+### Fixed
+
+- Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
+
 ### Added
 
 **Recovery**
