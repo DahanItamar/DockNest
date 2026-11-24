@@ -27,12 +27,20 @@ export function checkMountPath(value, { nasKind = null } = {}) {
   return path;
 }
 
-// paths: array of absolute host paths. Returns sorted, de-duplicated paths with nested ones removed.
+// paths: absolute host paths, or { src, dst } when the folder is mounted from its resolved location (src) at the path the helper
+// uses (dst), so a link swapped in after the check cannot change what is mounted. Returns sorted, de-duplicated entries with
+// nested ones removed; an entry whose src equals its dst stays a plain string.
 export function computeMounts(paths, options = {}) {
   if (!Array.isArray(paths)) throw new MountRefused('The helper runtime needs a list of folders.');
-  const checked = [...new Set(paths.map(path => checkMountPath(path, options)))].sort();
-  const result = checked.filter((path, index) => !checked.some((other, at) => at !== index && within(path, other)));
+  const entries = paths.map(item => {
+    const src = checkMountPath(typeof item === 'string' ? item : item?.src, options), dst = checkMountPath(typeof item === 'string' ? item : item?.dst, options);
+    return { src, dst };
+  });
+  const unique = [...new Map(entries.map(entry => [entry.dst, entry])).values()].sort((a, b) => (a.dst < b.dst ? -1 : a.dst > b.dst ? 1 : 0));
+  // A nested folder is already inside its parent only when it is the same place inside the parent's source.
+  const covered = (entry, other) => entry !== other && within(entry.dst, other.dst) && entry.src === other.src + entry.dst.slice(other.dst.length);
+  const result = unique.filter(entry => !unique.some(other => covered(entry, other))).map(entry => (entry.src === entry.dst ? entry.dst : entry));
   if (result.length > MAX_MOUNTS) throw new MountRefused('Too many folders for the helper runtime.');
   return result;
 }
-export const mountArguments = mounts => mounts.flatMap(path => ['--mount', `type=bind,src=${path},dst=${path},bind-propagation=rslave`]);
+export const mountArguments = mounts => mounts.flatMap(item => { const src = typeof item === 'string' ? item : item.src, dst = typeof item === 'string' ? item : item.dst; return ['--mount', `type=bind,src=${src},dst=${dst},bind-propagation=rslave`]; });

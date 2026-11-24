@@ -62,6 +62,7 @@ import { serverLinksView } from './server-links.js';
 import { withoutNasFacts } from './nas/readiness.js';
 import { connectCapabilities, ConnectRefused } from './nas/connect.js';
 import { inspectNas } from './nas/service.js';
+import { forgetRuntime } from './nas/runtime-prepare.js';
 import { NAS_WIZARD, loginHint } from './nas/guidance.js';
 await clearInterruptedExports();
 
@@ -255,6 +256,7 @@ app.patch('/api/servers/:id', requireAdmin, (req, res) => {
   const data = serverSchema.extend({ note:z.string().trim().max(200).optional(), privateKey: serverSchema.shape.privateKey.optional(), hostKeyConfirmation: z.literal(true).optional() }).parse(req.body);
   if (fingerprint(data.hostKey) !== previous.host_key && !data.hostKeyConfirmation) return res.status(409).json({ error: 'SSH host key changed. Verify the new fingerprint independently and explicitly confirm the change.' });
   db.prepare("UPDATE servers SET name=?,note=?,host=?,port=?,username=?,private_key=?,host_key=?,status='unchecked',capabilities=NULL WHERE id=?").run(data.name, data.note??previous.note, data.host, data.port, data.username, data.privateKey ? seal(data.privateKey) : previous.private_key, fingerprint(data.hostKey), previous.id);
+  forgetRuntime(previous.id);
   audit(req.user.id, 'server.update', previous.id); res.json(safeServer(getServer(previous.id)));
 });
 app.post('/api/servers/:id/install', requireAdmin, requireRecentAuth, rateLimit('server-install', 10, 10 * 60_000), async (req, res) => {
