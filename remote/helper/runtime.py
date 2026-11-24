@@ -3,7 +3,7 @@
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,pathlib,re,posixpath,stat
-from .common import docker, run
+from .common import STOPPING, docker, run
 # </build:header>
 # Root SSH stays the trust model. Root reaches every engine; no shell is ever used and every value that reaches an
 # argv is validated first. The default runtime is rootful Docker and builds exactly the argv `docker` always had.
@@ -100,6 +100,12 @@ class Runtime:
         try:info=lstat(path)
         except OSError:raise RuntimeRefused('The rootless Docker engine is not running for this user.')
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
+    def stream(self,*args,stdin=None,stdout=None,timeout=3600):
+        """One engine call whose data goes through file descriptors, never through DockNest's memory. A rootless engine runs as
+        its user and cannot open root's private folders, so root opens the file and hands the engine the descriptor."""
+        if STOPPING:raise ValueError('DockNest stopped this step.')
+        if self.engine=='docker' and self.rootless:self.check_socket()
+        subprocess.run(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=timeout,check=True)
     def cli(self,*args,**options):
         if self.engine=='docker' and self.rootless:self.check_socket()
         return run(self.argv(*args),**options)
@@ -365,3 +371,28 @@ def rootless_hardening_problem(runtime,hardening):
     than created without it. `hardening` is the original container's hardening record."""
     if runtime.rootless and hardening.get('seccomp') not in ('default','unconfined'):return 'This app uses a custom seccomp profile, which a rootless copy cannot load yet.'
     return None
+
+def engine_load(archive):
+    """`docker load` of one image archive. Rootful Docker: exactly `docker load -i <archive>`. Another engine: the archive is
+    opened by root (no link followed, a regular file only) and streamed to `load` on standard input."""
+    runtime=current_runtime()
+    if runtime_is_default(runtime):return docker('load','-i',str(archive))
+    fd=os.open(str(archive),os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):raise RuntimeRefused('The image archive is not a regular file.')
+        runtime.stream('load',stdin=fd)
+    finally:os.close(fd)
+def engine_save(path,*references):
+    """`docker save -o <path> <images>`. Rootful Docker: exactly that. Another engine: the engine writes to standard output,
+    which is a file root creates (new, 0600, no link followed), so the engine never needs root's folder."""
+    runtime=current_runtime()
+    if runtime_is_default(runtime):return docker('save','-o',str(path),*references)
+    fd=os.open(str(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
+    try:runtime.stream('save',*references,stdout=fd)
+    except BaseException:
+        os.close(fd);fd=None
+        try:os.unlink(str(path))
+        except OSError:pass
+        raise
+    finally:
+        if fd is not None:os.close(fd)
