@@ -13,7 +13,10 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 const exec = promisify(execFile);
 const scenario = process.env.LIVE_SCENARIO || '';
 if (!['rootless-docker', 'rootless-podman', 'webdav', 'no-delegation'].includes(scenario)) throw new Error('LIVE_SCENARIO must be rootless-docker, rootless-podman, webdav or no-delegation');
-const sh = async (command, args = [], options = {}) => (await exec(command, args, { maxBuffer: 16 * 1024 * 1024, ...options })).stdout.trim();
+const sh = async (command, args = [], options = {}) => {
+  try { return (await exec(command, args, { maxBuffer: 16 * 1024 * 1024, ...options })).stdout.trim(); }
+  catch (error) { error.message += ' | ' + String(error.stderr || '').replace(/\s+/g, ' ').slice(-1500); throw error; }  // a failed run must say why
+};
 const sudo = (...args) => sh('sudo', args);
 const wait = ms => new Promise(done => setTimeout(done, ms));
 async function until(check, message, seconds = 120) {
@@ -145,9 +148,11 @@ async function rootlessEngine(engineName) {
   const uid = await createUser({ delegated });
   let cli, env = {}, runtime;
   if (engineName === 'docker') {
-    await sudo('apt-get', 'install', '-y', '--no-install-recommends', 'uidmap', 'dbus-user-session', 'slirp4netns', 'docker-ce-rootless-extras');
-    await asUser(uid, 'dockerd-rootless-setuptool.sh', ['install', '--skip-iptables']);
-    await asUser(uid, 'systemctl', ['--user', 'start', 'docker']);
+    await sudo('apt-get', 'install', '-y', '--no-install-recommends', 'slirp4netns', 'curl', 'iptables', 'xz-utils');
+    // The runner's Docker comes without the rootless extras, so the user gets Docker's own rootless bundle (docs.docker.com, get.docker.com/rootless).
+    // Not pinned: this is a manual live check on a disposable runner, and the engine version it installs is recorded in the evidence.
+    await asUser(uid, 'sh', ['-c', 'curl -fsSL https://get.docker.com/rootless -o /tmp/dn-rootless-install.sh && FORCE_ROOTLESS_INSTALL=1 sh /tmp/dn-rootless-install.sh']);
+    await asUser(uid, 'systemctl', ['--user', 'enable', '--now', 'docker']).catch(() => '');
     env = { DOCKER_HOST: `unix:///run/user/${uid}/docker.sock` };
     cli = (...args) => asUser(uid, 'docker', args, env);
     await until(async () => (await sh('sudo', ['test', '-S', `/run/user/${uid}/docker.sock`]).then(() => true, () => false)), 'The rootless Docker socket did not appear');
