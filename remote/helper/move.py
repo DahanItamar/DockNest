@@ -19,7 +19,9 @@ from .net import (
 from .maintenance import (
     maintenance)
 from .discovery import (
-    engine_rootless, nginx_sites)
+    engine_rootless, nginx_sites, rootless_users)
+from .runtime import (
+    current_runtime, runtime_is_default)
 from .runspec import (
     UNREADABLE_MOUNTS, create_args, fit_host, port_argument, port_bindings, run_spec, unbound_exposed, yaml_str)
 from .restore import (
@@ -394,8 +396,23 @@ def target_filesystem(paths,staging):
         features=staging_features(staging)
         return {'mounts':list(mounts.values()),'features':features} if features else {'error':'probe'}
     except Exception:return {'error':'mounts'}
+def runtime_facts():
+    """What a move preflight needs to judge a rootless target (docs/podman-rootless.md, decision 10): the lowest port a
+    non-root user may bind, and whether each rootless user keeps its services after logout (loginctl enable-linger).
+    A fact that cannot be read is None, never a guess."""
+    try:floor=int(pathlib.Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text().strip())
+    except (OSError,ValueError):floor=None
+    try:users=rootless_users()
+    except Exception:users=[]
+    linger={}
+    for user,_,_ in users:
+        try:linger[user]=pathlib.Path('/var/lib/systemd/linger',user).is_file() and not pathlib.Path('/var/lib/systemd/linger',user).is_symlink()
+        except OSError:linger[user]=None
+    return {'portFloor':floor,'linger':linger}
 def ownership_facts(role,req,facts):
-    result={'engine':{'mode':engine_rootless()}}
+    runtime=current_runtime()
+    # The engine of a Podman or rootless app, not the rootful Docker daemon the literal `docker info` would read.
+    result={'engine':{'mode':engine_rootless() if runtime_is_default(runtime) else ('rootless' if runtime.rootless else 'none')}}
     if role=='source':result['modes']=source_modes((facts.get('site') or {}).get('bindPaths'))
     elif req.get('probe'):result['filesystem']=target_filesystem(req['probe'].get('paths'),facts.get('stagingExisting'))
     return result
@@ -418,6 +435,7 @@ def move_facts(req):
     if req.get('probe'):facts['probe']=target_probe(req['probe'])
     facts['stagingExisting']=str(existing)
     facts['ownership']=ownership_facts(req.get('role'),req,facts)
+    facts['runtimeFacts']=runtime_facts()
     emit(result=facts)
 IMAGE_BASED_LINKS=('home','srv','opt','mnt')
 def image_based_form(path):
