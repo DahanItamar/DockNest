@@ -184,7 +184,7 @@ async function rootlessEngine(engineName) {
   const { remote } = await import('../src/ssh.js');
   const discovered = await remote(server, { operation: 'discover' });
   const container = discovered.containers.find(item => item.name === 'live-app');
-  assert.deepEqual(container?.runtime, runtime, 'the container carries its runtime');
+  assert.deepEqual(container?.runtime, runtime, 'the container carries its runtime: ' + JSON.stringify(discovered.containers.map(item => [item.name, item.runtime])));
   record('Discover lists the rootless container tagged with its engine and user');
 
   const api = await engineApi();

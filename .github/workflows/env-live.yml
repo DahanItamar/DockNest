@@ -4,10 +4,6 @@ name: Environment live checks
 # server through the pinned rclone. They run on a GitHub-hosted Ubuntu runner with fake data only (scripts/integration-env-live.js)
 # and record their result in data/qa/env-live-<scenario>.json. Results go into docs/live-checks-3.0.0.md.
 on:
-  # TEMPORARY while this workflow is developed on its branch (a new workflow cannot be dispatched before it is on the default
-  # branch). Removed before merge: the final file is workflow_dispatch only.
-  push:
-    branches: [ci/env-live-checks]
   workflow_dispatch:
     inputs:
       only:
@@ -23,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   rootless-docker:
-    if: (inputs.only || 'all') == 'all' || inputs.only == 'rootless-docker'
+    if: inputs.only == 'all' || inputs.only == 'rootless-docker'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -45,7 +41,7 @@ jobs:
           path: data/qa/env-live-rootless-docker.json
           if-no-files-found: ignore
   rootless-podman:
-    if: (inputs.only || 'all') == 'all' || inputs.only == 'rootless-podman'
+    if: inputs.only == 'all' || inputs.only == 'rootless-podman'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -67,7 +63,7 @@ jobs:
           path: data/qa/env-live-rootless-podman.json
           if-no-files-found: ignore
   no-delegation:
-    if: (inputs.only || 'all') == 'all' || inputs.only == 'no-delegation'
+    if: inputs.only == 'all' || inputs.only == 'no-delegation'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -89,7 +85,7 @@ jobs:
           path: data/qa/env-live-no-delegation.json
           if-no-files-found: ignore
   webdav:
-    if: (inputs.only || 'all') == 'all' || inputs.only == 'webdav'
+    if: inputs.only == 'all' || inputs.only == 'webdav'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:

@@ -16,7 +16,7 @@ called validated. A real backup or restore is not marked validated without a Lin
 
 ## NAS servers (docs/nas-servers.md)
 
-- [ ] The runtime image is built for amd64 and loaded over SSH (`docker load`) on a NAS with no Python.
+- [x] The runtime image is built for amd64 and loaded over SSH (`docker load`): covered by the required Linux integration job (`scripts/integration-helper-runtime.js` on a nested host, tar from `scripts/build-helper-runtime.sh`, also built by release validation). Still a hardware check: a real NAS with no Python.
 - [x] TrueNAS SCALE 25.x lab: connect, discover apps, back up, restore test (see the 2026-11-24 results); 24.04 is refused with the Kubernetes message (unit tests only).
 - [ ] Unraid (needs a USB-stick test machine): connect, key persistence after reboot, template apps discovered, backup and restore.
 - [ ] Unraid Compose Manager stacks are reported as unsupported, not half-backed-up.
@@ -102,3 +102,16 @@ Bug 1 above is fixed; bug 2 is by design; bug 3 (the red maintenance message) is
 
 - Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema).
 - The lab fixture app must exit with code 0 on SIGTERM, or the clean shutdown check fails by design ("running, nonzero exit or OOM").
+
+## Results of the manual environment runs (workflow `Environment live checks`, 2026-11-24)
+
+Run from `.github/workflows/env-live.yml` (manual only, never a gate) on GitHub-hosted Ubuntu runners with fake data. Runs 45460162545, 45461143108, 45461792583, 45462363557, 45462984225 and 45463388393, branch `ci/env-live-checks`.
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| WebDAV through the pinned rclone (`rclone serve webdav` on localhost) | PASS (all six runs) | Adapter probe (write, rename, read, range, delete), a DockNest backup stored through the rclone adapter, a restore read back from WebDAV with matching data, and a wrong password refused. Not a Nextcloud or SMB check. |
+| Rootless Podman 5.7.0 | Partly verified, not green | A real user with linger and a user session: DockNest discovers the rootless engine with the right user and uid. The step "Discover tags the container with its runtime" failed and is not yet explained; the check now prints what discovery returned, so one more run will show it. Backup, restore and restore test in rootless Podman are therefore not yet verified live. |
+| Rootless without memory and CPU delegation | Partly verified, not green | Delegation was removed from the user's systemd instance and DockNest reported `cgroupDelegated=false` for the user. The refusal step ("cannot limit memory for user apps", nothing created) was not reached because of the same discovery step. |
+| Rootless Docker | env-blocked on runner | Docker's rootless installer did not complete on the runner (the user's engine never started), so no DockNest step ran. Needs a runner or VM where the installer works. |
+| Rootless Podman or Docker on Fedora or AlmaLinux (SELinux) | Not run | Real VM needed. |
+| TrueNAS SCALE 24.04 and Synology | Not run | Beta and unverified; not covered by automated checks. |
