@@ -8,9 +8,11 @@ import { writeMode, recordWriteMode, markUnverified, releaseKept, keptSummary, h
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
+import { rcloneRoutes, rcloneView, folderView } from './storage-rclone-routes.js';
 
 export const storageTargets=Router();
 storageTargets.use(requireAdmin);
+storageTargets.use(rcloneRoutes);
 const connection=z.object({
  name:z.string().trim().min(1).max(100),host:z.string().regex(/^[a-zA-Z0-9_.:-]{1,253}$/),port:z.number().int().min(1).max(65535).default(23),username:z.string().regex(/^[a-zA-Z0-9_.-]{1,100}$/),
  hostKey:z.string().regex(/^(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+/]{43}=?)$/),
@@ -38,6 +40,8 @@ function safe(row){
  const {credential,...rest}=row,mode=targetMode(row);
  // Main packages (a backup living only on its copies counts once, as a copy), copies held here, and recovery kits.
  const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ? AND id NOT IN (SELECT backup_id FROM backup_main_removed)').get(targetPrefix({mode,id:row.id})+'%').bytes+copyBytesOn(row.id)+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
+ if(mode==='rclone')return rcloneView(row,used);
+ if(mode==='folder')return folderView(row,used);
  if(mode==='s3'){
   // Never return the sealed access key pair; only public connection settings.
   const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');

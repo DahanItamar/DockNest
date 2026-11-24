@@ -62,6 +62,8 @@ function kitText(emergency) {
 }
 
 function storageLogin(storage) {
+  if (storage.mode === 'folder') return [['Folder', 'Mount the same disk or share into DockNest and add it again under Storage.']];
+  if (storage.mode === 'rclone') return [['Sign-in', 'Open Storage in DockNest and press Reconnect to sign in to the drive again.']];
   if (storage.mode === 's3') return [['Endpoint', storage.endpoint], ['Bucket', storage.bucket], ['Access key', storage.accessKeyId], ['Secret key', storage.secretAccessKey]];
   return [['Address', `${storage.host}:${storage.port}`], ['User', storage.username], storage.password ? ['Password', storage.password] : ['Private key', storage.privateKey]];
 }
@@ -105,7 +107,7 @@ export function buildGuide(inventory, { appIds, include: chosen = {}, version, m
         'Open DockNest and sign in with an administrator account.',
         'Open Storage. Each backup storage should say Connected.',
         'If one does not, choose it, enter its login details and test the connection.',
-        ...(mainStorage ? [...trusted(mainStorage, reveal).map(item => step(item.text, item.command, include)), step(`Check from the server that ${mainStorage.name} answers. This lists its backup folder.`, storageCheckCommand(mainStorage, reveal), include)] : []),
+        ...(mainStorage ? [...trusted(mainStorage, reveal).map(item => step(item.text, item.command, include)), ...(['rclone', 'folder'].includes(mainStorage.mode) ? [] : [step(`Check from the server that ${mainStorage.name} answers. This lists its backup folder.`, storageCheckCommand(mainStorage, reveal), include)])] : []),
       ].map(item => (typeof item === 'string' ? { text: item } : item)),
     },
     order: restoreOrder(apps, inventory.links),
@@ -118,9 +120,9 @@ export function buildGuide(inventory, { appIds, include: chosen = {}, version, m
       })),
       apps: apps.map(app => ({ name: app.name, server: serverName(app.serverId), lastBackup: app.backup ? formatDate(app.backup.capturedAt) : 'None yet', status: statusText(app), ...(include.tests ? { lastTest: testText(app.lastTest) } : {}) })),
       storage: inventory.storage.map(storage => ({
-        name: storage.name, kind: storage.mode === 's3' ? 'S3 bucket' : 'SFTP server',
+        name: storage.name, kind: storage.mode === 's3' ? 'S3 bucket' : storage.mode === 'rclone' ? 'Cloud drive or network share' : storage.mode === 'folder' ? 'Local folder' : 'SFTP server',
         holds: [...(storage.id === inventory.defaultTarget ? ['the main backups'] : []), ...(apps.some(app => app.copyTargetIds.includes(storage.id)) ? ['off-site copies'] : []), ...(storage.id === kitStorage?.id ? ['the recovery kit and this guide, in the folder docknest-recovery'] : [])],
-        ...(include.addresses ? { address: storage.mode === 's3' ? new URL(storage.endpoint).host : `${storage.host}:${storage.port}` } : {}),
+        ...(include.addresses && !['rclone', 'folder'].includes(storage.mode) ? { address: storage.mode === 's3' ? new URL(storage.endpoint).host : `${storage.host}:${storage.port}` } : {}),
         ...(include.logins ? { login: storageLogin(storage) } : {}),
       })),
       kit: kitText(inventory.emergency),

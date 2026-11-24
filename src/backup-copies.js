@@ -120,7 +120,7 @@ export async function maintainCopies(at=Date.now(),verify=null){
 }
 
 // ---- Destinations -----------------------------------------------------------------------------------------------------
-const prefixOf=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3'].includes(summary.mode)?summary.mode+':'+targetId+':':null;};
+const prefixOf=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3','rclone','folder'].includes(summary.mode)?summary.mode+':'+targetId+':':null;};
 // What a destination holds and who uses it: the 409 body of DELETE /api/storage-targets/:id and GET .../usage.
 export function destinationUsage(targetId){
  const copies=db.prepare("SELECT COUNT(*) AS n,COUNT(DISTINCT c.backup_id) AS backups,COALESCE(SUM(b.size),0) AS bytes FROM backup_copies c LEFT JOIN backups b ON b.id=c.backup_id WHERE c.target_id=? AND c.status<>'deleted'").get(targetId);
