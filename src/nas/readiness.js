@@ -56,7 +56,7 @@ export async function checkNas({ run, username = 'root', imageId = HELPER_RUNTIM
     else checks.push(ok('staging', `${stagingBase} is on persistent storage.`, { stagingBase, freeBytes: free }));
     if (nas.kind === 'unraid' && stagingBase.startsWith('/mnt/user/')) checks.push(warn('hard-links', '/mnt/user is a union of disks; hard links across disks are not kept.', 'Use a /mnt/cache path when you have a cache pool.'));
   }
-  if (nas.kind === 'unraid') {
+  if (nas.kind === 'unraid' && identity === 'root') {
     const kept = await run(['test', '-s', '/boot/config/ssh/root/authorized_keys']).catch(() => ({ code: 1 }));
     checks.push(kept.code === 0 ? ok('key-persistence', 'The SSH key survives a reboot.') : warn('key-persistence', 'The SSH key may be lost on reboot (Unraid keeps /root in RAM).', 'Add the key to /boot/config/ssh/root/authorized_keys.'));
   }
