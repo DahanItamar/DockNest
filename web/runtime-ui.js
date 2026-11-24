@@ -33,7 +33,7 @@ export const groupRuntime = group => { const shared = sharedRuntime(group.contai
 
 export const engineList = server => (Array.isArray(server?.capabilities?.engines) ? server.capabilities.engines : []);
 // A server with no usable Docker but another engine (a Podman-only server): the connection works, and says so.
-export const podmanOnly = server => server?.capabilities && server.capabilities.docker == null && engineList(server).length > 0;
+export const podmanOnly = server => Boolean(server?.capabilities) && server.capabilities.docker == null && engineList(server).length > 0;
 
 // Why a restore test on this server cannot run this app, or '' (the helper refuses it too, with the same reason).
 export function testServerProblem(site, server) {

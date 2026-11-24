@@ -87,6 +87,8 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
 
  return <form className="modal-body site-wizard rt-form" onSubmit={save} noValidate>
   {!isAdmin&&<p className="t-caption">Only an administrator can change these settings.</p>}
+   {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="rt-engine"><span>Engine</span><RuntimeBadge runtime={site.config.runtime}/></div>}
+   {engineProblem&&<AlertPanel variant="warning" title={`${target.name} cannot test ${site.name}`}>{engineProblem}</AlertPanel>}
    <div className="sb-switch-row">
     <span className="sb-switch-text"><span id="rt-auto" className="sb-switch-label">Auto tests</span><span id="rt-auto-help" className="t-caption">Restores your latest backup and checks it.</span></span>
     <button type="button" role="switch" className="switch" aria-checked={form.enabled} aria-labelledby="rt-auto" aria-describedby="rt-auto-help" disabled={!isAdmin} onPointerDown={event=>event.preventDefault()} onClick={()=>set({enabled:!form.enabled})}></button>
@@ -94,8 +96,6 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
    <label className="field"><span>How often</span>
     <select value={form.cadence} disabled={!form.enabled||!isAdmin} onChange={event=>set({cadence:event.target.value})}>{CADENCES.map(([value,text])=><option key={value} value={value}>{text}</option>)}</select>
    </label>
-   {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="rt-engine"><span>Engine</span><RuntimeBadge runtime={site.config.runtime}/></div>}
-   {engineProblem&&<AlertPanel variant="warning" title={`${target.name} cannot test ${site.name}`}>{engineProblem}</AlertPanel>}
    <label className="field"><span>Test server</span>
     <select value={form.serverId} disabled={!isAdmin} onChange={event=>set({serverId:event.target.value,allow:false})}>
      <option value="">Choose a server</option>
