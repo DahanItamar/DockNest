@@ -1,0 +1,120 @@
+name: Environment live checks
+# Manual only (workflow_dispatch): never on pull requests or pushes, and never part of the required gate or the release gate.
+# These jobs need things a normal Verify run cannot give: a real rootless Docker, a real rootless Podman, a real WebDAV
+# server through the pinned rclone. They run on a GitHub-hosted Ubuntu runner with fake data only (scripts/integration-env-live.js)
+# and record their result in data/qa/env-live-<scenario>.json. Results go into docs/live-checks-3.0.0.md.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Which live check to run'
+        type: choice
+        required: true
+        default: all
+        options: [all, rootless-docker, rootless-podman, webdav, no-delegation]
+permissions:
+  contents: read
+concurrency:
+  group: env-live-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  rootless-docker:
+    if: inputs.only == 'all' || inputs.only == 'rootless-docker'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --no-addons scripts/integration-env-live.js
+        env:
+          LIVE_SCENARIO: rootless-docker
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: env-live-rootless-docker
+          path: data/qa/env-live-rootless-docker.json
+          if-no-files-found: ignore
+  rootless-podman:
+    if: inputs.only == 'all' || inputs.only == 'rootless-podman'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --no-addons scripts/integration-env-live.js
+        env:
+          LIVE_SCENARIO: rootless-podman
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: env-live-rootless-podman
+          path: data/qa/env-live-rootless-podman.json
+          if-no-files-found: ignore
+  no-delegation:
+    if: inputs.only == 'all' || inputs.only == 'no-delegation'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --no-addons scripts/integration-env-live.js
+        env:
+          LIVE_SCENARIO: no-delegation
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: env-live-no-delegation
+          path: data/qa/env-live-no-delegation.json
+          if-no-files-found: ignore
+  webdav:
+    if: inputs.only == 'all' || inputs.only == 'webdav'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # The same pinned linux/amd64 rclone the image ships (Dockerfile ARG RCLONE_VERSION and RCLONE_SHA256), checked before use.
+      - name: Install the pinned rclone
+        run: |
+          version=$(sed -n 's/^ARG RCLONE_VERSION=//p' Dockerfile)
+          sha=$(sed -n 's/^ARG RCLONE_SHA256=//p' Dockerfile)
+          curl --fail --silent --show-error --location "https://downloads.rclone.org/${version}/rclone-${version}-linux-amd64.zip" --output /tmp/rclone.zip
+          echo "${sha}  /tmp/rclone.zip" | sha256sum --check
+          mkdir -p /tmp/rclone-bin
+          unzip -j /tmp/rclone.zip "rclone-${version}-linux-amd64/rclone" -d /tmp/rclone-bin
+          chmod 0755 /tmp/rclone-bin/rclone
+          /tmp/rclone-bin/rclone version
+      - run: node --no-addons scripts/integration-env-live.js
+        env:
+          LIVE_SCENARIO: webdav
+          DOCKNEST_RCLONE_BIN: /tmp/rclone-bin/rclone
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: env-live-webdav
+          path: data/qa/env-live-webdav.json
+          if-no-files-found: ignore
