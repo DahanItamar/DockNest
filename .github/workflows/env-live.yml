@@ -4,6 +4,8 @@ name: Environment live checks
 # server through the pinned rclone. They run on a GitHub-hosted Ubuntu runner with fake data only (scripts/integration-env-live.js)
 # and record their result in data/qa/env-live-<scenario>.json. Results go into docs/live-checks-3.0.0.md.
 on:
+  push:
+    branches: [ci/env-live-checks]
   workflow_dispatch:
     inputs:
       only:
@@ -41,7 +43,7 @@ jobs:
           path: data/qa/env-live-rootless-docker.json
           if-no-files-found: ignore
   rootless-podman:
-    if: inputs.only == 'all' || inputs.only == 'rootless-podman'
+    if: github.event_name == 'push' || inputs.only == 'all' || inputs.only == 'rootless-podman'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
