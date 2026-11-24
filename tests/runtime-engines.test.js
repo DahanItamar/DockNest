@@ -185,9 +185,10 @@ test('server cleanup knows the Podman and rootless kinds', async () => {
 test('engines whose container list failed are reported with a fixed reason, only for reported engines', () => {
   const caps = { engines: reported };
   assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'failed' }]);
-  for (const bad of [{ runtime: alice, reason: 'the engine said secret things' }, { runtime: { ...alice, uid: 1003 }, reason: 'failed' }, { runtime: { engine: 'docker', rootless: false }, reason: 'failed' }, { runtime: 'x', reason: 'failed' }, null, 5])
+  for (const bad of [{ runtime: alice, reason: 'the engine said secret things' }, { runtime: { ...alice, uid: 1003 }, reason: 'failed' }, { runtime: { engine: 'docker', rootless: false }, reason: 'the engine said secret things' }, { runtime: { engine: 'docker', rootless: false }, reason: 'timeout' }, { runtime: 'x', reason: 'failed' }, null, 5])
     assert.deepEqual(cleanEngineErrors([bad], caps), [], JSON.stringify(bad));
   assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'timeout' }, { runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'timeout' }], 'one entry per engine');
+  assert.deepEqual(cleanEngineErrors([{ runtime: { engine: 'docker', rootless: false }, reason: 'failed' }], caps), [{ runtime: { engine: 'docker', rootless: false }, reason: 'failed' }], 'stopped rootful Docker is reported');
   assert.deepEqual(cleanEngineErrors('x', caps), []); assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], {}), []);
 });
 

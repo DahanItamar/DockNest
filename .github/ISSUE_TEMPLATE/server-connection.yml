@@ -27,6 +27,14 @@ body:
     validations:
       required: false
   - type: input
+    id: nas
+    attributes:
+      label: System
+      description: "synology or unraid when the server is that NAS. Filled in by DockNest."
+      placeholder: "unraid"
+    validations:
+      required: false
+  - type: input
     id: check
     attributes:
       label: Failed check

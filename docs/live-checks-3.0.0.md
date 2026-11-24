@@ -18,9 +18,9 @@ called validated. A real backup or restore is not marked validated without a Lin
 
 - [ ] The runtime image is built for amd64 and loaded over SSH (`docker load`) on a NAS with no Python.
 - [x] TrueNAS SCALE 25.x lab: connect, discover apps, back up, restore test (see the 2026-11-24 results); 24.04 is refused with the Kubernetes message (unit tests only).
-- [ ] Unraid (needs a USB-stick test machine): connect, key persistence after reboot, template apps discovered, backup and restore.
+- [ ] Unraid (hidden in 3.0.0, early access under Settings; not tested): connect, key persistence after reboot, template apps discovered, backup and restore.
 - [ ] Unraid Compose Manager stacks are reported as unsupported, not half-backed-up.
-- [ ] Synology DSM: connect with a sudo user, Container Manager projects, backup and restore.
+- [ ] Synology DSM (hidden in 3.0.0, early access under Settings): not tested; a Synology server connects as a normal Linux server with the plain info line.
 - [ ] A NAS user without passwordless sudo gets the one-line fix.
 
 ## Podman and rootless Docker (docs/podman-rootless-adr.md)
@@ -39,9 +39,9 @@ called validated. A real backup or restore is not marked validated without a Lin
 
 ## Client reports and recovery time
 
-- [ ] SMTP: a test email and the day-1 email arrive with the PDF attached (under 8 MB); a failed send retries and then alerts.
-- [ ] Recovery time: the "may be low" note appears after real backups grow more than 50% past the tested one, and "not recent" after twice the test cadence.
-- [ ] The PDF opens in common viewers, Hebrew names render, and no address, path or login appears in it.
+- [x] SMTP: a test email and the day-1 email arrive with the PDF attached (under 8 MB); a failed send retries and then alerts.
+- [x] PASS (2026-11-24, integration head 585e817, fake database rows): recovery time flags. A newest backup twice the tested size gives `mayBeLow: true`; a passed test 40 days old on the weekly default gives `stale: true`; a fresh, same-size test gives neither. Still to see on a real restore: the same flags after real backups grow.
+- [x] PASS (2026-11-24, fake data, throwaway data folder): a client report PDF with a Hebrew client name and Hebrew app names is 329 KB for 3 apps and 3 pages (limit 8 MB). Page 1 rendered to PNG: Hebrew is right to left and real glyphs, no boxes. Text extraction of the whole PDF holds no server name, host, IP, port, SSH user, container name, path or email address, only the owner-typed contact line and the DockNest credit. The PDF itself has no "may be low" or "not recent" wording; those notes are on screen only. Still open: opening it in other common viewers.
 
 ## Results: local lab run, 2026-11-24
 
@@ -63,7 +63,7 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
 | WebDAV through rclone | skipped | The pinned rclone is linux/amd64 and only inside the image; this PC has no Docker daemon and no rclone, and downloading one was not done. |
 | Rootless Podman and rootless Docker | skipped: no VM | The only lab VM is the rootful TrueNAS one. Creating a Linux VM needs the owner's OK. |
 | Helper runtime image over `docker load` | skipped | The VM has Docker, but this PC cannot build the pinned amd64 image tar (no Docker), and TrueNAS has Python so it uses the host runtime. The Linux integration job covers the load path. |
-| Cloud drives, Unraid, Synology, SMTP and PDF checks | not in scope | They need an account, a USB-stick machine or hardware. |
+| Cloud drives, Unraid and Synology (early access in 3.0.0), SMTP and PDF checks | not in scope | They need an account, a USB-stick machine or hardware. |
 
 ### Bugs found
 
@@ -102,3 +102,15 @@ Bug 1 above is fixed; bug 2 is by design; bug 3 (the red maintenance message) is
 
 - Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema).
 - The lab fixture app must exit with code 0 on SIGTERM, or the clean shutdown check fails by design ("running, nonzero exit or OOM").
+
+## Results: live SMTP check, 2026-11-24
+
+Run on the integration branch with a throwaway data directory, a test mail account (Gmail, smtp.gmail.com:587 STARTTLS, app password) and fake client and app data. Receipt was checked over IMAP. No address or secret is recorded here.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Test email arrives | pass | Arrived in the test inbox within 2 seconds of sending. |
+| Client report email arrives with the PDF attached, under 8 MB | pass | Arrived with `docknest-report-2026-11.pdf` attached, about 0.3 MB. |
+| Wrong password retries, then raises exactly one alert | pass | Three retries (1, 2 and 3 hours, driven by the attempt clock), then `failed` with "refused the user name or password"; no alert during retries, exactly one `report.failed` alert after. |
+
+The "Client reports and recovery time" SMTP line above is satisfied by this run. Not covered here: the day-1 schedule timing in real time, and the recovery-time and PDF-viewer lines.

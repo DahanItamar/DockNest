@@ -78,6 +78,8 @@ test('error mapping turns known rclone failures into plain reasons and drops eve
     ['error listing: directory not found', 3, 'drive', 'not_found', /not on Google Drive/],
     ['object not found', 4, 'webdav', 'not_found', /not on WebDAV/],
     ['dial tcp: lookup nas.example.invalid: no such host', 1, 'smb', 'network', /could not be reached/],
+    ['Get "https://www.googleapis.com/drive/v3/about": tls: failed to verify certificate: x509: certificate signed by unknown authority', 1, 'drive', 'tls', /certificate was not accepted/],
+    ['x509: certificate has expired or is not yet valid', 1, 'webdav', 'tls', /could not be trusted/],
     ['something nobody has seen before', 1, 'drive', 'failed', /did not accept the request/],
   ];
   for (const [stderr, code, backend, reason, message] of cases) {

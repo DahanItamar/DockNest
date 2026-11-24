@@ -9,8 +9,8 @@ The "+" beside a server on the Map offers **New site**. The owner gives a Compos
 DockNest checks the server, deploys the site, sets up nginx and a certificate (offering to install missing tools with
 the existing install flow), and turns on backups and restore tests from the first day.
 
-Real launches count as validated only when the Linux integration test below passes (see AGENTS.md). Until then the
-feature ships with the "beta" label.
+Real launches count as validated only when the Linux integration test below passes (see AGENTS.md). Until then it is
+not claimed as validated.
 
 ## Goals
 

@@ -42,7 +42,8 @@ test('wizard text: Unraid key command is persistent and takes only a DockNest ke
   const command = unraidInstallCommand(key);
   assert.match(command, /\/boot\/config\/ssh\/root\/authorized_keys/);
   assert.throws(() => unraidInstallCommand("ssh-rsa AAA docknest'; rm -rf / #"));
-  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }), SYNOLOGY_RESET_HINT);
+  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }, { synology: true }), SYNOLOGY_RESET_HINT);
+  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }), null, 'no hint while Synology support is off');
   assert.equal(loginHint({ capabilities: '{"nas":{"kind":"unraid"}}' }, { level: 'client-authentication' }), null);
   assert.equal(loginHint({ capabilities: null }, { level: 'client-authentication' }), null);
 });
@@ -55,4 +56,12 @@ test('Unraid key command keeps existing keys and is idempotent', () => {
   assert.ok(command.includes('[ -s /boot/config/ssh/root/authorized_keys ] || cp /root/.ssh/authorized_keys /boot/config/ssh/root/authorized_keys'));
   assert.ok(!command.includes('cp /boot'), 'the persistent file never overwrites /root keys');
   assert.equal((command.match(/grep -qxF/g) || []).length, 2);
+});
+
+test('a refusal says its fix once: the TrueNAS message already ends with it', async () => {
+  const sentence = 'TrueNAS apps before 24.10 run on Kubernetes, which DockNest does not back up. Update TrueNAS to 24.10 or newer.';
+  const old = { nas: { kind: 'truenas', version: '24.04.2' }, identity: 'sudo', ready: false, checks: [{ id: 'nas-version', status: 'fail', message: sentence, fix: 'Update TrueNAS to 24.10 or newer.' }] };
+  await assert.rejects(connectCapabilities({ username: 'admin' }, { inspect: async () => old, test: async () => ({ uid: 0 }) }), error => error.message === sentence && error.fix === 'Update TrueNAS to 24.10 or newer.');
+  const other = { nas, identity: 'sudo', ready: false, checks: [{ id: 'docker', status: 'fail', message: 'Docker was not found.', fix: 'Install or start Docker on the server.' }] };
+  await assert.rejects(connectCapabilities({ username: 'admin' }, { inspect: async () => other, test: async () => ({ uid: 0 }) }), error => error.message === 'Docker was not found. Install or start Docker on the server.');
 });
