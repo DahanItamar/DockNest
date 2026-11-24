@@ -289,6 +289,8 @@ try {
   await runRestoreCheckScenario({run,hosts,servers,db,record});
   const {runStackManagersScenario}=await import('./integration-stack-managers.js');
   await runStackManagersScenario({run,hosts,servers,record});
+  const {runHelperRuntimeScenario}=await import('./integration-helper-runtime.js');
+  await runHelperRuntimeScenario({run,hosts,servers,record});
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
   const {runCopiesScenario,runHardenedRestoreScenario}=await import('./integration-copies.js');

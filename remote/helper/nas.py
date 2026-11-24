@@ -22,6 +22,7 @@ NAS_FILE_LIMIT=4096
 TRUENAS_TOO_OLD='TrueNAS apps before 24.10 run on Kubernetes, which DockNest does not back up. Update TrueNAS to 24.10 or newer.'
 TRUENAS_APPS_ROOT='/mnt/.ix-apps/app_configs'
 SYNOLOGY_PROJECT=re.compile(r'/volume[0-9]{1,2}/docker/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:/.*)?')
+UNRAID_COMPOSE=re.compile(r'/boot/config/plugins/compose\.manager/projects/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:/.*)?')
 TRUENAS_APP=re.compile(re.escape(TRUENAS_APPS_ROOT)+r'/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:/.*)?')
 def nas_text(value,limit):
     """A short single-line printable string, else None."""
@@ -89,7 +90,11 @@ def nas_app(container,kind,templates):
     name=str(container.get('Name','')).lstrip('/')
     if kind=='unraid':
         template=templates.get(name)
-        return {'manager':'unraid-template','displayName':template['name'],'webUi':template['webUi'],'icon':template['icon'],'templateFile':template['templateFile']} if template else None
+        if template:return {'manager':'unraid-template','displayName':template['name'],'webUi':template['webUi'],'icon':template['icon'],'templateFile':template['templateFile']}
+        # Compose Manager plugin projects are plain Compose projects kept in a persistent folder: named only, read-only.
+        working=str((container.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project.working_dir',''))
+        match=len(working)<=1024 and '..' not in working.split('/') and UNRAID_COMPOSE.fullmatch(working)
+        return {'manager':'unraid-compose-manager','displayName':match[1],'project':match[1]} if match else None
     folders=[labels.get('com.docker.compose.project.working_dir','')]+[part.strip() for part in str(labels.get('com.docker.compose.project.config_files','')).split(',')][:8]
     pattern,manager=(SYNOLOGY_PROJECT,'synology-project') if kind=='synology' else (TRUENAS_APP,'truenas-app') if kind=='truenas' else (None,None)
     for value in folders:
@@ -147,9 +152,20 @@ def put_back_template(archive,original,scratch,folder=UNRAID_TEMPLATES):
             except OSError:pass
     finally:shutil.rmtree(scratch,ignore_errors=True)
 def nas_template_restore(req):
+    """After an app restore: put back every captured Unraid template named in the backup's manifest. The request holds only the
+    job; the manifest and archives are the ones the restore already verified inside this job's folder."""
     root=owned_job_root(req).resolve()
-    archive=pathlib.Path(str(req['archive'])).resolve()
-    if root not in archive.parents or not archive.is_file() or archive.is_symlink():raise ValueError('The template archive must be inside this restore job')
     facts=nas_version_facts()
     if not facts or facts['kind']!='unraid':raise ValueError('Unraid templates are only put back on an Unraid server')
-    emit(result=put_back_template(archive,req['original'],root/('nas-template-'+uuid.uuid4().hex)))
+    unpacked=root/'unpacked'
+    manifest_file=unpacked/'manifest.json'
+    if not manifest_file.is_file() or manifest_file.is_symlink():emit(result={'templates':[]});return
+    manifest=json.loads(manifest_file.read_text())
+    results=[]
+    for index,original in enumerate(manifest.get('configurationFiles') or []):
+        if not isinstance(original,str) or not UNRAID_TEMPLATE_PATH.fullmatch(original):continue
+        archive=(unpacked/('config-%d.tar'%index)).resolve()
+        if root not in archive.parents or not archive.is_file() or archive.is_symlink():results.append({'status':'missing','path':original});continue
+        try:results.append(put_back_template(archive,original,root/('nas-template-'+uuid.uuid4().hex),UNRAID_TEMPLATES))
+        except ValueError as error:results.append({'status':'refused','path':original,'reason':str(error)[:200]})
+    emit(result={'templates':results})
