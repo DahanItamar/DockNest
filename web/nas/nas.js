@@ -4,7 +4,9 @@
 export const NAS_NAMES = Object.freeze({ unraid: 'Unraid NAS', synology: 'Synology NAS', truenas: 'TrueNAS NAS' });
 export const nasName = kind => (Object.hasOwn(NAS_NAMES, kind) ? NAS_NAMES[kind] : null);
 // What the system itself is called in the connect wizard.
-export const NAS_TYPES = Object.freeze([['', 'Linux server'], ['unraid', 'Unraid'], ['synology', 'Synology DSM'], ['truenas', 'TrueNAS SCALE']]);
+export const NAS_TYPES = Object.freeze([['', 'Linux server'], ['unraid', 'Unraid'], ['truenas', 'TrueNAS SCALE']]);
+// Synology is offered only after an administrator turns it on in Settings.
+export const nasTypes = synology => (synology ? Object.freeze([...NAS_TYPES.slice(0, 2), ['synology', 'Synology DSM'], ...NAS_TYPES.slice(2)]) : NAS_TYPES);
 
 export const MANAGER_LABELS = Object.freeze({
   'unraid-template': 'Unraid template',

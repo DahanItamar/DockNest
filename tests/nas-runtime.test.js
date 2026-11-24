@@ -104,7 +104,7 @@ const unraidFiles = { '/etc/unraid-version': 'version="6.12.10"\n' };
 
 test('NAS detection from file samples', async () => {
   assert.deepEqual(await detectNas(fakeRun({ files: unraidFiles }).run), { kind: 'unraid', version: '6.12.10' });
-  assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x=1', '/etc.defaults/VERSION': 'majorversion="7"\nproductversion="7.2.1"\n' } }).run), { kind: 'synology', version: '7.2.1' });
+  assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x=1', '/etc.defaults/VERSION': 'majorversion="7"\nproductversion="7.2.1"\n' } }).run, { synology: true }), { kind: 'synology', version: '7.2.1' });
   assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/version': 'TrueNAS-SCALE 25.10.0\n', midclt: 1 } }).run), { kind: 'truenas', version: '25.10.0' });
   assert.equal(await detectNas(fakeRun({ files: { '/etc/version': 'TrueNAS-SCALE 25.10.0\n' } }).run), null, 'midclt is required');
   assert.equal(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x' } }).run), null);

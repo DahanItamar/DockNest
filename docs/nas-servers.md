@@ -1,6 +1,6 @@
 # NAS servers: helper runtime and sudo mode (backend)
 
-Backend building blocks for Unraid, Synology DSM and TrueNAS SCALE. Nothing here changes a server that is not detected
+Backend building blocks for TrueNAS SCALE and Unraid. Synology DSM is built but hidden in 3.0.0 (see below). Nothing here changes a server that is not detected
 as a NAS: those keep the exact command and root identity DockNest has always used. The screens, discovery of NAS app
 managers and the connect wizard come in later changes.
 
@@ -34,7 +34,7 @@ Read-only and only on a detected NAS; any other server's discovery answer is unc
 - **Unraid**: templates in `/boot/config/plugins/dockerMan/templates-user/my-*.xml` (64 KB each, 500 at most; a DOCTYPE or entity refuses the file) are matched to containers by name. Each container gets `nasApp` (`manager: 'unraid-template'`, display name, WebUI text, icon URL as text, never fetched; the WebUI text is untrusted, so screens show it as text or check for an http(s) scheme first) and the template file is added to its configuration files, so a backup captures it.
 - **Put back**: after an app restore succeeds on an Unraid server, the worker calls the helper operation `nas-template-restore` (only the job id). The helper reads the templates named in the verified backup manifest and writes each back only into that folder, never over a different file (`restored`, `unchanged`, `kept-existing`, `missing` or `refused`). The result keeps only those statuses (`result.nasTemplates`); a failure is a note, never a failed restore.
 - **Unraid Compose Manager** plugin projects (`/boot/config/plugins/compose.manager/projects/<name>`) are named read-only from a container's Compose label (`manager: 'unraid-compose-manager'`); DockNest does not capture or restore the plugin's own files.
-- **Synology**: Container Manager projects (`/volume<N>/docker/<project>`) from a container's Compose labels (`manager: 'synology-project'`).
+- **Synology** (hidden in 3.0.0): Container Manager projects (`/volume<N>/docker/<project>`) from a container's Compose labels (`manager: 'synology-project'`).
 - **TrueNAS SCALE 24.10 and newer**: apps from `/mnt/.ix-apps/app_configs/<app>` Compose labels (`manager: 'truenas-app'`). DockNest never calls `midclt`. Older SCALE is refused with the message about Kubernetes.
 
 ## Helper runtime image (NAS without Python)
@@ -50,7 +50,7 @@ Read-only and only on a detected NAS; any other server's discovery answer is unc
 
 ## Screens
 
-- **Server card and Map panel**: the NAS name (Unraid, Synology or TrueNAS) sits next to the connection status. The Map panel of a NAS lists Readiness first (helper runtime, staging folder on the pool, Docker, SSH key warning with a copy-fix button), loaded from `GET /api/servers/:id/nas` (administrators; read-only, nothing stored). Details do not repeat the helper runtime, staging folder or Docker rows.
+- **Server card and Map panel**: the NAS name (Unraid or TrueNAS) sits next to the connection status. The Map panel of a NAS lists Readiness first (helper runtime, staging folder on the pool, Docker, SSH key warning with a copy-fix button), loaded from `GET /api/servers/:id/nas` (administrators; read-only, nothing stored). Details do not repeat the helper runtime, staging folder or Docker rows.
 - **Discover**: each app names the manager the NAS uses (Unraid template, Compose Manager project, Container Manager project, TrueNAS app). The Unraid WebUI setting is shown as plain text only, never a link. An unsupported TrueNAS version shows "This TrueNAS version is not supported" with the exact message.
 - **Connect wizard**: a System type choice shows the identity advice and steps from `src/nas/guidance.js`, accepts a root or passwordless-sudo account, uses the persistent Unraid key command, and lets a NAS without Python paste its SHA256 host key fingerprint.
 - **Recovery Guide**: the apps table has an "Expected time to recover" column from `shared/recovery-time.js` (measured by the newest passed restore test, "Not measured yet" otherwise). It joins the guide's digest only once an app has a measured time, so a guide made earlier stays current until then.
@@ -70,3 +70,13 @@ Replacement restores (`replace` mode) are refused on every server, NAS included,
 ## Not in this change
 
 Pool-aware staging for every helper operation through the container runtime, the Synology Docker path, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
+
+## Synology (hidden in 3.0.0)
+
+Synology DSM support is written but has never run on real hardware, so DockNest does not offer it. `SYNOLOGY_ENABLED` in `src/nas/synology-gate.js` is the default (false). While it is off:
+
+- A Synology server is not detected as a NAS. If it connects as root it is a normal Linux server with Docker. Readiness shows one line: "Synology support is coming in a later update. You can still connect it as a normal Linux server with Docker."
+- A non-root Synology user is refused with that line. Container Manager projects are never listed or backed up as projects.
+- The connect wizard, Map and Discover show no Synology option, label or text.
+
+An administrator can opt in under Settings > NAS servers > "Synology support" (Beta, off by default). The choice is stored as the `synology_enabled` setting (no row means off, so older installs need no migration). Problem reports from Synology servers carry the non-identifying `nas=synology` field. The unit tests force the gate on where they test Synology itself (`tests/nas-synology-gate.test.js` covers the gate-off path).

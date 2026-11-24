@@ -29,9 +29,11 @@ grep -qxF '${publicKey}' /root/.ssh/authorized_keys || printf '%s
 chmod 700 /root/.ssh
 chmod 600 /root/.ssh/authorized_keys`;
 }
+// The wizard text without Synology, which is shown only after an administrator opts in (src/nas/synology-gate.js).
+export const nasWizard = synology => (synology ? NAS_WIZARD : Object.freeze(Object.fromEntries(Object.entries(NAS_WIZARD).filter(([kind]) => kind !== 'synology'))));
 // Only a Synology login failure gets the reset hint: it is a known cause there, not a guess for other systems.
-export function loginHint(server, error) {
+export function loginHint(server, error, { synology = false } = {}) {
   let kind = null;
   try { const facts = typeof server?.capabilities === 'string' ? JSON.parse(server.capabilities) : server?.capabilities; kind = facts?.nas?.kind ?? null; } catch { kind = null; }
-  return kind === 'synology' && (error?.level === 'client-authentication' || error?.code === 'ECONNREFUSED') ? SYNOLOGY_RESET_HINT : null;
+  return synology && kind === 'synology' && (error?.level === 'client-authentication' || error?.code === 'ECONNREFUSED') ? SYNOLOGY_RESET_HINT : null;
 }

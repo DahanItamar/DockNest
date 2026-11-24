@@ -63,7 +63,8 @@ import { withoutNasFacts } from './nas/readiness.js';
 import { connectCapabilities, ConnectRefused } from './nas/connect.js';
 import { inspectNas } from './nas/service.js';
 import { forgetRuntime } from './nas/runtime-prepare.js';
-import { NAS_WIZARD, loginHint } from './nas/guidance.js';
+import { nasWizard, loginHint } from './nas/guidance.js';
+import { synologyEnabled, setSynologyEnabled, withoutSynology } from './nas/synology-gate.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -222,7 +223,9 @@ for (const [name, { table, time, only }] of Object.entries(histories)) app.get('
   const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null, chains = backups ? chainViews(page) : null;
   res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id), ...chains.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
-app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand,nas:NAS_WIZARD}));
+app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand,nas:nasWizard(synologyEnabled(db)),synologyEnabled:synologyEnabled(db)}));
+app.get('/api/settings/synology', requireAdmin, (_req,res) => res.json({enabled:synologyEnabled(db)}));
+app.put('/api/settings/synology', requireAdmin, (req,res) => { const {enabled}=z.object({enabled:z.boolean()}).strict().parse(req.body); setSynologyEnabled(enabled,db); audit(req.user.id,enabled?'settings.synology_on':'settings.synology_off'); res.json({enabled}); });
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
   const result=await prepareServerKey();
   audit(req.user.id,'server.key_prepared');
@@ -271,17 +274,18 @@ app.post('/api/servers/:id/test', async (req, res) => {
     let previous = {}; try { previous = JSON.parse(server.capabilities || '{}') || {}; } catch { previous = {}; }
     db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...withoutNasFacts(result) }), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
-  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); const hint = loginHint(server, error); if (hint) error.message = hint; throw Object.assign(error, serverTestFailure(error)); }
+  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); const hint = loginHint(server, error, { synology: synologyEnabled(db) }); if (hint) error.message = hint; throw Object.assign(error, serverTestFailure(error)); }
 });
 // Read-only NAS readiness for the server panel: identity, helper runtime, staging folder, Docker and key persistence, each
 // failed check with one fix. Runs fixed argv commands over SSH, changes nothing and stores nothing.
 app.get('/api/servers/:id/nas', requireAdmin, rateLimit('server-nas', 20, 60_000), async (req, res) => {
   const server = getServer(req.params.id);
-  const { nas, identity, helperRuntime, stagingBase, ready, checks } = await inspectNas(server);
-  res.json({ nas: nas ?? null, identity: identity ?? null, helperRuntime: helperRuntime ?? null, stagingBase: stagingBase ?? null, ready: Boolean(ready), checks: checks ?? [] });
+  const { nas, identity, helperRuntime, stagingBase, ready, checks, synologyOff } = await inspectNas(server);
+  res.json({ nas: nas ?? null, ...(synologyOff ? { synologyOff: true } : {}), identity: identity ?? null, helperRuntime: helperRuntime ?? null, stagingBase: stagingBase ?? null, ready: Boolean(ready), checks: checks ?? [] });
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
-  const result = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
+  const found = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
+  const result = synologyEnabled(db) || Array.isArray(found) ? found : withoutSynology(found);
   const containers = Array.isArray(result) ? result : result.containers || [];
   res.json({ nas: result.nas ?? null, staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });

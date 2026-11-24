@@ -27,6 +27,14 @@ body:
     validations:
       required: false
   - type: input
+    id: nas
+    attributes:
+      label: System
+      description: "synology when the server is a Synology NAS. Filled in by DockNest."
+      placeholder: "synology"
+    validations:
+      required: false
+  - type: input
     id: job_type
     attributes:
       label: Job type

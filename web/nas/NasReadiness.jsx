@@ -30,7 +30,7 @@ export function NasReadiness({api,server,onSessionExpired}){
   <h3 className="map-group-title">Readiness</h3>
   {loading&&<p className="map-caption" role="status">Checking this NAS{'…'}</p>}
   {error&&<p className="map-caption bad" role="alert">{error}</p>}
-  {!loading&&!error&&result&&!result.nas&&<p className="map-caption">This server is not a Unraid, Synology or TrueNAS system.</p>}
+  {!loading&&!error&&result&&!result.nas&&<p className="map-caption">{result.synologyOff?result.checks?.[0]?.message:'This server is not a Unraid or TrueNAS system.'}</p>}
   {!loading&&!error&&result?.nas&&<>
    {identityText(result.identity)&&<p className="map-caption">{identityText(result.identity)}</p>}
    <ul className="nas-checks">{checks.filter(check=>!(check.status==='ok'&&['nas-version','identity'].includes(check.id))).map(check=>{const Icon=ICON[check.status],good=check.status==='ok',[title,detail]=good&&check.id==='runtime'?[runtimeTitle(result),check.message]:good&&check.id==='staging'?['Staging folder on the pool',`${result.stagingBase}${Number.isFinite(check.freeBytes)?' · '+formatBytes(check.freeBytes)+' free':''}`]:[check.message,check.fix?`Fix: ${check.fix}`:''];

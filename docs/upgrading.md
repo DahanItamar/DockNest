@@ -390,7 +390,7 @@ If more migrations land before the release, they are added here. If more migrati
 
 - Backup format 3 (`formatVersion: 3`) is written only for Podman and rootless apps. Docker apps keep the older format. DockNest 2.16 and older refuse to restore format 3.
 - Cloud drives use a bundled rclone, `linux/amd64` only. Other CPU architectures get no cloud drive destinations.
-- NAS servers (Unraid, Synology, TrueNAS) connect as root, or as a non-root SSH user with passwordless sudo.
+- NAS servers (TrueNAS SCALE, Unraid) connect as root, or as a non-root SSH user with passwordless sudo.
 - Moving an app between container engines is not supported yet and is blocked.
 
 **Beta labels stay.** Features labelled beta in 2.16 (for example incremental backups, launching apps and safe changes) keep their label in 3.0.0 until the soak period on the owner's own servers ends. The label is removed in a later release, not by the upgrade.

@@ -25,7 +25,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Discovers the Docker projects and static nginx sites on each server you connect.
 - Backs up each app on its own schedule to encrypted SFTP or S3-compatible storage. Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults.
 - Verifies recovery points and restores them to a separate copy. The live app is not overwritten.
-- New in 3.0.0: measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (Unraid, Synology, TrueNAS); Podman and rootless Docker apps.
+- New in 3.0.0: measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (TrueNAS SCALE and Unraid; Synology comes later); Podman and rootless Docker apps.
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
@@ -52,7 +52,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
 - After every Self Backup, DockNest checks that the new recovery kit opens and holds the right key, and alerts you if it does not. See [kit check](docs/emergency-kit.md#kit-check).
-- NAS support: connect Unraid, Synology and TrueNAS systems (root or a passwordless-sudo user, with a helper runtime container when the NAS has no Python), see readiness on the Map, and find the apps the NAS manages. See [NAS servers](docs/nas-servers.md).
+- NAS support: connect TrueNAS SCALE and Unraid systems (root or a passwordless-sudo user, with a helper runtime container when the NAS has no Python), see readiness on the Map, and find the apps the NAS manages. Synology DSM comes in a later update; until then it connects as a normal Linux server with Docker, and an early-access switch is under Settings. See [NAS servers](docs/nas-servers.md).
 - Recovery Guide: plain steps and the exact commands to bring every app back on a new server, as a PDF to print or keep with the emergency kit, also in Hebrew. Open it from Recovery Guide in the menu, choose the apps and what goes in, and download. A copy without logins is saved next to the recovery kit after every Self Backup. See [Recovery Guide](docs/recovery-guide.md).
 - Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time. Backups can also go to Google Drive, OneDrive, Dropbox, WebDAV, an SMB share or a mounted local folder. See [cloud drives](docs/cloud-drives.md).
@@ -225,7 +225,7 @@ Upgrading from 2.16.x to 3.0.0 (the 3.0.0 development line) adds only compatible
 
 - Backups of Podman and rootless apps use backup format 3 (`formatVersion: 3`); 2.16 and older cannot restore them. Docker apps keep the older format.
 - Cloud drives use a bundled rclone that exists for `linux/amd64` only.
-- A NAS (Unraid, Synology, TrueNAS) connects as root, or as a non-root SSH user with passwordless sudo.
+- A NAS (Unraid, TrueNAS) connects as root, or as a non-root SSH user with passwordless sudo.
 - Moving an app between container engines is not supported yet.
 
 Before going back to 2.11 from 2.12, turn incremental backups off for every app, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path is in use on a real Linux Docker host.
