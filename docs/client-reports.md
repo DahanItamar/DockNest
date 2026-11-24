@@ -15,7 +15,7 @@ The accent is stored as a name from a fixed list (default, blue, green, amber, r
 For a calendar month, or any range of up to 92 days:
 
 - **Summary:** the client name, the period, and one line per app: backups taken and due, the last restore test, the
-  recovery time ("Back in about 12 min, proven 3 days ago") and an overall state: Good, Needs attention or Not protected.
+  recovery time ("Back in about 12 min, proven 3 days ago", followed by "(not recent)" for an old test or "(backups grew since the test, so this may be low)", as on the screens) and an overall state: Good, Needs attention or Not protected.
 - **Per app:** backups (taken, failed, missed, newest, what is kept now), extra copies (verified and not completed, named
   by kind only: "SFTP server" or "S3-compatible storage"), restore tests in the period, the certificate, the hardening
   grade and the domain checks. The certificate, hardening and domain lines say "as of" the day the report was made, as

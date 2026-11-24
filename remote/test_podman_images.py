@@ -19,8 +19,8 @@ def popen(action=None, hang=0):
     """A fake subprocess.Popen: wait() times out `hang` times, then `action(process)` runs and its result is the exit code."""
     calls = []
     class Process:
-        def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False):
-            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid = argv, stdin, stdout, stderr, start_new_session, FAKE_PID
+        def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False, cwd=None):
+            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid, self.cwd = argv, stdin, stdout, stderr, start_new_session, FAKE_PID, cwd
             self.returncode = None; self.waits = 0; self.terminated = False; self.killed = False; self.timeouts = []
             calls.append(self)
         def wait(self, timeout=None):
@@ -187,7 +187,7 @@ class SaveTests(unittest.TestCase):
             self.assertEqual(target.stat().st_size, 50 << 20)
             if os.name == 'posix': self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
         process = fake.calls[0]
-        self.assertEqual(process.argv[-4:], ['podman', 'save', 'sha256:a', 'sha256:b']); self.assertNotIn('-o', process.argv); self.assertNotIn(str(target), ' '.join(process.argv))
+        self.assertEqual(process.argv[-7:], ['podman', 'save', '--format', 'docker-archive', '--multi-image-archive', 'sha256:a', 'sha256:b']); self.assertNotIn('-o', process.argv); self.assertNotIn(str(target), ' '.join(process.argv))
         self.assertIsInstance(process.stdout, int, 'a file descriptor, never a pipe held in memory')
     def test_an_existing_file_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -212,5 +212,85 @@ class WiringTests(unittest.TestCase):
     def test_stopping_is_read_at_call_time_not_copied_at_import(self):
         text = (pathlib.Path(__file__).parent / 'helper' / 'runtime.py').read_text()
         self.assertNotIn('import STOPPING', text); self.assertNotIn('STOPPING,', text.split('# </build:header>')[0])
+
+class WorkdirTests(unittest.TestCase):
+    def test_a_rootless_engine_never_starts_in_a_folder_closed_to_its_user(self):
+        fake = popen()
+        with patch.object(subprocess, 'Popen', fake), helper.using_runtime(rootless()): helper.current_runtime().stream('load', poll=0.01)
+        self.assertEqual(fake.calls[0].cwd, '/')
+        for engine in ('docker', 'podman'):
+            runtime = rootless(engine)
+            with patch.object(helper, 'run', return_value=b'') as run, patch.object(runtime, 'check_socket'): runtime.cli('ps')
+            self.assertEqual(run.call_args.kwargs['cwd'], '/', engine)
+    def test_rootful_engines_keep_their_folder(self):
+        with patch.object(helper, 'run', return_value=b'') as run: helper.Runtime().cli('ps')
+        self.assertNotIn('cwd', run.call_args.kwargs, 'rootful Docker is called exactly as before')
+        self.assertIsNone(helper.Runtime('podman').workdir())
+        with patch.object(helper, 'run', return_value=b'') as run: helper.Runtime('podman').cli('ps')
+        self.assertNotIn('cwd', run.call_args.kwargs)
+    def test_a_caller_can_still_choose_a_folder(self):
+        runtime = rootless()
+        with patch.object(helper, 'run', return_value=b'') as run: runtime.cli('ps', cwd='/tmp')
+        self.assertEqual(run.call_args.kwargs['cwd'], '/tmp')
+
+class SessionBusTests(unittest.TestCase):
+    PATH = '/run/user/1001/bus'
+    def lstat(self, mode, uid=1001):
+        def lstat(path):
+            assert path == self.PATH
+            return type('S', (), {'st_mode': mode, 'st_uid': uid})()
+        return lstat
+    def test_only_rootless_podman_with_a_socket_of_its_user_gets_the_bus(self):
+        podman = rootless('podman')
+        self.assertEqual(podman.session_bus(self.lstat(stat.S_IFSOCK | 0o700)), 'unix:path=' + self.PATH)
+        for bad in (self.lstat(stat.S_IFSOCK | 0o700, uid=0), self.lstat(stat.S_IFREG | 0o600), self.lstat(stat.S_IFLNK | 0o777)):
+            self.assertIsNone(podman.session_bus(bad))
+        def missing(path): raise FileNotFoundError(path)
+        self.assertIsNone(podman.session_bus(missing))
+        self.assertIsNone(rootless('docker').session_bus(self.lstat(stat.S_IFSOCK | 0o700)), 'rootless Docker needs no session bus')
+        self.assertIsNone(helper.Runtime('podman').session_bus(self.lstat(stat.S_IFSOCK | 0o700)))
+    def test_argv_carries_the_bus_only_for_the_users_own_path(self):
+        podman = rootless('podman')
+        self.assertNotIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, podman.argv('ps'))
+        argv = podman.argv('ps', bus='unix:path=' + self.PATH)
+        self.assertEqual(argv[argv.index('env') + 1:argv.index('podman')][-1], 'DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH)
+        for other in ('unix:path=/run/user/0/bus', 'unix:path=/tmp/evil', 'tcp:host=x'):
+            self.assertFalse(any(part.startswith('DBUS_SESSION_BUS_ADDRESS') for part in podman.argv('ps', bus=other)), other)
+        self.assertFalse(any('DBUS' in part for part in rootless('docker').argv('ps', bus='unix:path=' + self.PATH)))
+        self.assertEqual(helper.Runtime('podman').argv('ps', bus='unix:path=' + self.PATH), ['podman', 'ps'])
+    def test_cli_and_stream_pass_the_checked_bus(self):
+        runtime = rootless('podman')
+        with patch.object(runtime, 'session_bus', return_value='unix:path=' + self.PATH), patch.object(helper, 'run', return_value=b'') as run:
+            runtime.cli('ps')
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, run.call_args[0][0])
+        fake = popen()
+        with patch.object(runtime, 'session_bus', return_value='unix:path=' + self.PATH), patch.object(subprocess, 'Popen', fake): runtime.stream('load', poll=0.01)
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, fake.calls[0].argv)
+        fake = popen()
+        with patch.object(runtime, 'session_bus', return_value=None), patch.object(subprocess, 'Popen', fake): runtime.stream('load', poll=0.01)
+        self.assertFalse(any('DBUS' in part for part in fake.calls[0].argv))
+
+class RestartReasonTests(unittest.TestCase):
+    def reason(self, *records):
+        with patch.object(helper, 'inspect', return_value=list(records)): return helper.restart_reason(['x'])
+    def record(self, name='shop', running=True, health=None):
+        state = {'Running': running}
+        if health is not None: state['Health'] = health
+        return {'Id': 'a' * 64, 'Name': '/' + name, 'State': state}
+    def test_a_health_check_that_never_started_is_named(self):
+        text = self.reason(self.record(health={'Status': 'starting', 'Log': []}))
+        self.assertIn('health check of shop never started', text); self.assertIn('rootless Podman', text); self.assertIn('watchdog remains armed', text)
+    def test_other_stalls_have_their_own_sentence(self):
+        self.assertIn('shop is not running', self.reason(self.record(running=False)))
+        self.assertIn('shop reports unhealthy', self.reason(self.record(health={'Status': 'unhealthy', 'Log': [{}]})))
+        self.assertIn('shop reports starting', self.reason(self.record(health={'Status': 'starting', 'Log': [{'ExitCode': 1}]})))
+    def test_nothing_specific_gives_no_reason_so_the_old_text_stays(self):
+        self.assertIsNone(self.reason(self.record(health={'Status': 'healthy'})))
+        self.assertIsNone(self.reason(self.record()))
+        with patch.object(helper, 'inspect', side_effect=RuntimeError('x')): self.assertIsNone(helper.restart_reason(['x']))
+        self.assertIsNone(helper.restart_reason([]))
+    def test_the_sentence_holds_names_only(self):
+        record = self.record(health={'Status': 'starting', 'Log': []}); record['Config'] = {'Env': ['TOKEN=' + 'x' * 5]}; record['State']['Health']['Log'] = []
+        self.assertNotIn('TOKEN', self.reason(record))
 
 if __name__ == '__main__': unittest.main()

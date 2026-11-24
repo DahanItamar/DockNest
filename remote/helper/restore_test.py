@@ -236,6 +236,33 @@ def image_archive_names(archive):
                     annotations=item.get('annotations') if isinstance(item,dict) else None
                     if isinstance(annotations,dict):names+=[str(annotations[key]) for key in ['io.containerd.image.name','org.opencontainers.image.ref.name'] if annotations.get(key)]
     return list(dict.fromkeys(names))
+# Podman's `save` of an image that has no name writes one made from its ID: localhost/<id>:latest. Only that exact form, and only when
+# the ID in it is the ID of the image the archive's own manifest holds, is not a name: it can never collide with a real image.
+IMAGE_CONFIG_LIMIT=1024*1024  # an image config is a few kilobytes; more is not an image DockNest made
+ID_DERIVED_NAME=re.compile(r'(?:localhost/)?([0-9a-f]{64})(?::latest)?')
+def image_archive_id_names(archive):
+    """The names in manifest.json that are only the ID of their own image (see ID_DERIVED_NAME). Anything else is not listed."""
+    allowed=set()
+    with tarfile.open(archive,'r:') as tar:
+        try:member=tar.getmember('manifest.json')
+        except KeyError:return allowed
+        if not member.isfile() or member.size>4*1024*1024:return allowed
+        data=json.loads(tar.extractfile(member).read())
+        for item in data if isinstance(data,list) else []:
+            if not isinstance(item,dict) or not isinstance(item.get('Config'),str):continue
+            config=re.fullmatch(r'(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?',item['Config'])
+            if not config:continue
+            # The ID of an image is the SHA-256 of its config file: the file itself must hash to the ID the name carries, not just be called that.
+            try:held=tar.getmember(item['Config'])
+            except KeyError:continue
+            if not held.isfile() or held.size>IMAGE_CONFIG_LIMIT:continue
+            digest=hashlib.sha256();source=tar.extractfile(held)
+            for chunk in iter(lambda:source.read(64*1024),b''):digest.update(chunk)
+            if digest.hexdigest()!=config.group(1):continue
+            for tag in item.get('RepoTags') or []:
+                named=ID_DERIVED_NAME.fullmatch(tag) if isinstance(tag,str) else None
+                if named and named.group(1)==config.group(1):allowed.add(tag)
+    return allowed
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return None
@@ -246,6 +273,8 @@ def load_images_keeping_tags(archive):
     """docker load for a restore or move. A DockNest backup saves images by ID, so an archive that names any image is not
     one DockNest made and is refused before loading; the tag restore after the load stays as a second guard."""
     try:names=image_archive_names(archive)
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
+    try:names=[name for name in names if name not in image_archive_id_names(archive)]
     except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
     if names:raise ValueError('The image archive names images (%s); DockNest backups save images by ID only, so it is not loaded.'%', '.join(names[:3]))
     state={'created':{'tags':[]}}

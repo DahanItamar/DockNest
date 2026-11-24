@@ -23,6 +23,21 @@ const FAILED_COPY = new Set(['failed', 'gave_up']);
 // Recovery time of a passed restore test, measured the same way as everywhere else (shared/recovery-time.js).
 const measured = test => formatRecoveryTime(recoveryTime(db.prepare('SELECT step,state,started_at,finished_at FROM restore_test_steps WHERE test_id=?').all(test.id), { result: 'passed', finished_at: test.finished_at })?.seconds);
 const about = text => (text ? (text.startsWith('under') ? text : `about ${text}`) : null);
+// The same two caveats the screens show (docs/recovery-time-adr.md, decision 5), in words, so a client never reads an old or
+// outgrown number as current: "not recent" and "may be low". Both are judged at the time the report is made.
+export function recoveryCaveats(value) {
+  const notes = [];
+  if (value?.stale) notes.push('not recent');
+  if (value?.mayBeLow) notes.push('backups grew since the test, so this may be low');
+  return notes.length ? ` (${notes.join('; ')})` : '';
+}
+const caveatsOf = (siteId, test, madeAt) => {
+  const steps = db.prepare('SELECT step,state,started_at,finished_at FROM restore_test_steps WHERE test_id=?').all(test.id);
+  const latest = db.prepare('SELECT size FROM backups WHERE site_id=? ORDER BY captured_at DESC,id DESC LIMIT 1').get(siteId) ?? null;
+  const tested = test.backup_id ? db.prepare('SELECT size FROM backups WHERE id=?').get(test.backup_id) ?? null : null;
+  const cadence = db.prepare('SELECT cadence FROM restore_test_settings WHERE site_id=?').get(siteId)?.cadence ?? null;
+  return recoveryCaveats(recoveryTime(steps, { result: 'passed', finished_at: test.finished_at }, latest, cadence, madeAt, tested));
+};
 const daysAgo = (iso, at) => { const days = Math.floor((at - Date.parse(iso)) / 86_400_000); return days <= 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`; };
 const kindOf = targetId => { const row = db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(targetId); return row ? (row.auth_type === 's3-access-key' ? 'S3-compatible storage' : 'SFTP server') : null; };
 export const sizeText = bytes => { const n = Number(bytes) || 0; if (n < 1024) return `${n} B`; const units = ['KB', 'MB', 'GB', 'TB']; let value = n / 1024, unit = 0; while (value >= 1024 && unit < 3) { value /= 1024; unit += 1; } return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`; };
@@ -38,7 +53,7 @@ function appFacts(site, period, include, madeAt) {
   const copyRows = db.prepare("SELECT c.status,c.target_id FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE b.site_id=? AND c.status IN ('verified','failed','gave_up')").all(id);
   const kinds = [...new Set(copyRows.map(row => kindOf(row.target_id)).filter(Boolean))].sort();
   const tests = db.prepare("SELECT id,result,finished_at FROM restore_tests WHERE site_id=? AND result IN ('passed','failed') AND finished_at>=? AND finished_at<? ORDER BY finished_at,id").all(id, start, end);
-  const proven = db.prepare("SELECT id,finished_at FROM restore_tests WHERE site_id=? AND result='passed' AND finished_at<? ORDER BY finished_at DESC,id DESC LIMIT 1").get(id, end) ?? null;
+  const proven = db.prepare("SELECT id,backup_id,finished_at FROM restore_tests WHERE site_id=? AND result='passed' AND finished_at<? ORDER BY finished_at DESC,id DESC LIMIT 1").get(id, end) ?? null;
   const certificate = db.prepare('SELECT not_after,expired,renewal FROM site_certificates WHERE site_id=?').get(id) ?? null;
   const hardening = hardeningView(id);
   const domains = db.prepare('SELECT domain,hops FROM domain_checks WHERE site_id=? ORDER BY domain LIMIT 50').all(id).map(row => { const hops = json(row.hops, null); return { name: row.domain, pointsHere: hops?.dns?.state === 'ok', httpsOk: hops?.certificate?.state === 'ok', state: worstState(hops) }; });
@@ -50,7 +65,7 @@ function appFacts(site, period, include, madeAt) {
     backups: { taken, due: taken + failed + missed, failed, missed, newest, keptCount: kept.n, keptSize: sizeText(kept.size) },
     copies: { verified: copyRows.filter(row => row.status === 'verified').length, failed: copyRows.filter(row => FAILED_COPY.has(row.status)).length, kinds },
     restoreTests: tests.map(test => ({ at: test.finished_at, result: test.result === 'passed' ? 'Passed' : 'Failed', recovery: test.result === 'passed' ? about(measured(test)) : null })),
-    recovery: proven && measured(proven) ? `Back in ${about(measured(proven))}, proven ${daysAgo(proven.finished_at, madeAt)}` : 'Not proven yet: no restore test has passed',
+    recovery: proven && measured(proven) ? `Back in ${about(measured(proven))}, proven ${daysAgo(proven.finished_at, madeAt)}${caveatsOf(id, proven, madeAt)}` : 'Not proven yet: no restore test has passed',
     certificate: certificate ? { validUntil: certificate.not_after, expired: certificate.expired === 1, renewal: certificate.renewal === 'failed' ? 'Renewal failed' : 'Renewal ok' } : null,
     hardening: hardening.grade ? { grade: hardening.grade, findings: hardening.findings.length, ...(include.findingTitles ? { titles: hardening.findings.map(item => plain(item.title, 120)) } : {}) } : null,
     domains,

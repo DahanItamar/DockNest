@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     VERSION, diagnostic, inspect)
+from .runtime import (
+    current_runtime)
 # Mutable state lives in common and is never copied by import: PEER_CERTIFICATES, PROBE_POLICY_FALLBACKS
 # </build:header>
 def pinned_socket(addresses,port,timeout):
@@ -175,9 +177,35 @@ def public_probe(m,domains=()):
         return exchange(connection,path,{'Host':parsed.netloc,'Cache-Control':'no-cache'},time.monotonic()+10)[:2]
     finally:connection.close()
 
+HEALTHCHECK_LIMIT=30
+HEALTHCHECK_SECONDS=30
+HEALTHCHECK_TOTAL_SECONDS=60  # for one call, however many containers: 30 slow checks can never stack to 15 minutes
+def drive_podman_healthchecks(containers):
+    """Podman runs an image health check from a systemd timer of the user's session, and that timer is not there for a container that
+    DockNest stopped and started (nor under every rootless session). So DockNest runs the check itself, once per call, through the same
+    runuser/env -i path as every other engine call: `podman healthcheck run <id>`, fixed argv, an id the engine gave and that is checked
+    here. The command records its result in the container, so the ordinary inspect below sees healthy or unhealthy. Docker is untouched;
+    a failing, slow or odd answer changes nothing (the caller's own timeout still ends the wait)."""
+    runtime=current_runtime()
+    if runtime.engine!='podman' or not containers:return
+    ids=[c for c in containers if isinstance(c,str) and re.fullmatch(r'[0-9a-f]{12,64}',c)][:HEALTHCHECK_LIMIT]
+    if not ids:return
+    try:records=inspect(ids)
+    except Exception:return
+    deadline=time.monotonic()+HEALTHCHECK_TOTAL_SECONDS
+    for c in records:
+        left=deadline-time.monotonic()
+        if left<=0:return  # the rest wait for the next call; the caller's own timeout still decides
+        state=c.get('State') or {};health_state=state.get('Health')
+        if not state.get('Running') or not isinstance(health_state,dict) or health_state.get('Status') in (None,'healthy','unhealthy'):continue
+        cid=str(c.get('Id') or '')
+        if not re.fullmatch(r'[0-9a-f]{64}',cid):continue
+        try:runtime.cli('healthcheck','run',cid,timeout=max(1,min(HEALTHCHECK_SECONDS,int(left))))
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):pass  # exit 1 is an unhealthy answer; the inspect below reads it
 def health(containers,url=None,domains=(),fallback=False):
     """A policy-refused URL raises unless fallback is set; recovery paths then rely on container
     health only (the same check used when no health URL is configured) instead of waiting forever."""
+    drive_podman_healthchecks(containers)
     for c in inspect(containers) if containers else []:
         if not c['State']['Running']: return False
         if c['State'].get('Health',{}).get('Status','healthy')!='healthy': return False
@@ -291,3 +319,17 @@ def certificate_facts():
     """What an operation's result carries: this run's probe certificates, then the certbot certificates."""
     try:return list(PEER_CERTIFICATES.values())[:CERT_LIMIT]+certbot_certificates()
     except Exception:return []
+
+def restart_reason(containers):
+    """One plain sentence for a restart that did not become healthy, read from the containers themselves, or
+    None when nothing specific shows (the caller keeps the old generic text). Names only: no environment, command or log text."""
+    try:
+        for c in inspect(containers) if containers else []:
+            name=(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12]
+            state=c.get('State') or {};health_state=state.get('Health') or {}
+            if not state.get('Running'):return '%s is not running after the restart (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status')=='starting' and not health_state.get('Log'):
+                return 'the health check of %s never started, so it cannot report healthy; a rootless Podman container needs its user session (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status') not in (None,'healthy'):return '%s reports %s (watchdog remains armed, maintenance retained)'%(name,str(health_state.get('Status'))[:20])
+    except Exception:pass
+    return None

@@ -13,7 +13,8 @@ const RECONNECT = /invalid_grant|token (?:has been )?(?:expired|revoked)|AADSTS(
 const UNAUTHORIZED = /\b401\b|unauthori[sz]ed|authentication required|login failed|logon failure|STATUS_LOGON_FAILURE|wrong (?:user|password)/i;
 const RATE = /rateLimitExceeded|userRateLimitExceeded|too many requests|\b429\b|throttl|activityLimitReached|too_many_requests|too_many_write_operations|\b403\b.*(?:rate|limit)/i;
 const QUOTA = /storageQuotaExceeded|insufficient (?:storage|space)|quota (?:exceeded|has been exceeded)|\b507\b|out of space|not enough space|insufficient_space/i;
-const NETWORK = /no such host|dial tcp|i\/o timeout|connection (?:refused|reset)|TLS handshake|x509|certificate|network is unreachable|context deadline|timeout awaiting|\bEOF\b/i;
+const TLS = /x509|certificate (?:signed by unknown|has expired|is not valid|verify)|unknown authority|tls: failed to verify/i;
+const NETWORK = /no such host|dial tcp|i\/o timeout|connection (?:refused|reset)|TLS handshake|network is unreachable|context deadline|timeout awaiting|\bEOF\b/i;
 const MISSING = /directory not found|object not found|file not found|\b404\b/i;
 
 const again = label => `${label} needs you to sign in again. Open the storage destination and press Reconnect.`;
@@ -28,6 +29,7 @@ export function classify(stderr, exitCode, backend) {
   if (RATE.test(text)) return { reason: 'rate_limited', needsReconnect: false, message: `${label} is limiting requests, DockNest retries at the next run.` };
   if (QUOTA.test(text)) return { reason: 'quota', needsReconnect: false, message: `${label} has no space left for this backup.` };
   if (exitCode === 3 || exitCode === 4 || MISSING.test(text)) return { reason: 'not_found', needsReconnect: false, missing: true, message: `The file or folder is not on ${label}.` };
+  if (TLS.test(text)) return { reason: 'tls', needsReconnect: false, message: `${label} could not be trusted: its security certificate was not accepted. Check that the server clock is right and that the system certificates are installed.` };
   if (NETWORK.test(text)) return { reason: 'network', needsReconnect: false, message: `${label} could not be reached. Check the network connection.` };
   return { reason: 'failed', needsReconnect: false, message: `${label} did not accept the request.` };
 }
