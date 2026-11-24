@@ -13,6 +13,13 @@ class NasStagingTests(unittest.TestCase):
             self.assertEqual(facts['stagingBase'],str(base.resolve()) if base.resolve()==base else str(base))
             self.assertTrue(base.is_dir());self.assertEqual(base.stat().st_mode&0o077,0)
             self.assertGreater(facts['freeBytes'],0);self.assertTrue(facts['stagingWritable']);self.assertEqual(facts['stagingFilesystem'],'xfs')
+    def test_unknown_filesystem_is_refused_and_octal_escapes_are_read(self):
+        from helper import filesystem_type
+        import io
+        with tempfile.TemporaryDirectory() as pool,patch('helper.filesystem_type',return_value=''),self.assertRaises(ValueError):nas_staging_facts(str(pathlib.Path(pool)/'a'/'b'))
+        table='x /mnt/my\040pool xfs rw 0 0
+'
+        with patch('builtins.open',lambda *a,**k:io.StringIO(table)):self.assertEqual(filesystem_type('/mnt/my pool/x'),'xfs')
     def test_memory_filesystems_links_and_shallow_or_relative_folders_are_refused(self):
         with tempfile.TemporaryDirectory() as pool:
             for kind in ('tmpfs','ramfs','rootfs'):

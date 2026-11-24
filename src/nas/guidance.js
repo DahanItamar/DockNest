@@ -14,15 +14,18 @@ export const NAS_WIZARD = Object.freeze({
     steps: Object.freeze(['In System > Services, start SSH and allow key login for the admin user.', 'Add the key to that user in Credentials > Local Users.', 'Make sure the user may run sudo without a password. DockNest never edits sudoers.']),
   }),
 });
-// The command shown for Unraid: the same key install, written to the persistent folder first and copied to /root/.ssh.
+// The command shown for Unraid: keeps existing keys, seeds the persistent file from /root/.ssh, and adds the key to both once.
 export function unraidInstallCommand(publicKey) {
   if (typeof publicKey !== 'string' || !/^ssh-rsa [A-Za-z0-9+/=]+ docknest$/.test(publicKey)) throw new Error('Not a DockNest public key.');
   return String.raw`set -eu
 umask 077
 mkdir -p /boot/config/ssh/root /root/.ssh
-touch /boot/config/ssh/root/authorized_keys
-grep -qxF '${publicKey}' /boot/config/ssh/root/authorized_keys || printf '%s\n' '${publicKey}' >> /boot/config/ssh/root/authorized_keys
-cp /boot/config/ssh/root/authorized_keys /root/.ssh/authorized_keys
+touch /root/.ssh/authorized_keys
+[ -s /boot/config/ssh/root/authorized_keys ] || cp /root/.ssh/authorized_keys /boot/config/ssh/root/authorized_keys
+grep -qxF '${publicKey}' /boot/config/ssh/root/authorized_keys || printf '%s
+' '${publicKey}' >> /boot/config/ssh/root/authorized_keys
+grep -qxF '${publicKey}' /root/.ssh/authorized_keys || printf '%s
+' '${publicKey}' >> /root/.ssh/authorized_keys
 chmod 700 /root/.ssh
 chmod 600 /root/.ssh/authorized_keys`;
 }

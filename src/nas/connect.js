@@ -1,4 +1,4 @@
-import { identityFor } from './command.js';
+import { identityFor, CommandRefused } from './command.js';
 import { capabilityFacts, SUDO_FIX, withoutNasFacts } from './readiness.js';
 
 // Connecting a server (POST /api/servers/connect). `inspect(server)` is the read-only NAS check and `test(server)` the
@@ -31,7 +31,11 @@ export async function connectCapabilities(server, { inspect, test }) {
   // The helper test runs with the identity the facts select (sudo, and the runtime), exactly as later calls will.
   const probe = { ...server, capabilities: JSON.stringify(facts) };
   if (!root && identityFor(probe).identity !== 'sudo') throw new ConnectRefused(NOT_NAS_MESSAGE);
-  const capabilities = await test(probe);
+  let capabilities;
+  try { capabilities = await test(probe); } catch (error) {
+    if (error instanceof CommandRefused) throw new ConnectRefused('This NAS needs the DockNest helper runtime image, which this DockNest build does not include.', 'Update DockNest to a release that includes the helper runtime, or install Python 3.9 or newer on the NAS.');
+    throw error;
+  }
   // The helper reports its effective uid: under sudo it is 0, so a user whose sudo does not reach root is refused.
   if (capabilities?.uid !== 0) throw new ConnectRefused(NOT_ROOT_MESSAGE);
   return { ...withoutNasFacts(capabilities), ...facts };

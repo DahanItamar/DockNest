@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CommandRefused } from '../src/nas/command.js';
 import { connectCapabilities, ConnectRefused } from '../src/nas/connect.js';
 import { unraidInstallCommand, loginHint, SYNOLOGY_RESET_HINT } from '../src/nas/guidance.js';
 
@@ -44,4 +45,16 @@ test('wizard text: Unraid key command is persistent and takes only a DockNest ke
   assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }), SYNOLOGY_RESET_HINT);
   assert.equal(loginHint({ capabilities: '{"nas":{"kind":"unraid"}}' }, { level: 'client-authentication' }), null);
   assert.equal(loginHint({ capabilities: null }, { level: 'client-authentication' }), null);
+});
+
+test('a container-runtime NAS that cannot run yet is a 409 with a fix, not a crash', async () => {
+  await assert.rejects(connectCapabilities({ username: 'admin' }, { inspect: async () => ready('sudo', { helperRuntime: 'container' }), test: async () => { throw new CommandRefused('x'); } }), error => error instanceof ConnectRefused && error.status === 409 && !!error.fix);
+});
+test('Unraid key command keeps existing keys and is idempotent', () => {
+  const command = unraidInstallCommand('ssh-rsa ' + Buffer.from('fake-key-material').toString('base64') + ' docknest');
+  assert.match(command, /\[ -s \/boot\/config\/ssh\/root\/authorized_keys \] \|\| cp \/root\/\.ssh\/authorized_keys/);
+  assert.ok(!/cp \/boot[^
+]*\/root\/\.ssh\/authorized_keys
+/.test(command), 'the persistent file never overwrites /root keys');
+  assert.equal((command.match(/grep -qxF/g) || []).length, 2);
 });
