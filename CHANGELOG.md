@@ -28,6 +28,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
 - Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
 - Adding an app finds stacks that Portainer or Dockge manage, fills in their Compose file from the manager's stacks folder and shows the manager on the app card. DockNest only reads it and never changes Portainer or Dockge.
+- NAS support, first part (no screens yet): DockNest recognizes Unraid, Synology and TrueNAS servers, can connect as a non-root user with passwordless sudo on them, and can run its helper in a sealed container when the NAS has no Python. Servers that are not NAS systems are unchanged. See [NAS servers](docs/nas-servers.md).
 
 **Storage and backups**
 - Cloud drives as backup storage (backend, no screen yet): Google Drive, OneDrive, Dropbox, WebDAV (Nextcloud, ownCloud) and SMB shares through a bundled, checksum-pinned rclone. Sign in by pasting the address your browser ends on, or a token from rclone on your own computer; tokens are sealed with the master key and never shown. When a drive asks you to sign in again, backups to it stop with a plain message, one alert is sent, and Reconnect replaces only the token. Not append-only; deleted files go to the provider's trash. See [cloud drives](docs/cloud-drives.md).

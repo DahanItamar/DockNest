@@ -57,6 +57,7 @@ import { hardeningView } from './hardening.js';
 import { keysSafeRoutes } from './keys-safe/routes.js';
 import { keysView } from './keys-safe/padlock.js';
 import { serverLinksView } from './server-links.js';
+import { withoutNasFacts } from './nas/readiness.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -256,7 +257,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
     const result = await testServer(server);
     // Merged, so facts recorded elsewhere (the CPU count from a restore test's Check space) survive a connection test.
     let previous = {}; try { previous = JSON.parse(server.capabilities || '{}') || {}; } catch { previous = {}; }
-    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...result }), server.id);
+    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...withoutNasFacts(result) }), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
   } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
 });
