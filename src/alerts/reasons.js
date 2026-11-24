@@ -55,6 +55,8 @@ const catalogue = Object.freeze({
   // Recovery Guide (docs/recovery-guide.md).
   'storage.reconnect_needed': 'Sign in again to {destination}. Backups to it fail until you press Reconnect in DockNest.',
   'runbook.outdated': 'Apps, servers, storage or the emergency kit changed since the Recovery Guide was made. Make a new one and replace the printed copy.',
+  // Client reports (docs/client-reports.md).
+  'report.failed': 'The scheduled client report could not be emailed after several tries. Open DockNest to download it instead.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

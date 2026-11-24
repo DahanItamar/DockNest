@@ -639,6 +639,7 @@ test('template: every event has a title, a catalogue reason, the names the owner
     'config.changed': ['Configuration changed', 'The Compose or env files changed outside Safe Edit. Open DockNest to review them.'],
     'storage.reconnect_needed': ['Storage needs you', 'Sign in again to the copy destination. Backups to it fail until you press Reconnect in DockNest.'],
     'runbook.outdated': ['Recovery Guide out of date', 'Apps, servers, storage or the emergency kit changed since the Recovery Guide was made. Make a new one and replace the printed copy.'],
+    'report.failed': ['Client report failed', 'The scheduled client report could not be emailed after several tries. Open DockNest to download it instead.'],
   };
   assert.deepEqual(Object.keys(expected).sort(), [...events.EVENTS].sort(), 'the catalogue covers every event');
   for (const [type, [title, reason]] of Object.entries(expected)) {
