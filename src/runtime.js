@@ -126,3 +126,17 @@ export function restoreRuntimeProblem(source, target, capabilities, { containers
   if (chainLength !== 1) return 'Backups of Podman and rootless apps are not incremental yet.';
   return runtimeRefusal(parsed.data, capabilities);
 }
+
+const ENGINE_ERROR_REASONS = new Set(['timeout', 'failed', 'too-large', 'unreadable']);
+// Engines of other users whose container list could not be read, from a helper answer: only a reported engine and one of the fixed
+// reasons survive, so a failing engine shows as an error and never as an empty one. No engine text is ever kept.
+export function cleanEngineErrors(list, capabilities) {
+  if (!Array.isArray(list)) return [];
+  const engines = cleanEngines(capabilities?.engines), clean = [];
+  for (const item of list.slice(0, MAX_ENGINES)) {
+    const parsed = runtimeSchema.safeParse(item?.runtime);
+    if (!parsed.success || isRootfulDocker(parsed.data) || !ENGINE_ERROR_REASONS.has(item?.reason) || !engines.some(engine => sameEngine(engine, parsed.data))) continue;
+    if (!clean.some(known => sameEngine(known.runtime, parsed.data))) clean.push({ runtime: parsed.data, reason: item.reason });
+  }
+  return clean;
+}

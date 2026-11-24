@@ -46,7 +46,7 @@ const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);
 // its own work never reads as a change made outside DockNest.
 export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
 const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!hasForeignRuntime(site.config)&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
-import { cleanEngines, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL, manifestRuntime, restoreRuntimeProblem } from './runtime.js';
+import { cleanEngines, cleanEngineErrors, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL, manifestRuntime, restoreRuntimeProblem } from './runtime.js';
 // Container names of this server's active apps that run in Podman or a rootless engine.
 const foreignNames=serverId=>new Set(db.prepare('SELECT config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>hasForeignRuntime(site.config)).flatMap(site=>site.config?.containers??[]));
 const refuseForeignNames=(server,names)=>{const foreign=foreignNames(server.id);if((names??[]).some(name=>foreign.has(name)))throw Object.assign(new Error(FOREIGN_REFUSAL),{status:409});};
@@ -57,7 +57,7 @@ export const discover=async(server,{record=false,scanKeys=false}={})=>{
   if(answer&&typeof answer==='object'&&!Array.isArray(answer)&&'keyScans' in answer)({keyScans:scans,...answer}=answer);
   const checked=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
   let capabilities={};try{capabilities=JSON.parse(server.capabilities||'{}')||{};}catch{capabilities={};}
-  const result=checked&&Array.isArray(checked.containers)?{...checked,containers:cleanDiscovered(checked.containers,capabilities)}:checked;
+  const result=checked&&Array.isArray(checked.containers)?{...checked,containers:cleanDiscovered(checked.containers,capabilities),engineErrors:cleanEngineErrors(checked.engineErrors,capabilities)}:checked;
   if(record){
     // Hardening grades and links read rootful Docker facts only; containers of other engines never reach them.
     const rootful=result&&Array.isArray(result.containers)?{...result,containers:result.containers.filter(container=>!container?.runtime||(container.runtime.engine==='docker'&&container.runtime.rootless===false))}:result;

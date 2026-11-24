@@ -24,7 +24,7 @@ from .incremental import (
     INCREMENTAL_ROOT, annotate_mounts, copy_private, incremental_request, incremental_sources, manifest_snapshots,
     plan_incremental, reset_snapshot, site_lock, snapshot_records)
 from .net import (
-    ProbePolicyError, certificate_facts, health, probe_url, public_probe, skip_refused_probes)
+    ProbePolicyError, certificate_facts, health, probe_url, public_probe, restart_reason, skip_refused_probes)
 from .maintenance import (
     MAINTENANCE_NOT_SET_UP, MaintenanceOptional, maintenance)
 from .discovery import (
@@ -757,7 +757,9 @@ def capture(req,output=None):
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
-          except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
+          except Exception:
+            reason=restart_reason(running)
+            raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json' if reason is None else 'RESTART_FAILED: '+reason)
     restarted=time.time()
     emit(stage='packing')
     if output is None:engine_save(root/'images.tar',*saved_ids,*images)

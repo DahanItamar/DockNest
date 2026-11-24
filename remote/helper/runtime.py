@@ -87,7 +87,7 @@ class Runtime:
         self.engine,self.rootless,self.user,self.uid,self.home=engine,rootless,user,uid,home
     def describe(self):
         return {'engine':self.engine,'rootless':self.rootless,**({'user':self.user,'uid':self.uid} if self.rootless else {})}
-    def argv(self,*args):
+    def argv(self,*args,bus=None):
         """The command line for one engine call. Rootful Docker is exactly ['docker', ...args]."""
         args=[str(a) for a in args]
         if self.engine=='docker' and not self.rootless:return ['docker',*args]
@@ -98,6 +98,8 @@ class Runtime:
         # pulls an image (the images come from the backup).
         environment=['PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home]
         if self.engine=='docker':environment.append('DOCKER_HOST=unix:///run/user/%d/docker.sock'%self.uid)
+        # Only the user's own bus path (session_bus checked it): a caller cannot name another one.
+        if bus is not None and self.engine=='podman' and bus=='unix:path=/run/user/%d/bus'%self.uid:environment.append('DBUS_SESSION_BUS_ADDRESS='+bus)
         return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
     def check_runtime_dir(self,lstat=os.lstat):
         """Before every rootless engine call: the user's runtime folder must exist and belong to the user. systemd removes it when the
@@ -106,6 +108,15 @@ class Runtime:
         try:info=lstat(path)
         except OSError:raise RuntimeRefused("This user's container runtime folder is missing. Turn on linger for the user (loginctl enable-linger %s) or log the user in."%self.user)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused("This user's container runtime folder does not belong to the user.")
+    def session_bus(self,lstat=os.lstat):
+        """The user's session bus address for rootless Podman, or None. Podman runs a container's health check as a systemd timer of
+        the user's session, which it reaches through this bus; without it a container started by DockNest never reports healthy.
+        Added only when the socket really is a socket of this user."""
+        if self.engine!='podman' or not self.rootless:return None
+        path='/run/user/%d/bus'%self.uid
+        try:info=lstat(path)
+        except OSError:return None
+        return 'unix:path='+path if stat.S_ISSOCK(info.st_mode) and info.st_uid==self.uid else None
     def check_socket(self,lstat=os.lstat):
         """A rootless Docker socket is checked again right before each use: it must still be a socket of this user."""
         path='/run/user/%d/docker.sock'%self.uid
@@ -124,7 +135,8 @@ class Runtime:
         import tempfile
         with tempfile.TemporaryFile() as errors:
             # Its own session and process group: the engine child cannot outlive runuser, and a stop ends the whole group.
-            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True)
+            command=self.argv(*args,bus=self.session_bus())
+            process=subprocess.Popen(command,stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True,cwd=self.workdir())
             deadline=time.monotonic()+timeout
             def end(forced):
                 group=getattr(os,'killpg',None)
@@ -141,17 +153,22 @@ class Runtime:
                     try:code=process.wait(timeout=poll);break
                     except subprocess.TimeoutExpired:pass
                     if STOPPING:finish();raise ValueError('DockNest stopped this step.')
-                    if time.monotonic()>=deadline:finish();raise subprocess.TimeoutExpired(self.argv(*args)[:1],timeout)
+                    if time.monotonic()>=deadline:finish();raise subprocess.TimeoutExpired(command[:1],timeout)
             except BaseException:
                 if process.poll() is None:finish()
                 raise
             if code!=0:
                 errors.seek(0,2);size=errors.tell();errors.seek(max(0,size-STREAM_ERROR_TAIL))
-                raise subprocess.CalledProcessError(code,self.argv(*args)[:1],stderr=errors.read(STREAM_ERROR_TAIL))
+                raise subprocess.CalledProcessError(code,command[:1],stderr=errors.read(STREAM_ERROR_TAIL))
+    def workdir(self):
+        """The folder an engine of another user starts in: the helper's own working folder (root's home) is closed to that user, and
+        a rootless engine that cannot enter it fails (podman ps, for one). Rootful Docker keeps the folder it always had."""
+        return '/' if self.rootless else None
     def cli(self,*args,**options):
         if self.rootless:self.check_runtime_dir()
         if self.engine=='docker' and self.rootless:self.check_socket()
-        return run(self.argv(*args),**options)
+        if self.workdir() is not None:options.setdefault('cwd',self.workdir())
+        return run(self.argv(*args,bus=self.session_bus()),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
     def compose(self,*args):
         """Compose through the same engine: `docker compose` or `podman compose` (which runs the installed provider)."""
