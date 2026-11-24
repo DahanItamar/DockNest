@@ -47,7 +47,7 @@ def filesystem_type(path):
             for line in table:
                 fields=line.split()
                 if len(fields)<3:continue
-                point=re.sub(r'\([0-7]{3})',lambda m:chr(int(m.group(1),8)),fields[1])
+                point=re.sub(r'\\([0-7]{3})',lambda m:chr(int(m.group(1),8)),fields[1])
                 if (str(path)==point or str(path).startswith(point.rstrip('/')+'/')) and len(point)>=len(best):best,kind=point,fields[2]
     except OSError:return ''
     return kind
