@@ -97,7 +97,6 @@ switch (command) {
       server.close(); setTimeout(() => process.exit(0), 50);
     });
     server.listen(53682, '127.0.0.1', () => process.stderr.write(`NOTICE: Make sure your Redirect URL is set to "http://127.0.0.1:53682/" in your custom config.\nIf your browser doesn't open automatically go to the following link: http://127.0.0.1:53682/auth?state=${state}\nLog in and authorize rclone for access\nWaiting for code...\n`));
-    process.on('SIGKILL', () => process.exit(1));
     await new Promise(() => {});
     break;
   }
