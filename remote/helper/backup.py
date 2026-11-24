@@ -26,7 +26,7 @@ from .incremental import (
 from .net import (
     ProbePolicyError, certificate_facts, health, probe_url, public_probe, skip_refused_probes)
 from .maintenance import (
-    MAINTENANCE_NOT_SET_UP, MaintenanceOptional, maintenance)
+    MAINTENANCE_NOT_SET_UP, MAINTENANCE_OFF, MaintenanceOptional, maintenance)
 from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
 from .restore_gaps import (
@@ -522,7 +522,7 @@ def readiness(cfg):
         if not checks[-1]['ok']:checks[-1]['message']='Public website access could not be verified from this server, possibly because of its CDN. Static files can still be captured and verified without changing hosting; check visitor access separately.'
     def proxy():
         m=cfg.get('maintenance',{})
-        if not m.get('required'):raise ValueError('Enable maintenance protection before backing up a live site.')
+        if not m.get('required'):raise MaintenanceOptional(MAINTENANCE_OFF)
         directory=pathlib.Path(m.get('directory',''))
         if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise MaintenanceOptional(MAINTENANCE_NOT_SET_UP)
         if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
@@ -531,7 +531,7 @@ def readiness(cfg):
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
     if cfg.get('kind')!='static':
         check('Maintenance proxy and website',proxy)
-        if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
+        if checks[-1]['message'] in (MAINTENANCE_NOT_SET_UP,MAINTENANCE_OFF):checks[-1]['required']=False
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'restoreGaps':restore_check(cfg,selected.get('containers')),'routing':proxy_routes()}
 def key_archive_member(hit,cfg,containers):
     """(archive, member) of the package that holds a key file: config-N.tar for a configuration file, else the first

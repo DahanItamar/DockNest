@@ -55,6 +55,19 @@ Read-only and only on a detected NAS; any other server's discovery answer is unc
 - **Connect wizard**: a System type choice shows the identity advice and steps from `src/nas/guidance.js`, accepts a root or passwordless-sudo account, uses the persistent Unraid key command, and lets a NAS without Python paste its SHA256 host key fingerprint.
 - **Recovery Guide**: the apps table has an "Expected time to recover" column from `shared/recovery-time.js` (measured by the newest passed restore test, "Not measured yet" otherwise). It joins the guide's digest only once an app has a measured time, so a guide made earlier stays current until then.
 
+## Backups and restores with a sudo user
+
+The staging folders on the server are root-only (0700) and stay that way: DockNest never changes their owner or adds ACLs for the SSH user. For a non-root (sudo) NAS user, SFTP cannot read or write them, so the three package movers (`download`, `uploadStream`, `upload` in `src/ssh.js`) go through the helper under `sudo -n` instead (`src/nas/stage-io.js`, `remote/helper/stage_io.py`):
+
+- **Fetch**: the helper operation `stage-read` streams one package to stdout and reports its size and SHA-256 on stderr; DockNest counts the bytes and hashes them too and refuses any difference.
+- **Upload**: `stage-write` reads base64 lines from stdin, ends with `END <size> <sha256>`, checks both, and removes the file if anything is wrong.
+- **Confinement**: the helper accepts only an absolute path with no `..`, no symbolic link anywhere in it (`realpath` must equal the path, the file is opened with `O_NOFOLLOW`), below `/var/lib/docknest`, `/var/lib/docker-backup-manager` or the server's own staging base (never a system folder). The file must be a regular file with one link; sizes are capped. Created files are 0600.
+- Servers with a root SSH user keep the SFTP code unchanged. Each call is audited by operation name only.
+
+Replacement restores (`replace` mode) are refused on every server, NAS included, by design: they need a safety backup and a rollback adapter that do not exist yet (see [open questions](product/open-questions.md), Q10). Restore into a new copy, review it, then switch DNS or the proxy yourself.
+
+The readiness check "Maintenance proxy and website" no longer fails for an app whose maintenance page is switched off: a backup then runs without it, and readiness says so as a note.
+
 ## Not in this change
 
 Pool-aware staging for every helper operation through the container runtime, the Synology Docker path, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
