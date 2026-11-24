@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .runtime import (
-    RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
+    RUNTIME_DATA_BASE, RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
 from .paths import (
     SITE_PATH, lexical, within)
 from .routing import (
@@ -524,3 +524,36 @@ def refuse_foreign_runtime(request):
     if request.get('operation') in RUNTIME_OPERATIONS:return  # resolved and checked by request_runtime
     if isinstance(runtime,dict) and runtime.get('engine')=='docker' and runtime.get('rootless') is False and not runtime.get('user') and runtime.get('uid') is None:return
     raise RuntimeRefused('Backups and restores of Podman and rootless apps are not available yet in this release.')
+
+def engine_facts(engines):
+    """The Docker version and CPU architecture the connection test reports. A server without usable rootful Docker (a
+    Podman-only server) reports the first engine it has instead, so it can still connect; without any engine the
+    original error stands."""
+    try:return {'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip()}
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):
+        if not engines:raise
+    runtime=engine_runtime(engines[0],engine_homes())
+    if runtime is None:raise ValueError('This server has no container engine DockNest can read.')
+    with using_runtime(runtime):return {'docker':None,'architecture':engine_architecture()}
+def runtime_restore_cleanup(request,base=RUNTIME_DATA_BASE,lstat=os.lstat,rmtree=shutil.rmtree):
+    """Removes the copy a restore into Podman or a rootless engine left: its containers (by the restore's own label) and,
+    for rootless, its data folder. Only a job's own label and folder are touched, and a folder that is a link, not root
+    owned or writable by others is left alone."""
+    job=request.get('job');uuid.UUID(job)
+    runtime=resolve_runtime(request.get('runtime'))
+    if runtime_is_default(runtime):raise RuntimeRefused('This is not a Podman or rootless restore.')
+    removed={'containers':0,'dataRoot':False}
+    with using_runtime(runtime):
+        ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
+        if ids and not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):raise RuntimeRefused('The engine answered with a container id DockNest cannot use.')
+        if ids:
+            docker('stop','--time','30',*ids)
+            docker('rm','-f',*ids)
+            removed['containers']=len(ids)
+    if runtime.rootless:
+        path=posixpath.join(base,str(runtime.uid),job)
+        try:info=lstat(path)
+        except FileNotFoundError:return removed
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to remove.')
+        rmtree(path);removed['dataRoot']=True
+    return removed

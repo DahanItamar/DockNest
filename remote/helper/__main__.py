@@ -139,7 +139,9 @@ def main(req):
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engine_probe()})
+        engines=engine_probe()
+        emit(result={'helperVersion':VERSION,**engine_facts(engines),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engines})
+    elif op=='runtime-restore-cleanup':emit(result=runtime_restore_cleanup(req))
     elif op=='discover':
         cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.

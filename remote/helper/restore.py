@@ -293,7 +293,7 @@ def broken_link(chain,k):
 def chain_problem(manifests,chain):
     """None when manifests[0..n-1] form one verified chain in order, else the reason."""
     first=manifests[0]
-    if first.get('formatVersion') not in FORMAT_VERSIONS:return 'Unsupported or incomplete backup'
+    if first.get('formatVersion') not in (1,2):return 'Unsupported or incomplete backup'  # format 3 (Podman and rootless) is never a chain
     if first.get('formatVersion')!=2 or first.get('backupKind')!='full':return 'The first backup of the chain is not a full backup.'
     chain_id=(first.get('chain') or {}).get('id')
     try:keys=manifest_snapshots(first)

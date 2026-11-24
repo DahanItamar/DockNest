@@ -259,13 +259,14 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  }catch(error){blockers.push(error.message);}
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
  const staticSite=backup.manifest.kind==='static';
+ if(!staticSite&&!backup.manifest.runtime&&capabilities.docker==null)blockers.push('This server has no rootful Docker, which this backup needs');
  // Podman and rootless apps (docs/podman-rootless.md): the target engine must be one the server reported, of the same kind.
  const targetRuntime=backup.manifest.runtime?(runtime??backup.manifest.runtime):undefined;
  {const problem=restoreRuntimeProblem(backup.manifest.runtime,runtime,capabilities,{containers:backup.manifest.containers?.length??0,chainLength});if(problem)blockers.push(problem);}
  if(!staticSite&&capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
  const grouped=(backup.manifest.containers?.length||0)>1;
  if(!staticSite&&(!backup.manifest.containers?.length||backup.manifest.containers.length>30))blockers.push('Restore requires 1 to 30 containers');
- if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
+ if(grouped&&!(Number.parseInt(capabilities.docker,10)>=28))blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  const externalOnly=Object.keys(mappings||{}).every(name=>name==='externalReadOnly')&&(!mappings.externalReadOnly||Array.isArray(mappings.externalReadOnly));
  if(!externalOnly)blockers.push('Custom port and writable host directory maps require reviewed offline restore');

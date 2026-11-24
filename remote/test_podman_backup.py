@@ -218,4 +218,42 @@ class PreflightTests(unittest.TestCase):
             with helper.using_runtime(helper.Runtime('podman')), self.assertRaises(ValueError):
                 helper.preflight({**cfg, 'kind': 'static'})
 
+class ConnectionAndCleanupTests(unittest.TestCase):
+    JOB = '3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b'
+    def test_podman_only_server_can_connect(self):
+        import subprocess
+        engines = [{'engine': 'podman', 'rootless': False, 'version': '5.2.1', 'cgroupDelegated': True}]
+        def docker(*args):
+            if args[0] == 'info' and helper.current_runtime().engine == 'podman': return b'amd64\n'
+            raise FileNotFoundError('docker')
+        with patch.object(helper, 'docker', docker):
+            self.assertEqual(helper.engine_facts(engines), {'docker': None, 'architecture': 'x86_64'})
+            with self.assertRaises(FileNotFoundError): helper.engine_facts([])
+            with patch.object(helper, 'engine_runtime', return_value=None), self.assertRaises(ValueError): helper.engine_facts(engines)
+        with patch.object(helper, 'docker', lambda *a: b'28.0.1\n' if a[0] == 'version' else b'x86_64\n'):
+            self.assertEqual(helper.engine_facts(engines), {'docker': '28.0.1', 'architecture': 'x86_64'})
+        self.assertIsNone(helper.RUNTIME)
+    def test_cleanup_removes_only_the_jobs_label_and_folder(self):
+        calls, removed = [], []
+        def docker(*args):
+            calls.append(args)
+            return b'aabbccddeeff\n' if args[0] == 'ps' else b''
+        safe = SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=0)
+        with patch.object(helper, 'resolve_runtime', return_value=rootless()), patch.object(helper, 'docker', docker):
+            result = helper.runtime_restore_cleanup({'job': self.JOB, 'runtime': ALICE}, '/b', lambda p: safe, removed.append)
+        self.assertEqual(result, {'containers': 1, 'dataRoot': True}); self.assertEqual(removed, ['/b/1001/' + self.JOB])
+        self.assertEqual(calls[0], ('ps', '-aq', '--filter', 'label=docker-backup-manager.restore=' + self.JOB))
+        self.assertEqual([c[0] for c in calls], ['ps', 'stop', 'rm'])
+    def test_cleanup_refusals(self):
+        safe = SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=0)
+        with patch.object(helper, 'resolve_runtime', return_value=helper.Runtime()), self.assertRaises(R): helper.runtime_restore_cleanup({'job': self.JOB, 'runtime': None})
+        with patch.object(helper, 'resolve_runtime', return_value=rootless()), patch.object(helper, 'docker', lambda *a: b'aabbccddeeff\n'):
+            for entry in (SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0), SimpleNamespace(st_mode=stat.S_IFDIR | 0o777, st_uid=0), SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=1001)):
+                with self.assertRaises(R): helper.runtime_restore_cleanup({'job': self.JOB, 'runtime': ALICE}, '/b', lambda p: entry, lambda p: self.fail('removed'))
+        with patch.object(helper, 'resolve_runtime', return_value=rootless()), patch.object(helper, 'docker', lambda *a: b'--all\n'):
+            with self.assertRaises(R): helper.runtime_restore_cleanup({'job': self.JOB, 'runtime': ALICE}, '/b', lambda p: safe, lambda p: self.fail('removed'))
+        with self.assertRaises(ValueError): helper.runtime_restore_cleanup({'job': 'x', 'runtime': ALICE})
+        with patch.object(helper, 'resolve_runtime', return_value=rootless()), patch.object(helper, 'docker', lambda *a: b''):
+            self.assertEqual(helper.runtime_restore_cleanup({'job': self.JOB, 'runtime': ALICE}, '/b', lambda p: (_ for _ in ()).throw(FileNotFoundError()), lambda p: None), {'containers': 0, 'dataRoot': False})
+
 if __name__ == '__main__': unittest.main()
