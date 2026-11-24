@@ -109,4 +109,15 @@ class NameTests(unittest.TestCase):
             with patch.object(helper, 'engine_load') as load, self.assertRaisesRegex(ValueError, 'cannot be read'): helper.load_images_keeping_tags(path)
             self.assertFalse(load.called)
 
+class FormatTests(unittest.TestCase):
+    def test_podman_saves_a_docker_archive_and_docker_is_unchanged(self):
+        self.assertEqual(helper.Runtime('podman').save_arguments(), ['save', '--format', 'docker-archive'])
+        self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').save_arguments(), ['save', '--format', 'docker-archive'])
+        self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').save_arguments(), ['save'])
+        self.assertEqual(helper.Runtime().save_arguments(), ['save'])
+        self.assertEqual(helper.Runtime().argv(*helper.Runtime().save_arguments(), 'sha256:a'), ['docker', 'save', 'sha256:a'])
+    def test_the_streamed_backup_uses_the_same_arguments(self):
+        text = (pathlib.Path(__file__).parent / 'helper' / 'backup.py').read_text()
+        self.assertIn('save_arguments()', text); self.assertNotIn(".argv('save'", text)
+
 if __name__ == '__main__': unittest.main()

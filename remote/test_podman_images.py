@@ -187,7 +187,7 @@ class SaveTests(unittest.TestCase):
             self.assertEqual(target.stat().st_size, 50 << 20)
             if os.name == 'posix': self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
         process = fake.calls[0]
-        self.assertEqual(process.argv[-4:], ['podman', 'save', 'sha256:a', 'sha256:b']); self.assertNotIn('-o', process.argv); self.assertNotIn(str(target), ' '.join(process.argv))
+        self.assertEqual(process.argv[-6:], ['podman', 'save', '--format', 'docker-archive', 'sha256:a', 'sha256:b']); self.assertNotIn('-o', process.argv); self.assertNotIn(str(target), ' '.join(process.argv))
         self.assertIsInstance(process.stdout, int, 'a file descriptor, never a pipe held in memory')
     def test_an_existing_file_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
