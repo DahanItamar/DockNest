@@ -51,6 +51,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
 - After every Self Backup, DockNest checks that the new recovery kit opens and holds the right key, and alerts you if it does not. See [kit check](docs/emergency-kit.md#kit-check).
+- NAS support: connect Unraid, Synology and TrueNAS systems (root or a passwordless-sudo user, with a helper runtime container when the NAS has no Python), see readiness on the Map, and find the apps the NAS manages. See [NAS servers](docs/nas-servers.md).
 - Recovery Guide: plain steps and the exact commands to bring every app back on a new server, as a PDF to print or keep with the emergency kit, also in Hebrew. Open it from Recovery Guide in the menu, choose the apps and what goes in, and download. A copy without logins is saved next to the recovery kit after every Self Backup. See [Recovery Guide](docs/recovery-guide.md).
 - Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time.

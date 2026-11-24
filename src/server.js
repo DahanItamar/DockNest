@@ -271,10 +271,17 @@ app.post('/api/servers/:id/test', async (req, res) => {
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
   } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); const hint = loginHint(server, error); if (hint) error.message = hint; throw Object.assign(error, serverTestFailure(error)); }
 });
+// Read-only NAS readiness for the server panel: identity, helper runtime, staging folder, Docker and key persistence, each
+// failed check with one fix. Runs fixed argv commands over SSH, changes nothing and stores nothing.
+app.get('/api/servers/:id/nas', requireAdmin, rateLimit('server-nas', 20, 60_000), async (req, res) => {
+  const server = getServer(req.params.id);
+  const { nas, identity, helperRuntime, stagingBase, ready, checks } = await inspectNas(server);
+  res.json({ nas: nas ?? null, identity: identity ?? null, helperRuntime: helperRuntime ?? null, stagingBase: stagingBase ?? null, ready: Boolean(ready), checks: checks ?? [] });
+});
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
+  res.json({ nas: result.nas ?? null, staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });
 const containerNames = query => siteSchema.shape.config.shape.containers.min(1).parse(typeof query === 'string' ? query.split(',') : []);
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{

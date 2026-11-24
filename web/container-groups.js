@@ -11,9 +11,10 @@ export function containerGroups(containers){
   const kind=project?'compose':stack?'swarm':'standalone';
   const name=project||stack||'Ungrouped containers';
   const id=kind+':'+(project||stack||'');
-  if(!groups.has(id))groups.set(id,{id,name,kind,compose:kind==='compose',manager:null,containers:[]});
+  if(!groups.has(id))groups.set(id,{id,name,kind,compose:kind==='compose',manager:null,nasManager:null,containers:[]});
   const group=groups.get(id);
   if(kind==='compose'&&!group.manager)group.manager=stackManager(container);
+  if(container?.nasApp&&!group.nasManager)group.nasManager=container.nasApp.manager;
   group.containers.push({...container,service:labels['com.docker.compose.service']||labels['com.docker.swarm.service.name']||''});
  }
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));

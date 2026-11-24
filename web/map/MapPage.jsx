@@ -5,6 +5,7 @@ import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,I
 import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
 import {IconTrash,IconBell,IconWorld,IconWorldOff} from '@tabler/icons-react';
 import {useDomains} from './domains-client.js';
+import {NasLabel,NasReadiness} from '../nas/NasReadiness.jsx';
 import {dropVerdict,moveState} from './domain-moves.js';
 import {ownersOf,domainStatus,groupDomains,groupStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domains-model.js';
 import {DomainPanel,AppDomains,DomainRows} from './Domains.jsx';
@@ -477,7 +478,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='server'&&byId.servers[panel.id]){
    const sv=byId.servers[panel.id],c=sv.capabilities||{},mine=sites.filter(x=>x.serverId===sv.id).length,free=bytes(c.freeBytes);
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
-   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} icon={<IconServer size={20} stroke={1.5} aria-hidden="true"/>} sub={serverStatus(sv)} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} icon={<IconServer size={20} stroke={1.5} aria-hidden="true"/>} sub={<>{serverStatus(sv)}{c.nas?.kind&&<NasLabel kind={c.nas.kind}/>}</>} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
+    {canMove&&c.nas?.kind&&<NasReadiness api={api} server={sv} onSessionExpired={onSessionExpired}/>}
     <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/></section>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
     {showCov&&sv.status==='connected'&&<MapCoverage api={api} server={sv} coverage={coverage} onSessionExpired={onSessionExpired} onAddApp={(serverId,names)=>{closePanel(false);onAddSite?.(serverId,names)}} onOpenApp={siteId=>{if(byId.sites[siteId])openPanel({kind:'site',id:siteId},opener.current)}}/>}
