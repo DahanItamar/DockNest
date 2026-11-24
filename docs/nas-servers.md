@@ -21,8 +21,12 @@ managers and the connect wizard come in later changes.
   Docker version, staging folder on persistent storage with free space, Unraid key persistence and the `/mnt/user` hard-link note.
   Results become server capabilities: `nas`, `helperRuntime`, `stagingBase`, `sshIdentity`.
 
+## Connecting and staging
+
+- **Connect** (`POST /api/servers/connect`, `src/nas/connect.js`): root works as before. A non-root user is accepted only when the read-only check detects a NAS, the readiness check is green and `sudo -n` works; otherwise the answer is 409 with the one fix. The helper test then runs with sudo and must report uid 0. Helper answers can never set the NAS facts.
+- **Staging base on the helper** (`remote/helper/staging.py`, standard library): the `test` operation takes the stored `stagingBase`, creates it (0700), refuses links, shallow folders and memory filesystems (`tmpfs`, `ramfs`, `rootfs`), and reports `freeBytes` of that folder instead of `/`.
+- **Wizard text** (`src/nas/guidance.js`, `GET /api/servers/onboarding` field `nas`): identity advice per NAS, a persistent Unraid key command (`unraidInstallCommand` in the prepare-key answer), and the Synology "SSH may have been reset after an update" login message.
+
 ## Not in this change
 
-The runtime image build and release workflow, loading the image tar over SSH, passing per-call mounts from callers, the
-Python-side staging base and discovery of Unraid templates, Synology projects and TrueNAS apps, and the UI. Real NAS
-checks (TrueNAS lab, Unraid) are still pending.
+The runtime image build and release workflow, loading the image tar over SSH, passing per-call mounts from callers, discovery of Unraid templates, Synology projects and TrueNAS apps, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
