@@ -138,4 +138,18 @@ class RestoreRefusalTests(Folders):
         with self.assertRaises(helper.TestOutcome) as caught: self.restore({'runtime': None, 'formatVersion': 1, 'idMap': None}, state={'runtime': ALICE})
         self.assertIn('different container engine', caught.exception.reason)
 
+class LimitFlagTests(unittest.TestCase):
+    DOCKER = ['--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '1024', '--restart', 'no', '--log-driver', 'local', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3']
+    def test_podman_gets_the_limits_without_docker_log_options(self):
+        for runtime in (rootless(), helper.Runtime('podman')):
+            with helper.using_runtime(runtime):
+                flags = helper.limit_args(512, 1.0)
+            self.assertEqual(flags, ['--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '1024', '--restart', 'no'])
+            self.assertFalse(any(part.startswith('--log') for part in flags), 'Podman has no local log driver')
+    def test_docker_keeps_its_exact_flags(self):
+        self.assertEqual(helper.limit_args(512, 1.0), self.DOCKER)
+        with helper.using_runtime(helper.Runtime('docker', True, 'alice', 1001, '/home/alice')):
+            self.assertEqual(helper.limit_args(512, 1.0), self.DOCKER)
+        self.assertEqual(helper.limit_args(1024, 0.5)[:6], ['--memory', '1024m', '--memory-swap', '1024m', '--cpus', '0.5'])
+
 if __name__ == '__main__': unittest.main()
