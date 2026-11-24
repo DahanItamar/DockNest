@@ -172,12 +172,12 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  await page.getByRole('alert').getByText('Too many attempts. Try again later.',{exact:true}).waitFor();await context.close();
 }
 
-// 6. The app is unchanged: outside .auth-page the primary button keeps the purple token.
+// 6. The app is unchanged: outside .auth-page the primary button keeps the accent token (teal by default).
 {
  const {context,page}=await open({status:{authenticated:false,message:'Your session ended. Sign in again.'}});
  await page.goto(base);await page.getByText('Your session ended. Sign in again.').first().waitFor();
  assert.equal(await page.locator('.auth-page').count(),0);
- assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(94, 53, 177)','app primary button is still purple');
+ assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(13, 120, 108)','app primary button uses the default teal accent');
  await context.close();
 }
 // 7. Two-step flow: use cases.

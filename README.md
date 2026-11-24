@@ -1,10 +1,10 @@
 <div align="center">
-  <img src="docs/media/logo-blue.png" alt="DockNest" width="320" />
+  <img src="docs/media/logo-teal.png" alt="DockNest" width="320" />
   <p><strong>Back up Docker apps. Verify recovery points. Restore a private copy.</strong></p>
-  <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=5E35B1&sort=semver&display_name=tag" alt="Latest release" /></a>
+  <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=0D786C&sort=semver&display_name=tag" alt="Latest release" /></a>
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
-  <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5E35B1?style=flat-square" alt="License: AGPL-3.0" /></a>
+  <img src="https://img.shields.io/badge/deployment-self--hosted-0D786C?style=flat-square" alt="Self-hosted" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-0D786C?style=flat-square" alt="License: AGPL-3.0" /></a>
 </div>
 
 <p align="center">
@@ -25,7 +25,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Discovers the Docker projects and static nginx sites on each server you connect.
 - Backs up each app on its own schedule to encrypted SFTP or S3-compatible storage. Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults.
 - Verifies recovery points and restores them to a separate copy. The live app is not overwritten.
-- New in 3.0.0: measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (Unraid, Synology, TrueNAS); Podman and rootless Docker apps.
+- New in 3.0.0: measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (Unraid, Synology, TrueNAS); Podman and rootless Docker apps; a new teal look with a choice of accent colour (Settings > Appearance), with a smooth fade when you change it or switch light and dark.
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]

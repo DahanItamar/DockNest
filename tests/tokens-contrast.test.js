@@ -18,13 +18,25 @@ function topLevelRules(text) {
   return rules;
 }
 const decls = body => Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);?/g)].map(m => [m[1], m[2].trim()]));
-const light = {}, darkOnly = {};
+// Accents: Teal is the default (plain :root); Blue, Indigo and Orange override through :root[data-accent=NAME] (light) and
+// :root[data-accent=NAME][data-theme=dark]. Every accent is gated in both themes.
+const ACCENTS = ['teal', 'blue', 'indigo', 'orange'];
+const light = {}, darkOnly = {}, accentLight = {}, accentDark = {};
 for (const [sel, body] of topLevelRules(css)) {
   if (sel.startsWith('@')) continue;
-  if (sel === ':root') Object.assign(light, decls(body));
-  else if (sel.replace(/\s/g, '') === ':root[data-theme=dark]') Object.assign(darkOnly, decls(body));
+  const flat = sel.replace(/\s/g, '');
+  let m;
+  if (flat === ':root') Object.assign(light, decls(body));
+  else if (flat === ':root[data-theme=dark]') Object.assign(darkOnly, decls(body));
+  else if ((m = /^:root\[data-accent=(\w+)\]$/.exec(flat))) accentLight[m[1]] = { ...accentLight[m[1]], ...decls(body) };
+  else if ((m = /^:root\[data-accent=(\w+)\]\[data-theme=dark\]$/.exec(flat))) accentDark[m[1]] = { ...accentDark[m[1]], ...decls(body) };
 }
-const themes = {light, dark: {...light, ...darkOnly}};
+const themes = {};
+for (const accent of ACCENTS) {
+  const lightVars = { ...light, ...(accentLight[accent] ?? {}) };
+  themes[accent + ' light'] = lightVars;
+  themes[accent + ' dark'] = { ...lightVars, ...darkOnly, ...(accentDark[accent] ?? {}) };
+}
 
 function resolve(vars, name, seen = new Set()) {
   if (seen.has(name)) throw new Error('cycle ' + name); seen.add(name);
@@ -92,7 +104,7 @@ add(['--dn-viz-1', '--dn-viz-2', '--dn-viz-3', '--dn-viz-4'], ['--dn-bg-surface'
 add(['--dn-border-subtle', '--dn-border'], ['--dn-bg-surface', '--dn-bg-app'], 0, 'decorative');
 for (const s of ['success', 'warning', 'danger', 'info']) add([`--dn-${s}-border`], [`--dn-${s}-surface`], 0, 'decorative');
 
-test('every v2 token pair meets its WCAG threshold in light and dark', () => {
+test('every v2 token pair meets its WCAG threshold in light and dark, for every accent', () => {
   const failures = [];
   for (const [theme, vars] of Object.entries(themes)) {
     const surface = parseColor(resolve(vars, '--dn-bg-surface'));
@@ -105,6 +117,16 @@ test('every v2 token pair meets its WCAG threshold in light and dark', () => {
   }
   assert.deepEqual(failures, []);
   assert.ok(pairs.length > 100);
+});
+
+test('the accent sets are complete: every accent defines the same tokens in light and dark', () => {
+  const names = vars => Object.keys(vars).filter(k => /^--dn-(brand|chrome)-\d+$|-step$|-ui$|^--dn-brand-logo$|^--dn-viz-[1-4]$|^--dn-viz-area$|^--dn-map-domain-fill$/.test(k)).sort();
+  const base = names({ ...light });
+  assert.ok(base.length >= 24 + 6, 'teal defaults');
+  for (const accent of ACCENTS.filter(x => x !== 'teal')) {
+    assert.deepEqual(names(accentLight[accent]), base, accent + ' light');
+    assert.deepEqual(names(accentDark[accent]), names(darkOnly), accent + ' dark');
+  }
 });
 
 test('legacy names alias v2 tokens, the dark theme hook is intact and type scaling is gone', () => {

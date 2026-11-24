@@ -1,8 +1,46 @@
 {
-  "src": "/brand/logo-600-deadd2f768.webp",
-  "srcSet": "/brand/logo-600-deadd2f768.webp 600w, /brand/logo-1200-deadd2f768.webp 1200w",
-  "darkSrc": "/brand/logo-blue-600-dabcf86f23.webp",
-  "darkSrcSet": "/brand/logo-blue-600-dabcf86f23.webp 600w, /brand/logo-blue-1200-dabcf86f23.webp 1200w",
   "width": 600,
-  "height": 118
+  "height": 118,
+  "accents": {
+    "teal": {
+      "light": {
+        "src": "/brand/logo-teal-light-600-b92bb05636.webp",
+        "srcSet": "/brand/logo-teal-light-600-b92bb05636.webp 600w, /brand/logo-teal-light-1200-b92bb05636.webp 1200w"
+      },
+      "dark": {
+        "src": "/brand/logo-teal-dark-600-fca0ca01f5.webp",
+        "srcSet": "/brand/logo-teal-dark-600-fca0ca01f5.webp 600w, /brand/logo-teal-dark-1200-fca0ca01f5.webp 1200w"
+      }
+    },
+    "blue": {
+      "light": {
+        "src": "/brand/logo-blue-light-600-0ace505c0f.webp",
+        "srcSet": "/brand/logo-blue-light-600-0ace505c0f.webp 600w, /brand/logo-blue-light-1200-0ace505c0f.webp 1200w"
+      },
+      "dark": {
+        "src": "/brand/logo-blue-dark-600-bf9589978f.webp",
+        "srcSet": "/brand/logo-blue-dark-600-bf9589978f.webp 600w, /brand/logo-blue-dark-1200-bf9589978f.webp 1200w"
+      }
+    },
+    "indigo": {
+      "light": {
+        "src": "/brand/logo-indigo-light-600-4c4dcf4a41.webp",
+        "srcSet": "/brand/logo-indigo-light-600-4c4dcf4a41.webp 600w, /brand/logo-indigo-light-1200-4c4dcf4a41.webp 1200w"
+      },
+      "dark": {
+        "src": "/brand/logo-indigo-dark-600-f47525af05.webp",
+        "srcSet": "/brand/logo-indigo-dark-600-f47525af05.webp 600w, /brand/logo-indigo-dark-1200-f47525af05.webp 1200w"
+      }
+    },
+    "orange": {
+      "light": {
+        "src": "/brand/logo-orange-light-600-bdcd7c64c6.webp",
+        "srcSet": "/brand/logo-orange-light-600-bdcd7c64c6.webp 600w, /brand/logo-orange-light-1200-bdcd7c64c6.webp 1200w"
+      },
+      "dark": {
+        "src": "/brand/logo-orange-dark-600-000bf2e3ce.webp",
+        "srcSet": "/brand/logo-orange-dark-600-000bf2e3ce.webp 600w, /brand/logo-orange-dark-1200-000bf2e3ce.webp 1200w"
+      }
+    }
+  }
 }

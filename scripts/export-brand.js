@@ -1,18 +1,58 @@
 import {chromium} from '@playwright/test';
-import {readFile,writeFile} from 'node:fs/promises';
+import {readFile,writeFile,readdir,rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 
 // Export the approved raster. Never redraw or independently regenerate glyphs.
 const folder='docs/design/homebird-brand';
 const manifest=JSON.parse(await readFile(folder+'/asset-manifest.json','utf8'));
-const original=await readFile(folder+'/'+manifest.filename);
-const hash=createHash('sha256').update(original).digest('hex');
+const master=await readFile(folder+'/'+manifest.filename);
+const hash=createHash('sha256').update(master).digest('hex');
 if(hash!==manifest.sha256)throw Error('Source checksum mismatch');
-if(original.readUInt32BE(16)!==2172||original.readUInt32BE(20)!==724)throw Error('Approved source geometry mismatch');
-const version=hash.slice(0,10),outputs=[];
+if(master.readUInt32BE(16)!==2172||master.readUInt32BE(20)!==724)throw Error('Approved source geometry mismatch');
+let version=hash.slice(0,10);const outputs=[];
+// 3.0.0 accents: the approved masters keep their shape; only the hue moves to each accent's logo colour from web/tokens.css
+// (--dn-brand-logo: step 9 on light, step 10 on dark). Teal is the default and also feeds the favicon and app icons.
+const ACCENTS=['teal','blue','indigo','orange'];
+const tokenCss=await readFile('web/tokens.css','utf8');
+function logoColor(accent,dark){
+ const selector=accent==='teal'?(dark?':root[data-theme=dark]':':root'):':root[data-accent='+accent+']'+(dark?'[data-theme=dark]':'');
+ // The block of this selector that defines the logo colour (the plain :root selector also opens other blocks).
+ for(let start=tokenCss.indexOf(selector+'{');start>=0;start=tokenCss.indexOf(selector+'{',start+1)){
+  const match=/--dn-brand-logo:(#[0-9A-Fa-f]{6})/.exec(tokenCss.slice(start,tokenCss.indexOf('}',start)));
+  if(match)return match[1];
+ }
+ throw Error('No --dn-brand-logo in '+selector);
+}
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
  const page=await browser.newPage();
+ // Hue-shift the coloured pixels of a master to a target colour, keeping the alpha, so the shape is untouched. Lightness is kept, so the light and
+ // dark masters keep their own contrast; saturation is scaled to the target colour.
+ async function recolor(buffer,target){
+  const bytes=await page.evaluate(async({data,target})=>{
+   const image=new Image();image.src=data;await image.decode();
+   const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+   const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
+   const frame=ctx.getImageData(0,0,canvas.width,canvas.height),px=frame.data;
+   const toHsl=(r,g,b)=>{r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b),l=(max+min)/2,d=max-min;if(!d)return[0,0,l];const s=d/(1-Math.abs(2*l-1));let h=max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4;h=(h*60+360)%360;return[h,s,l]};
+   const toRgb=(h,s,l)=>{const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;const[r,g,b]=h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];return[(r+m)*255,(g+m)*255,(b+m)*255]};
+   const hex=target,[tr,tg,tb]=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)),[th,ts,tl]=toHsl(tr,tg,tb);
+   // Reference = the master's bird colour (80th percentile of lightness among saturated pixels) and its mean saturation.
+   const lights=[];let sumS=0;
+   for(let i=0;i<px.length;i+=4)if(px[i+3]>=200){const[,s,l]=toHsl(px[i],px[i+1],px[i+2]);if(s>.25&&l>.08&&l<.92){lights.push(l);sumS+=s}}
+   lights.sort((x,y)=>x-y);const lb=lights[Math.floor(lights.length*.8)],ms=sumS/lights.length;
+   for(let i=0;i<px.length;i+=4){
+    if(!px[i+3])continue;const[,s,l]=toHsl(px[i],px[i+1],px[i+2]);if(s<=.12)continue;
+    // The bird lands on the target lightness; darker pixels (the wordmark) move by a proportional share of the same shift.
+    const weight=Math.min(1,(s-.12)/.2),ns=Math.min(1,s*ts/ms),nl=Math.min(.97,Math.max(.03,l+(tl-lb)*Math.min(1,l/lb)));
+    const[r,g,b]=toRgb(th,s*(1-weight)+ns*weight,l*(1-weight)+nl*weight);px[i]=r;px[i+1]=g;px[i+2]=b;
+   }
+   ctx.putImageData(frame,0,0);return canvas.toDataURL('image/png').split(',')[1];
+  },{data:'data:image/png;base64,'+buffer.toString('base64'),target});
+  return Buffer.from(bytes,'base64');
+ }
+ const original=await recolor(master,logoColor('teal',false));
+ version=createHash('sha256').update(original).digest('hex').slice(0,10);
  const source=await page.evaluate(async data=>{
   const image=new Image();image.src=data;await image.decode();
   const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
@@ -55,7 +95,6 @@ try{
   return result;
  }
  const logo=await exportImage('logo.png');await exportImage('mark.png',{mark:true});
- for(const width of [600,1200])await exportImage('logo-'+width+'-'+version+'.webp',{width,mime:'image/webp'});
  const blue=await readFile('docs/media/logo-blue.png'),blueHash=createHash('sha256').update(blue).digest('hex'),blueVersion=blueHash.slice(0,10);
  if(blueHash!=='dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365'||blue.readUInt32BE(16)!==2171||blue.readUInt32BE(20)!==724)throw Error('Approved blue source checksum or geometry mismatch');
  const blueCrop=await page.evaluate(async data=>{
@@ -63,7 +102,19 @@ try{
   for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++)if(p[(y*c.width+x)*4+3]>=16){l=Math.min(l,x);t=Math.min(t,y);r=Math.max(r,x);b=Math.max(b,y)}
   return{left:Math.max(0,l-8),top:Math.max(0,t-8),width:Math.min(c.width,r+9)-Math.max(0,l-8),height:Math.min(c.height,b+9)-Math.max(0,t-8)};
  },'data:image/png;base64,'+blue.toString('base64'));
- for(const width of [600,1200])await exportImage('logo-blue-'+width+'-'+blueVersion+'.webp',{width,mime:'image/webp',sourceImage:blue,sourceCrop:blueCrop});
+ // One light and one dark logo per accent: the light master recoloured for white surfaces, the lighter master for dark ones.
+ const accentLogos={};
+ for(const accent of ACCENTS){
+  const light=await recolor(master,logoColor(accent,false)),dark=await recolor(blue,logoColor(accent,true));
+  if(accent==='teal')await writeFile('docs/media/logo-teal.png',dark); // README header: the lighter variant reads on both GitHub themes
+  const lightVersion=createHash('sha256').update(light).digest('hex').slice(0,10),darkVersion=createHash('sha256').update(dark).digest('hex').slice(0,10);
+  for(const width of [600,1200]){
+   await exportImage('logo-'+accent+'-light-'+width+'-'+lightVersion+'.webp',{width,mime:'image/webp',sourceImage:light});
+   await exportImage('logo-'+accent+'-dark-'+width+'-'+darkVersion+'.webp',{width,mime:'image/webp',sourceImage:dark,sourceCrop:blueCrop});
+  }
+  const set=(mode,v)=>({src:'/brand/logo-'+accent+'-'+mode+'-600-'+v+'.webp',srcSet:'/brand/logo-'+accent+'-'+mode+'-600-'+v+'.webp 600w, /brand/logo-'+accent+'-'+mode+'-1200-'+v+'.webp 1200w'});
+  accentLogos[accent]={light:set('light',lightVersion),dark:set('dark',darkVersion)};
+ }
  for(const size of [16,32,48])await exportImage('favicon-'+size+'-'+version+'.png',{size,mark:true,fill:.96});
  await exportImage('favicon-'+version+'.png',{size:32,mark:true,fill:.96});
  for(const size of [192,512])await exportImage('app-icon-'+size+'-'+version+'.png',{size,mark:true,background:'#FFFFFF'});
@@ -77,8 +128,11 @@ try{
  await writeFile('public/favicon.ico',ico);
  for(const filename of ['apple-touch-icon.png','apple-touch-icon-precomposed.png'])await writeFile('public/'+filename,await readFile('public/brand/apple-touch-icon-'+version+'.png'));
  await writeFile('public/brand/asset-manifest.json',JSON.stringify({identity:manifest.identity,presentation:'Light and dark',version,operation:'Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.',sourceAlpha:source.alpha,outputs},null,2)+'\n');
- await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Docker Backup & Restore',start_url:'/',scope:'/',icons:[...[192,512].map(size=>({src:'/brand/app-icon-'+size+'-'+version+'.png',sizes:size+'x'+size,type:'image/png',purpose:'any'})),{src:'/brand/app-icon-maskable-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'maskable'}],theme_color:'#673AB7',background_color:'#F6F4F9',display:'standalone'},null,2)+'\n');
- await writeFile('web/brand-assets.json',JSON.stringify({src:'/brand/logo-600-'+version+'.webp',srcSet:'/brand/logo-600-'+version+'.webp 600w, /brand/logo-1200-'+version+'.webp 1200w',darkSrc:'/brand/logo-blue-600-'+blueVersion+'.webp',darkSrcSet:'/brand/logo-blue-600-'+blueVersion+'.webp 600w, /brand/logo-blue-1200-'+blueVersion+'.webp 1200w',width:600,height:Math.round(600*logo.height/logo.width)},null,2)+'\n');
+ await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Docker Backup & Restore',start_url:'/',scope:'/',icons:[...[192,512].map(size=>({src:'/brand/app-icon-'+size+'-'+version+'.png',sizes:size+'x'+size,type:'image/png',purpose:'any'})),{src:'/brand/app-icon-maskable-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'maskable'}],theme_color:'#0D786C',background_color:'#F9F9FB',display:'standalone'},null,2)+'\n');
+ await writeFile('web/brand-assets.json',JSON.stringify({width:600,height:Math.round(600*logo.height/logo.width),accents:accentLogos},null,2)+'\n');
+ // Drop files of earlier exports (their names carry a content hash) so public/brand holds only the current set.
+ const keep=new Set([...outputs.map(x=>x.filename),'asset-manifest.json','site.webmanifest','favicon-'+version+'.ico']);
+ for(const name of await readdir('public/brand'))if(!keep.has(name))await rm('public/brand/'+name);
  const index=await readFile('index.html','utf8');
  await writeFile('index.html',index.replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]png','g'),'/brand/favicon-'+version+'.png').replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]ico','g'),'/brand/favicon-'+version+'.ico').replace(new RegExp('/brand/apple-touch-icon(?:-[a-f0-9]+)?[.]png','g'),'/brand/apple-touch-icon-'+version+'.png').replace(new RegExp('/brand/site[.]webmanifest(?:[?]v=[a-f0-9]+)?','g'),'/brand/site.webmanifest?v='+version));
  console.log(JSON.stringify({version,source,outputs:outputs.map(({filename,width,height,bytes})=>({filename,width,height,bytes}))}));

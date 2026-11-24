@@ -92,3 +92,11 @@
 .dash-alert-action{display:inline;align-self:flex-start;height:auto;min-height:0;padding:0;border:0;background:none;color:inherit;font-weight:500;text-decoration:underline;text-underline-offset:3px}
 .rebrand-page .dash-alert-action{min-height:0;height:auto;padding:0}
 .dash-job span .status{margin:0}
+/* 3.0.0 accent: metric tiles are neutral cards (surface + border) with a small accent icon chip, not solid colour blocks. */
+.dash-metrics .dash-metric{background:var(--dn-bg-surface);color:var(--dn-text-primary);border:1px solid var(--dn-border);box-shadow:none}
+.dash-metrics .dash-metric .metric-tile{background:var(--dn-brand-chip);color:var(--dn-brand-text)}
+.dash-metrics .dash-metric .metric-label,.dash-metrics .dash-metric small{color:var(--dn-text-secondary);opacity:1}
+.dash-metrics .dash-metric strong{color:var(--dn-text-primary)}
+.dash-metrics .metric-period button{color:var(--dn-text-secondary)}
+.dash-metrics .metric-period button[aria-pressed=true]{background:var(--dn-brand-surface);color:var(--dn-brand-text)}
+.dash-metrics .metric-period button:hover{background:var(--dn-bg-hover)}
