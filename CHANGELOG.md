@@ -9,7 +9,8 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 ### Fixed
 
 - Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
-- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard.
+- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard. After a revoked sign-in, the first test now says OneDrive needs you to sign in again.
+- Google Drive: the root folder is remembered, so tests and backups make fewer calls. A slow test no longer fails the page: it shows "Still checking" and finishes in the background. When Google limits the shared sign-in app, DockNest says so and recommends your own app ID.
 
 ### Added
 

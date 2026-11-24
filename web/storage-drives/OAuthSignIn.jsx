@@ -82,7 +82,7 @@ export const OAuthSignIn = forwardRef(function OAuthSignIn({ api, backend, guard
       <button type="button" className="link-action" aria-expanded={own.open} aria-controls="dr-own" disabled={disabled} onClick={() => setOwn(previous => ({ ...previous, open: !previous.open }))}>Use your own app ID</button>
     </div>
     {own.open && <div id="dr-own" className="dr-own">
-      <p className="t-caption">{backend === 'drive' ? 'Recommended for Google Drive: your own app has its own request limits.' : 'Your own app has its own request limits.'} Enter both, then use the sign-in link again.</p>
+      <p className="t-caption">{backend === 'drive' ? 'Strongly recommended for Google Drive: the shared sign-in app is rate-limited for everyone, and your own app has its own request limits.' : 'Your own app has its own request limits.'} Enter both, then use the sign-in link again.</p>
       <div className="form-grid">
         <label className="field"><span>Client ID</span><input value={own.id} autoComplete="off" spellCheck={false} maxLength={400} onChange={e => setOwn(previous => ({ ...previous, id: e.target.value }))} /></label>
         <label className="field"><span>Client secret</span><input type="password" value={own.secret} autoComplete="new-password" spellCheck={false} maxLength={400} onChange={e => setOwn(previous => ({ ...previous, secret: e.target.value }))} /></label>

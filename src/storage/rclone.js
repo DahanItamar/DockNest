@@ -17,6 +17,7 @@ import { config } from '../config.js';
 import { RCLONE_MINIMUM } from './rclone-pin.js';
 import { BACKENDS, backendLabel, classify, rcloneError } from './rclone-errors.js';
 import { parseToken } from './rclone-input.js';
+import { ROOT_ID } from './drive-root.js';
 import { listOneDrives } from './onedrive-graph.js';
 import { loadSecrets, saveToken, markReconnect } from './rclone-state.js';
 
@@ -52,7 +53,7 @@ export function buildConfig(options, secrets) {
   const client = () => { add('client_id', secrets.clientId); add('client_secret', secrets.clientSecret); };
   const token = () => { if (secrets.token) add('token', JSON.stringify(secrets.token)); };
   switch (options.backend) {
-    case 'drive': add('type', 'drive'); add('scope', 'drive.file'); add('use_trash', 'true'); client(); token(); break;
+    case 'drive': add('type', 'drive'); add('scope', 'drive.file'); add('use_trash', 'true'); if (ROOT_ID.test(String(settings.rootFolderId ?? ''))) add('root_folder_id', settings.rootFolderId); client(); token(); break;
     case 'onedrive': add('type', 'onedrive'); add('drive_id', settings.driveId); add('drive_type', settings.driveType); client(); token(); break;
     case 'dropbox': add('type', 'dropbox'); client(); token(); break;
     case 'webdav': add('type', 'webdav'); add('url', settings.endpoint); add('vendor', settings.vendor || 'other'); add('user', secrets.username); add('pass', secrets.passwordObscured); break;

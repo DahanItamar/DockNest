@@ -11,7 +11,8 @@ import * as rclone from './storage/rclone.js';
 import * as oauth from './storage/rclone-oauth.js';
 import * as folder from './storage/folder.js';
 import { BACKENDS, backendLabel } from './storage/rclone-errors.js';
-import { RECONNECT_STATUS, loadSecrets, replaceToken, settingsOf } from './storage/rclone-state.js';
+import { fetchRootFolderId } from './storage/drive-root.js';
+import { RECONNECT_STATUS, loadSecrets, replaceToken, saveSettings, settingsOf } from './storage/rclone-state.js';
 
 export const rcloneRoutes = Router();
 
@@ -105,6 +106,8 @@ rcloneRoutes.post('/rclone/connect', requireRecentAuth, rateLimit('rclone-connec
   }
   if (!BACKENDS[data.backend].oauth) secrets.passwordObscured = await rclone.obscure({ backend: data.backend }, data.password);
   const options = optionsOf(targetId, data, settings, secrets);
+  // Google Drive: the root folder's ID, asked once, so rclone does not ask for it before every operation.
+  if (data.backend === 'drive') { const rootFolderId = await fetchRootFolderId(options.secrets.token?.access_token); if (rootFolderId) settings.rootFolderId = rootFolderId; }
   await rclone.test(options);
   // A token rclone refreshed during the test is in options.secrets now.
   const account = BACKENDS[data.backend].oauth ? await rclone.account(options) : null;
@@ -152,8 +155,11 @@ rcloneRoutes.post('/:id/reconnect', requireRecentAuth, rateLimit('rclone-connect
   const old = loadSecrets(row.id);
   const options = { id: row.id, mode: 'rclone', name: row.name, backend: settings.backend, settings, root: row.root, capacity: row.capacity_bytes, persist: false,
     secrets: { ...old, token: taken.token, ...(taken.client ?? {}) } };
+  // A different account has a different root folder: the old ID is dropped and asked for again.
+  if (settings.backend === 'drive') { delete options.settings.rootFolderId; const rootFolderId = await fetchRootFolderId(taken.token?.access_token); if (rootFolderId) options.settings = { ...settings, rootFolderId }; }
   await rclone.test(options);
   transaction(() => {
+    if (settings.backend === 'drive') saveSettings(row.id, { rootFolderId: options.settings.rootFolderId ?? null });
     replaceToken(row.id, options.secrets.token, taken.client, req.user.id);
     db.prepare('UPDATE storage_targets SET last_tested_at=? WHERE id=?').run(new Date().toISOString(), row.id);
   });

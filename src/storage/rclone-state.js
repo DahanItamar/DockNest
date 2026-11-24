@@ -10,6 +10,7 @@ export function loadSecrets(targetId) {
   if (!found) return null;
   return JSON.parse(open(found.credential));
 }
+export function saveSettings(targetId, patch) { writeSettings(targetId, patch); }
 export function settingsOf(targetId) {
   try { return JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(targetId)?.settings || 'null'); } catch { return null; }
 }

@@ -127,7 +127,7 @@ test('an upload that rclone rejects fails the stream with the mapped reason only
   const dest = options('drive');
   await assert.rejects(pipeline(Readable.from([randomBytes(10)]), rclone.openWrite(dest, '/docknest/a.partial')), error => {
     assert.equal(error.reason, 'rate_limited');
-    assert.match(error.message, /Google Drive is limiting requests, DockNest retries at the next run/);
+    assert.match(error.message, /Google is limiting the shared sign-in app/);
     assert.ok(!JSON.stringify([error.message, error.stack]).includes(secret));
     return true;
   });
@@ -404,4 +404,49 @@ test('two address sign-ins started at once: exactly one gets the helper port', a
   const won = first.status === 201 ? await first.json() : await second.json();
   assert.equal((await call('DELETE', '/storage-targets/rclone/authorize/' + won.sessionId)).status, 200);
   assert.equal(oauth.sessionCount(), before);
+});
+
+test('a slow cloud-drive test answers 202 after a short wait, then the page polls GET until it ends', async () => {
+  const targetId = seedDrive();
+  await control({ delayMs: 120 });
+  process.env.DOCKNEST_TEST_PROBE_WAIT_MS = '300';
+  const first = await post(`/storage-targets/${targetId}/test`, {});
+  assert.equal(first.status, 202);
+  assert.equal((await first.json()).checking, true);
+  // A second press while it runs joins the same test and does not start another.
+  assert.equal((await post(`/storage-targets/${targetId}/test`, {})).status, 202);
+  let answer;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    answer = await (await call('GET', `/storage-targets/${targetId}/test`)).json();
+    if (answer.state !== 'checking') break;
+    await new Promise(resolveWait => setTimeout(resolveWait, 100));
+  }
+  delete process.env.DOCKNEST_TEST_PROBE_WAIT_MS;
+  assert.equal(answer.state, 'done');
+  assert.equal(answer.result.connected, true);
+  assert.deepEqual(await (await call('GET', `/storage-targets/${targetId}/test`)).json(), { state: 'none' }, 'a read answer is not repeated');
+  assert.equal(db.prepare('SELECT status FROM storage_targets WHERE id=?').get(targetId).status, 'connected');
+  assert.ok(db.prepare('SELECT last_tested_at FROM storage_targets WHERE id=?').get(targetId).last_tested_at);
+  await control({});
+});
+test('a failed cloud-drive test is reported with a plain message and no provider text', async () => {
+  const targetId = seedDrive();
+  await control({ fail: [{ cmd: 'mkdir', stderr: 'googleapi: Error 403: Rate Limit Exceeded, rateLimitExceeded https://x/?access_token=leak-me-123', code: 1 }] });
+  const response = await post(`/storage-targets/${targetId}/test`, {});
+  assert.equal(response.status, 502);
+  const text = await response.text();
+  assert.match(text, /Google is limiting the shared sign-in app\. Use your own Google app ID for steady speed\./);
+  assert.ok(!text.includes('leak-me-123'));
+  await control({});
+});
+test('the Google root folder ID reaches the temporary config only when it has the expected shape', async () => {
+  const good = '0AFixtureRootFolderId_123';
+  await resetCalls();
+  const targetId = seedDrive({ settings: { rootFolderId: good } });
+  assert.equal((await post(`/storage-targets/${targetId}/test`, {})).status, 200);
+  assert.ok((await calls()).some(item => item.confRoot === good), 'the config carried root_folder_id');
+  await resetCalls();
+  const other = seedDrive({ settings: { rootFolderId: 'bad id with spaces' } });
+  assert.equal((await post(`/storage-targets/${other}/test`, {})).status, 200);
+  assert.ok((await calls()).every(item => item.confRoot === null), 'a malformed ID is never written');
 });

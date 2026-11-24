@@ -8,6 +8,8 @@ import { writeMode, recordWriteMode, markUnverified, releaseKept, keptSummary, h
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
+import { fetchRootFolderId } from './storage/drive-root.js';
+import { loadSecrets, saveSettings, settingsOf } from './storage/rclone-state.js';
 import { rcloneRoutes, rcloneView, folderView } from './storage-rclone-routes.js';
 
 export const storageTargets=Router();
@@ -173,10 +175,55 @@ storageTargets.post('/:id/copies/delete',requireRecentAuth,(req,res)=>{
  try{res.status(202).json(requestDestinationCopyDeletion(target.id,data,req.user.id));}
  catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});if(error.code==='last_packages')return res.status(409).json({error:error.message,code:error.code,lastPackages:error.lastPackages});throw error;}
 });
+// A cloud drive's test can take minutes when the provider rate-limits the shared sign-in app, longer than a browser request
+// should wait. It runs here on its own, the request waits up to PROBE_WAIT_MS, and the page polls GET /:id/test until it ends.
+// Other destinations keep the plain request. Finished answers are kept for 10 minutes and not repeated after being read.
+const probes=new Map();
+const probeWaitMs=()=>process.env.NODE_ENV==='test'&&/^\d{1,6}$/.test(process.env.DOCKNEST_TEST_PROBE_WAIT_MS??'')?Number(process.env.DOCKNEST_TEST_PROBE_WAIT_MS):25_000;
+function finishTest(targetId,actor,result){
+ db.prepare("UPDATE storage_targets SET status='connected',last_tested_at=? WHERE id=?").run(new Date().toISOString(),targetId);
+ audit(actor,'storage.test',targetId);
+ return testView(result);
+}
+function startProbe(targetId,actor){
+ const probe={state:'checking',startedAt:new Date().toISOString()};
+ probe.done=testSaved(targetId,actor).then(async result=>{
+  probe.result=finishTest(targetId,actor,result);probe.state='done';
+  await rememberRoot(targetId);
+ },error=>{probe.state='failed';probe.error={message:error?.expose&&error.message?error.message:'The storage test failed. Check the destination and try again.',code:error?.publicCode??null,status:error?.status>=400&&error.status<600?error.status:502};});
+ probe.done.catch(()=>{}).finally(()=>{probe.endedAt=Date.now();const timer=setTimeout(()=>{if(probes.get(targetId)===probe)probes.delete(targetId);},600_000);timer.unref?.();});
+ probes.set(targetId,probe);
+ return probe;
+}
+// A Google Drive destination made before the root folder was kept asks once, after its first passing test.
+async function rememberRoot(targetId){
+ try{
+  const settings=settingsOf(targetId);if(settings?.backend!=='drive'||settings.rootFolderId)return;
+  const id=await fetchRootFolderId(loadSecrets(targetId)?.token?.access_token);
+  if(id)saveSettings(targetId,{rootFolderId:id});
+ }catch{/* best effort: rclone still works without it */}
+}
 storageTargets.post('/:id/test',rateLimit('storage-test',10),async(req,res)=>{
- const result=await testSaved(req.params.id,req.user.id);
- db.prepare("UPDATE storage_targets SET status='connected',last_tested_at=? WHERE id=?").run(new Date().toISOString(),req.params.id);
- audit(req.user.id,'storage.test',req.params.id);res.json(testView(result));
+ const row=db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(req.params.id);
+ if(!row||targetMode(row)!=='rclone'){
+  const result=await testSaved(req.params.id,req.user.id);
+  return res.json(finishTest(req.params.id,req.user.id,result));
+ }
+ const probe=probes.get(req.params.id)?.state==='checking'?probes.get(req.params.id):startProbe(req.params.id,req.user.id);
+ await Promise.race([probe.done.catch(()=>{}),new Promise(resolveWait=>{const timer=setTimeout(resolveWait,probeWaitMs());timer.unref?.();})]);
+ if(probe.state==='checking')return res.status(202).json({checking:true,startedAt:probe.startedAt});
+ probes.delete(req.params.id);
+ if(probe.state==='failed')return res.status(probe.error.status).json({error:probe.error.message,code:probe.error.code});
+ res.json(probe.result);
+});
+storageTargets.get('/:id/test',(req,res)=>{
+ knownTarget(req);
+ const probe=probes.get(req.params.id);
+ if(!probe)return res.json({state:'none'});
+ if(probe.state==='checking')return res.json({state:'checking',startedAt:probe.startedAt});
+ probes.delete(req.params.id);
+ if(probe.state==='failed')return res.json({state:'failed',error:probe.error.message,code:probe.error.code});
+ res.json({state:'done',result:probe.result});
 });
 storageTargets.post('/:id/use',async(req,res)=>{
  await testSaved(req.params.id,req.user.id);

@@ -9,14 +9,16 @@ export const BACKENDS = Object.freeze({
 });
 export const backendLabel = backend => BACKENDS[backend]?.label ?? 'The storage provider';
 
-const RECONNECT = /invalid_grant|token (?:has been )?(?:expired|revoked)|AADSTS(?:70008|700082|70000|50173|50076)|expired_access_token|invalid_access_token|couldn'?t (?:fetch|refresh) token|failed to (?:get|refresh) token|unauthorized_client|refresh token (?:is )?(?:invalid|revoked)|oauth2: cannot fetch token|expired or revoked/i;
+const RECONNECT = /invalid_grant|token (?:has been )?(?:expired|revoked)|AADSTS\d{4,6}|interaction_required|InvalidAuthenticationToken|invalid_client|token_expired|AuthenticationFailed|Lifetime validation failed|expired_access_token|invalid_access_token|couldn'?t (?:fetch|refresh) token|failed to (?:get|refresh) token|unauthorized_client|refresh token (?:is )?(?:invalid|revoked)|oauth2: cannot fetch token|expired or revoked/i;
 const UNAUTHORIZED = /\b401\b|unauthori[sz]ed|authentication required|login failed|logon failure|STATUS_LOGON_FAILURE|wrong (?:user|password)/i;
-const RATE = /rateLimitExceeded|userRateLimitExceeded|too many requests|\b429\b|throttl|activityLimitReached|too_many_requests|too_many_write_operations|\b403\b.*(?:rate|limit)/i;
+const RATE = /rateLimitExceeded|sharedDriveRateLimit|dailyLimitExceeded|(?<![A-Za-z])quotaExceeded|userRateLimitExceeded|too many requests|\b429\b|throttl|activityLimitReached|too_many_requests|too_many_write_operations|\b403\b.*(?:rate|limit)/i;
 const QUOTA = /storageQuotaExceeded|insufficient (?:storage|space)|quota (?:exceeded|has been exceeded)|\b507\b|out of space|not enough space|insufficient_space/i;
 const TLS = /x509|certificate (?:signed by unknown|has expired|is not valid|verify)|unknown authority|tls: failed to verify/i;
 const NETWORK = /no such host|dial tcp|i\/o timeout|connection (?:refused|reset)|TLS handshake|network is unreachable|context deadline|timeout awaiting|\bEOF\b/i;
 const MISSING = /directory not found|object not found|file not found|\b404\b/i;
 
+// Google counts the shared sign-in app's requests per project, across every DockNest that uses it.
+export const GOOGLE_SHARED_APP = 'Google is limiting the shared sign-in app. Use your own Google app ID for steady speed.';
 const again = label => `${label} needs you to sign in again. Open the storage destination and press Reconnect.`;
 // -> { reason, message, needsReconnect, missing }
 export function classify(stderr, exitCode, backend) {
@@ -26,7 +28,7 @@ export function classify(stderr, exitCode, backend) {
     return oauth ? { reason: 'needs_reconnect', needsReconnect: true, message: again(label) }
       : { reason: 'auth_failed', needsReconnect: false, message: `${label} refused the login. Check the user name and password.` };
   }
-  if (RATE.test(text)) return { reason: 'rate_limited', needsReconnect: false, message: `${label} is limiting requests, DockNest retries at the next run.` };
+  if (RATE.test(text)) return { reason: 'rate_limited', needsReconnect: false, message: backend === 'drive' ? GOOGLE_SHARED_APP : `${label} is limiting requests, DockNest retries at the next run.` };
   if (QUOTA.test(text)) return { reason: 'quota', needsReconnect: false, message: `${label} has no space left for this backup.` };
   if (exitCode === 3 || exitCode === 4 || MISSING.test(text)) return { reason: 'not_found', needsReconnect: false, missing: true, message: `The file or folder is not on ${label}.` };
   if (TLS.test(text)) return { reason: 'tls', needsReconnect: false, message: `${label} could not be trusted: its security certificate was not accepted. Check that the server clock is right and that the system certificates are installed.` };
