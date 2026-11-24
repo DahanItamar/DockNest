@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { connect as sshConnect, withRuntime as sshWithRuntime } from '../ssh.js';
 import { helperSource } from '../helper-bundle.js';
-import { parseCapabilities } from './command.js';
+import { parseCapabilities, identityFor } from './command.js';
 import { prepareHelper, auditSudo } from './run.js';
 
 // Moving one staged package for a server whose SSH user is not root (a NAS with passwordless sudo). The staging folders are
@@ -13,7 +13,7 @@ import { prepareHelper, auditSudo } from './run.js';
 // `deps` lets tests stand in for the SSH connection; the app never passes it.
 const real = { connect: sshConnect, withRuntime: sshWithRuntime };
 const MAX_EVENT_BYTES = 4 * 1024 * 1024;
-const stagingBaseOf = server => { const base = parseCapabilities(server)?.stagingBase; return typeof base === 'string' && base.startsWith('/') ? base : undefined; };
+const stagingBaseOf = server => { const base = identityFor(server).nasKind ? parseCapabilities(server)?.stagingBase : null; return typeof base === 'string' && base.startsWith('/') ? base : undefined; };
 const requestFor = (server, operation, path) => ({ operation, path, ...(stagingBaseOf(server) ? { stagingBase: stagingBaseOf(server) } : {}) });
 const hasher = () => { const hash = createHash('sha256'); let size = 0; return { update(chunk) { hash.update(chunk); size += chunk.length; }, get size() { return size; }, hex: () => hash.digest('hex') }; };
 

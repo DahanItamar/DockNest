@@ -52,8 +52,9 @@ test('keyframes are on the allowlist', () => {
   assert.deepEqual(bad, []);
 });
 
+// The one allowed Beta tag is the Synology and Unraid support switches in Settings (owner decision for 3.0.0).
 test('no Beta label in the UI', () => {
-  assert.deepEqual(hits(/\bBeta\b/g, jsx), []);
+  assert.deepEqual(hits(/\bBeta\b/g, jsx.filter(({ name }) => !/NasSupportSettings[.]jsx$/.test(name))), []);
 });
 
 test('!important count never grows', () => {

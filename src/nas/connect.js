@@ -1,4 +1,5 @@
 import { identityFor, CommandRefused } from './command.js';
+import { gateInfo } from './gate.js';
 import { capabilityFacts, SUDO_FIX, withoutNasFacts } from './readiness.js';
 
 // Connecting a server (POST /api/servers/connect). `inspect(server)` is the read-only NAS check and `test(server)` the
@@ -7,7 +8,7 @@ import { capabilityFacts, SUDO_FIX, withoutNasFacts } from './readiness.js';
 // before the helper runs anything as root.
 export class ConnectRefused extends Error { constructor(message, fix = null) { super(message); this.name = 'ConnectRefused'; this.status = 409; this.fix = fix; } }
 export const NOT_ROOT_MESSAGE = 'SSH connected, but this backup engine requires a root SSH account to preserve volume ownership. Run the setup command as root and connect using root.';
-const NOT_NAS_MESSAGE = 'SSH connected as a user that is not root. A non-root account is only supported on a Unraid, Synology or TrueNAS system with passwordless sudo. ' + 'Run the setup command as root and connect using root.';
+const NOT_NAS_MESSAGE = 'SSH connected as a user that is not root. A non-root account is only supported on a TrueNAS system with passwordless sudo. ' + 'Run the setup command as root and connect using root.';
 
 const refusal = result => {
   const failed = result?.checks?.find(check => check.status === 'fail');
@@ -26,7 +27,7 @@ export async function connectCapabilities(server, { inspect, test }) {
     if (!root) throw error; // Cannot prove a NAS with passwordless sudo: no root command runs.
   }
   if (!root) {
-    if (!readiness?.nas) throw new ConnectRefused(NOT_NAS_MESSAGE);
+    if (!readiness?.nas) throw new ConnectRefused(readiness?.gatedOff ? `${NOT_NAS_MESSAGE} ${gateInfo(readiness.gatedOff)}` : NOT_NAS_MESSAGE);
     if (readiness.identity !== 'sudo' || !readiness.ready) throw refusal(readiness);
   }
   if (readiness?.nas && readiness.ready) facts = readiness.facts ?? capabilityFacts(readiness);

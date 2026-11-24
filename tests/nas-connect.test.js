@@ -42,7 +42,8 @@ test('wizard text: Unraid key command is persistent and takes only a DockNest ke
   const command = unraidInstallCommand(key);
   assert.match(command, /\/boot\/config\/ssh\/root\/authorized_keys/);
   assert.throws(() => unraidInstallCommand("ssh-rsa AAA docknest'; rm -rf / #"));
-  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }), SYNOLOGY_RESET_HINT);
+  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }, { synology: true }), SYNOLOGY_RESET_HINT);
+  assert.equal(loginHint({ capabilities: '{"nas":{"kind":"synology"}}' }, { level: 'client-authentication' }), null, 'no hint while Synology support is off');
   assert.equal(loginHint({ capabilities: '{"nas":{"kind":"unraid"}}' }, { level: 'client-authentication' }), null);
   assert.equal(loginHint({ capabilities: null }, { level: 'client-authentication' }), null);
 });
