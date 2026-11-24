@@ -24,7 +24,7 @@
 .berry-header .brand-button{border:0;padding:0;background:transparent}.berry-header-tools>.icon:not(.theme-toggle){border:0;background:transparent;color:var(--header-control)}
 @media(max-width:599px){.berry-header-tools{gap:4px}.berry-header-tools>.icon:not(.theme-toggle){width:30px;min-height:34px;padding:4px}.berry-bell{width:30px}.berry-header>.brand{min-width:0}.berry-header .brand-wordmark{font-size:var(--fs-section)}.berry-header .brand-lockup img{width:24px;height:24px}.berry-header{gap:8px;padding:12px}}
 
-.berry-header .brand-image{width:154px;height:auto}.berry-header .brand-lockup{gap:0}
+.berry-header .brand-image{width:154px;height:auto}.berry-header .brand-lockup{gap:0;align-items:flex-start}
 @media(max-width:599px){.berry-header .brand-lockup .brand-image{width:108px;height:auto}.berry-header .brand-lockup small{font-size:var(--fs-caption)}.berry-header>.brand{width:108px}.berry-header{gap:8px}}
 
 @media(max-width:899px){.berry-shell .workspace{transition:none}}

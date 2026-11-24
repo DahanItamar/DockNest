@@ -37,17 +37,11 @@ try{
    const toHsl=(r,g,b)=>{r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b),l=(max+min)/2,d=max-min;if(!d)return[0,0,l];const s=d/(1-Math.abs(2*l-1));let h=max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4;h=(h*60+360)%360;return[h,s,l]};
    const toRgb=(h,s,l)=>{const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;const[r,g,b]=h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];return[(r+m)*255,(g+m)*255,(b+m)*255]};
    const hex=target,[tr,tg,tb]=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)),[th,ts,tl]=toHsl(tr,tg,tb);
-   // Reference = the master's bird colour (80th percentile of lightness among saturated pixels) and its mean saturation.
-   const lights=[];let sumS=0;
-   for(let i=0;i<px.length;i+=4)if(px[i+3]>=200){const[,s,l]=toHsl(px[i],px[i+1],px[i+2]);if(s>.25&&l>.08&&l<.92){lights.push(l);sumS+=s}}
-   lights.sort((x,y)=>x-y);const lb=lights[Math.floor(lights.length*.8)],ms=sumS/lights.length;
+   // One flat fill: every coloured pixel of the mark and the wordmark takes exactly the target colour (--dn-brand-logo), alpha untouched,
+   // so the mark and the wordmark can never differ. Near-grey fringe pixels are left alone.
    for(let i=0;i<px.length;i+=4){
-    if(!px[i+3])continue;const[,s,l]=toHsl(px[i],px[i+1],px[i+2]);if(s<=.12)continue;
-    // The bird lands on the target lightness; darker pixels (the wordmark) move by a proportional share of the same shift.
-    // Light variant: the dark wordmark takes the accent colour exactly, like the mark (full colour in light mode too).
-    if(wordmark&&l<lb*.7){px[i]=tr;px[i+1]=tg;px[i+2]=tb;continue}
-    const weight=Math.min(1,(s-.12)/.2),ns=Math.min(1,s*ts/ms),nl=Math.min(.97,Math.max(.03,l+(tl-lb)*Math.min(1,l/lb)));
-    const[r,g,b]=toRgb(th,s*(1-weight)+ns*weight,l*(1-weight)+nl*weight);px[i]=r;px[i+1]=g;px[i+2]=b;
+    if(!px[i+3])continue;const[,s]=toHsl(px[i],px[i+1],px[i+2]);if(s<=.12)continue;
+    px[i]=tr;px[i+1]=tg;px[i+2]=tb;
    }
    ctx.putImageData(frame,0,0);return canvas.toDataURL('image/png').split(',')[1];
   },{data:'data:image/png;base64,'+buffer.toString('base64'),target,wordmark});
@@ -130,7 +124,7 @@ try{
  await writeFile('public/favicon.ico',ico);
  for(const filename of ['apple-touch-icon.png','apple-touch-icon-precomposed.png'])await writeFile('public/'+filename,await readFile('public/brand/apple-touch-icon-'+version+'.png'));
  await writeFile('public/brand/asset-manifest.json',JSON.stringify({identity:manifest.identity,presentation:'Light and dark',version,operation:'Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.',sourceAlpha:source.alpha,outputs},null,2)+'\n');
- await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Docker Backup & Restore',start_url:'/',scope:'/',icons:[...[192,512].map(size=>({src:'/brand/app-icon-'+size+'-'+version+'.png',sizes:size+'x'+size,type:'image/png',purpose:'any'})),{src:'/brand/app-icon-maskable-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'maskable'}],theme_color:'#0D786C',background_color:'#F9F9FB',display:'standalone'},null,2)+'\n');
+ await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Backup & Restore for Self-Hosted Apps',start_url:'/',scope:'/',icons:[...[192,512].map(size=>({src:'/brand/app-icon-'+size+'-'+version+'.png',sizes:size+'x'+size,type:'image/png',purpose:'any'})),{src:'/brand/app-icon-maskable-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'maskable'}],theme_color:'#0D786C',background_color:'#F9F9FB',display:'standalone'},null,2)+'\n');
  await writeFile('web/brand-assets.json',JSON.stringify({width:600,height:Math.round(600*logo.height/logo.width),accents:accentLogos},null,2)+'\n');
  // Drop files of earlier exports (their names carry a content hash) so public/brand holds only the current set.
  const keep=new Set([...outputs.map(x=>x.filename),'asset-manifest.json','site.webmanifest','favicon-'+version+'.ico']);

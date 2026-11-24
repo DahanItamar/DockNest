@@ -1,6 +1,6 @@
 <div align="center">
   <img src="docs/media/logo-teal.png" alt="DockNest" width="320" />
-  <p><strong>Back up Docker apps. Verify recovery points. Restore a private copy.</strong></p>
+  <p><strong>Backup &amp; Restore for Self-Hosted Apps</strong></p>
   <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=0D786C&sort=semver&display_name=tag" alt="Latest release" /></a>
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
   <img src="https://img.shields.io/badge/deployment-self--hosted-0D786C?style=flat-square" alt="Self-hosted" />
