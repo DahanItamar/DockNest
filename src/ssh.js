@@ -20,7 +20,7 @@ export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}
 }
 // A server that uses the helper runtime container first gets its pinned image loaded and the folders the call may see
 // computed (src/nas/runtime-prepare.js). Every other server keeps its options untouched and pays nothing.
-async function withRuntime(server,request,options){
+export async function withRuntime(server,request,options){
  if(identityFor(server).runtime!=='container')return options;
  const [{prepareRuntime},{sshRunner}]=await Promise.all([import('./nas/runtime-prepare.js'),import('./nas/service.js')]);
  return prepareRuntime(server,request,options,{connect,makeRunner:client=>sshRunner(client)});
@@ -57,7 +57,11 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
   });
  } finally {client.end();}
 }
+// A NAS user that is not root cannot read the root-only staging folders over SFTP: the three package movers below go through the
+// helper under sudo for that user (src/nas/stage-io.js). Every other server keeps the SFTP code unchanged.
+const viaHelper=server=>identityFor(server).identity==='sudo';
 export async function download(server,remotePath,output,onProgress=null) {
+ if(viaHelper(server))return (await import('./nas/stage-io.js')).helperDownload(server,remotePath,output,onProgress);
  const client=await connect(server);
  try {return await new Promise((resolve,reject)=>client.sftp((err,sftp)=>{
   if(err)return reject(err);
@@ -111,6 +115,7 @@ export async function remoteCaptureStream(server,request,output,onStage=()=>{},o
 }
 
 export async function upload(server,localPath,remotePath) {
+ if(viaHelper(server))return (await import('./nas/stage-io.js')).helperUploadFile(server,localPath,remotePath);
  const client=await connect(server);
  try{return await new Promise((resolve,reject)=>client.sftp((err,sftp)=>{
   if(err)return reject(err);
@@ -121,6 +126,7 @@ export async function upload(server,localPath,remotePath) {
  }));}finally{client.end();}
 }
 export async function uploadStream(server,input,remotePath) {
+ if(viaHelper(server))return (await import('./nas/stage-io.js')).helperUpload(server,input,remotePath);
  const client=await connect(server);
  try{return await new Promise((resolve,reject)=>client.sftp((error,sftp)=>{
   if(error)return reject(error);

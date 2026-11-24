@@ -26,6 +26,8 @@ from .routing import (
     proxy_routes)
 from .nas import (
     attach_nas, nas_template_restore)
+from .stage_io import (
+    stage_read, stage_write)
 from .staging import (
     cleanup_staging, install_boot_recovery, list_staging, nas_staging_facts)
 from .move import (
@@ -136,7 +138,7 @@ def main(req):
     refuse_foreign_runtime(req)
     RUNTIME=request_runtime(req)  # None: rootful Docker, exactly as before
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
-    if op=='capture-stream':EVENT_STREAM=sys.stderr
+    if op in ('capture-stream','stage-read'):EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
@@ -155,6 +157,8 @@ def main(req):
         emit(result=attach_nas({**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)},cs))
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='nas-template-restore':nas_template_restore(req)
+    elif op=='stage-read':stage_read(req)
+    elif op=='stage-write':stage_write(req)
     elif op=='describe-containers':describe_containers(req)
     elif op=='key-scan':key_scan_operation(req)
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))

@@ -159,3 +159,8 @@ test('Podman and rootless image archives stream through descriptors: load on std
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for image archive verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('staged package movers: confined to the staging folders, no links, checked size and checksum, nothing left behind on failure',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_stage_io.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for staged package verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

@@ -17,7 +17,7 @@ called validated. A real backup or restore is not marked validated without a Lin
 ## NAS servers (docs/nas-servers.md)
 
 - [ ] The runtime image is built for amd64 and loaded over SSH (`docker load`) on a NAS with no Python.
-- [ ] TrueNAS SCALE 25.x lab: connect, discover apps, back up, restore test; 24.04 is refused with the Kubernetes message.
+- [x] TrueNAS SCALE 25.x lab: connect, discover apps, back up, restore test (see the 2026-11-24 results); 24.04 is refused with the Kubernetes message (unit tests only).
 - [ ] Unraid (needs a USB-stick test machine): connect, key persistence after reboot, template apps discovered, backup and restore.
 - [ ] Unraid Compose Manager stacks are reported as unsupported, not half-backed-up.
 - [ ] Synology DSM: connect with a sudo user, Container Manager projects, backup and restore.
@@ -78,8 +78,25 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
    staging as unfinished, but the host-runtime sudo path is hit too. Suggested fix: do the staged file reads and writes through the sudo helper, as direct capture does.
 2. **Restore through the API with `replace` is refused with "requires a safety backup and rollback adapter; unavailable" (low, probably by design).**
    `copy` (new copy) is the only restore mode that planned as executable on the lab. Confirm that the screens do not offer Replace for these servers.
-3. **The readiness list shows "Enable maintenance protection before backing up a live site" in red for an app with maintenance switched off (low).**
+3. **The readiness list shows "Enable maintenance protection before backing up a live site" in red for an app with maintenance switched off (low). Open follow-up, not fixed here: it may be by design (a restore-check contract expects that readiness answer to stay as it is).**
    The backup still ran. Repro: an app with `maintenanceRequired: false` and no domain, then `POST /api/sites/:id/readiness` (`ready` stays false).
+
+### Re-run after the sudo package mover fix, 2026-11-24
+
+Same lab (TrueNAS SCALE 25.10 VM, a throwaway data directory, fake data, local folder for the backups), on the branch that makes
+the helper stream staged packages under sudo (docs/nas-servers.md, "Backups and restores with a sudo user"). The app used the
+default staging folder, not the pool's staging base. The VM was powered off afterwards and everything the run added was removed.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Back up (default staged delivery, sudo user) | pass | The job completed; the stored package authenticated with the recorded size and checksum. |
+| Restore into a new copy | pass | The plan was executable and the restore job completed. The staging folders stayed root-only (0700). |
+| Restore test | pass | All six steps (check space, copy backup, restore copy, start, check health, clean up) finished and the lab was left as before. |
+| Recovery time shown | pass | A measured time (20 s on this lab) is available to the Recovery Guide after the passed test. |
+| Replacement restore | refused by design | The API answers that replacement needs a safety backup and a rollback adapter; see open question Q10. Documented in docs/nas-servers.md. |
+| Staged package movers on the lab's own Python | pass | `remote/test_stage_io.py` and `remote/test_nas_staging.py` (path confinement, symbolic links, hard links, `..`, size and checksum, nothing left behind) pass on the Linux VM. |
+
+Bug 1 above is fixed; bug 2 is by design; bug 3 (the red maintenance message) is an open follow-up and was not changed.
 
 ### Notes for the next run
 

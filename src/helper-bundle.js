@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 export const HELPER_MODULES = Object.freeze(['common', 'runtime', 'guides', 'paths', 'keys', 'engine_base', 'engine_postgres', 'engine_mysql',
   'engine_redis', 'engine_mongo', 'databases', 'dumps', 'backup', 'incremental', 'net',
-  'maintenance', 'discovery', 'runspec', 'restore_gaps', 'restore', 'nas', 'staging', 'move', 'routing', 'install', 'restore_test', 'cleanup', 'edit', 'heal', 'launch', '__main__']);
+  'maintenance', 'discovery', 'runspec', 'restore_gaps', 'restore', 'nas', 'staging', 'stage_io', 'move', 'routing', 'install', 'restore_test', 'cleanup', 'edit', 'heal', 'launch', '__main__']);
 const source = fileURLToPath(new URL('../remote/helper/', import.meta.url));
 const OPEN = '# <build:header>', CLOSE = '# </build:header>';
 
