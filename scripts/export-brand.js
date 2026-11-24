@@ -28,8 +28,8 @@ try{
  const page=await browser.newPage();
  // Hue-shift the coloured pixels of a master to a target colour, keeping the alpha, so the shape is untouched. Lightness is kept, so the light and
  // dark masters keep their own contrast; saturation is scaled to the target colour.
- async function recolor(buffer,target){
-  const bytes=await page.evaluate(async({data,target})=>{
+ async function recolor(buffer,target,wordmark=false){
+  const bytes=await page.evaluate(async({data,target,wordmark})=>{
    const image=new Image();image.src=data;await image.decode();
    const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
    const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
@@ -44,14 +44,16 @@ try{
    for(let i=0;i<px.length;i+=4){
     if(!px[i+3])continue;const[,s,l]=toHsl(px[i],px[i+1],px[i+2]);if(s<=.12)continue;
     // The bird lands on the target lightness; darker pixels (the wordmark) move by a proportional share of the same shift.
+    // Light variant: the dark wordmark takes the accent colour exactly, like the mark (full colour in light mode too).
+    if(wordmark&&l<lb*.7){px[i]=tr;px[i+1]=tg;px[i+2]=tb;continue}
     const weight=Math.min(1,(s-.12)/.2),ns=Math.min(1,s*ts/ms),nl=Math.min(.97,Math.max(.03,l+(tl-lb)*Math.min(1,l/lb)));
     const[r,g,b]=toRgb(th,s*(1-weight)+ns*weight,l*(1-weight)+nl*weight);px[i]=r;px[i+1]=g;px[i+2]=b;
    }
    ctx.putImageData(frame,0,0);return canvas.toDataURL('image/png').split(',')[1];
-  },{data:'data:image/png;base64,'+buffer.toString('base64'),target});
+  },{data:'data:image/png;base64,'+buffer.toString('base64'),target,wordmark});
   return Buffer.from(bytes,'base64');
  }
- const original=await recolor(master,logoColor('teal',false));
+ const original=await recolor(master,logoColor('teal',false),true);
  version=createHash('sha256').update(original).digest('hex').slice(0,10);
  const source=await page.evaluate(async data=>{
   const image=new Image();image.src=data;await image.decode();
@@ -105,7 +107,7 @@ try{
  // One light and one dark logo per accent: the light master recoloured for white surfaces, the lighter master for dark ones.
  const accentLogos={};
  for(const accent of ACCENTS){
-  const light=await recolor(master,logoColor(accent,false)),dark=await recolor(blue,logoColor(accent,true));
+  const light=await recolor(master,logoColor(accent,false),true),dark=await recolor(blue,logoColor(accent,true));
   if(accent==='teal')await writeFile('docs/media/logo-teal.png',dark); // README header: the lighter variant reads on both GitHub themes
   const lightVersion=createHash('sha256').update(light).digest('hex').slice(0,10),darkVersion=createHash('sha256').update(dark).digest('hex').slice(0,10);
   for(const width of [600,1200]){

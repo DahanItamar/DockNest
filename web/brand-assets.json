@@ -4,8 +4,8 @@
   "accents": {
     "teal": {
       "light": {
-        "src": "/brand/logo-teal-light-600-b92bb05636.webp",
-        "srcSet": "/brand/logo-teal-light-600-b92bb05636.webp 600w, /brand/logo-teal-light-1200-b92bb05636.webp 1200w"
+        "src": "/brand/logo-teal-light-600-c895348a8f.webp",
+        "srcSet": "/brand/logo-teal-light-600-c895348a8f.webp 600w, /brand/logo-teal-light-1200-c895348a8f.webp 1200w"
       },
       "dark": {
         "src": "/brand/logo-teal-dark-600-fca0ca01f5.webp",
@@ -14,8 +14,8 @@
     },
     "blue": {
       "light": {
-        "src": "/brand/logo-blue-light-600-0ace505c0f.webp",
-        "srcSet": "/brand/logo-blue-light-600-0ace505c0f.webp 600w, /brand/logo-blue-light-1200-0ace505c0f.webp 1200w"
+        "src": "/brand/logo-blue-light-600-c237975074.webp",
+        "srcSet": "/brand/logo-blue-light-600-c237975074.webp 600w, /brand/logo-blue-light-1200-c237975074.webp 1200w"
       },
       "dark": {
         "src": "/brand/logo-blue-dark-600-bf9589978f.webp",
@@ -24,8 +24,8 @@
     },
     "indigo": {
       "light": {
-        "src": "/brand/logo-indigo-light-600-4c4dcf4a41.webp",
-        "srcSet": "/brand/logo-indigo-light-600-4c4dcf4a41.webp 600w, /brand/logo-indigo-light-1200-4c4dcf4a41.webp 1200w"
+        "src": "/brand/logo-indigo-light-600-e253a785e2.webp",
+        "srcSet": "/brand/logo-indigo-light-600-e253a785e2.webp 600w, /brand/logo-indigo-light-1200-e253a785e2.webp 1200w"
       },
       "dark": {
         "src": "/brand/logo-indigo-dark-600-f47525af05.webp",
@@ -34,8 +34,8 @@
     },
     "orange": {
       "light": {
-        "src": "/brand/logo-orange-light-600-bdcd7c64c6.webp",
-        "srcSet": "/brand/logo-orange-light-600-bdcd7c64c6.webp 600w, /brand/logo-orange-light-1200-bdcd7c64c6.webp 1200w"
+        "src": "/brand/logo-orange-light-600-85127baaf4.webp",
+        "srcSet": "/brand/logo-orange-light-600-85127baaf4.webp 600w, /brand/logo-orange-light-1200-85127baaf4.webp 1200w"
       },
       "dark": {
         "src": "/brand/logo-orange-dark-600-000bf2e3ce.webp",

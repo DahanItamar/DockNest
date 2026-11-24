@@ -46,7 +46,7 @@
  --dn-brand-text-step:#007061;--dn-chrome-text-step:#007061;
  --dn-brand-solid-step:#0D786C;--dn-brand-solid-hover-step:#0C6C61;--dn-chrome-solid-step:#0D786C;--dn-chrome-solid-hover-step:#0C6C61;
  --dn-brand-ui:#109687;--dn-chrome-ui:#109687;
- --dn-brand-logo:#12A594;
+ --dn-brand-logo:#109687;
  --dn-viz-1:#119888;--dn-viz-2:#007061;--dn-viz-3:#8B8D98;--dn-viz-4:#E5484D;--dn-viz-area:#12A59440;
  --dn-map-domain-fill:#12A59410;
 }
@@ -66,7 +66,7 @@
  --dn-brand-text-step:#0B64B1;--dn-chrome-text-step:#0B64B1;
  --dn-brand-solid-step:#006CBF;--dn-brand-solid-hover-step:#0061AC;--dn-chrome-solid-step:#006CBF;--dn-chrome-solid-hover-step:#0061AC;
  --dn-brand-ui:#0087F0;--dn-chrome-ui:#0087F0;
- --dn-brand-logo:#0090FF;
+ --dn-brand-logo:#0087F0;
  --dn-viz-1:#0089F2;--dn-viz-2:#0B64B1;--dn-viz-3:#8B8D98;--dn-viz-4:#E5484D;--dn-viz-area:#0090FF40;
  --dn-map-domain-fill:#0090FF10;
 }
@@ -106,7 +106,7 @@
  --dn-brand-text-step:#A33E00;--dn-chrome-text-step:#A33E00;
  --dn-brand-solid-step:#B24D0F;--dn-brand-solid-hover-step:#A0450E;--dn-chrome-solid-step:#B24D0F;--dn-chrome-solid-hover-step:#A0450E;
  --dn-brand-ui:#DE6013;--dn-chrome-ui:#DE6013;
- --dn-brand-logo:#F76B15;
+ --dn-brand-logo:#DE6013;
  --dn-viz-1:#DE6013;--dn-viz-2:#A33E00;--dn-viz-3:#8B8D98;--dn-viz-4:#E5484D;--dn-viz-area:#F76B1540;
  --dn-map-domain-fill:#F76B1510;
 }

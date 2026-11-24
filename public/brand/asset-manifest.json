@@ -1,7 +1,7 @@
 {
   "identity": "DockNest / Homebird",
   "presentation": "Light and dark",
-  "version": "b92bb05636",
+  "version": "c895348a8f",
   "operation": "Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.",
   "sourceAlpha": {
     "occupied": 307069,
@@ -13,7 +13,7 @@
     {
       "filename": "logo.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 2015,
       "height": 395,
       "crop": {
@@ -22,13 +22,13 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 451816,
-      "sha256": "c86ddce6ba7158057d68d638173ebafb1bf8c7ec0d3569a38f087fd0ca675dab"
+      "bytes": 286183,
+      "sha256": "51f181faf6505dfc7370730a5b7371892ebbba75578995a64a370fd2d91dbfff"
     },
     {
       "filename": "mark.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 476,
       "height": 395,
       "crop": {
@@ -37,13 +37,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 114369,
-      "sha256": "74881b85fb3b2db43adb563ae27336dde2ddf8c3fe230c170a88f70dd29f4120"
+      "bytes": 122898,
+      "sha256": "4255a37cbf78bd11fcf0b3848e2fab7af33b8b155568de4762368d4838349f9e"
     },
     {
-      "filename": "logo-teal-light-600-b92bb05636.webp",
+      "filename": "logo-teal-light-600-c895348a8f.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 600,
       "height": 118,
       "crop": {
@@ -52,8 +52,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 19870,
-      "sha256": "79cc4df9dbb6ed8e5672f1f170016ede01d6aa6ebc9afda292ffa268d81b8a41"
+      "bytes": 23494,
+      "sha256": "18ddec32ddc343d26e8b881932be48c30b939a6f46fdd9842464bc818abdef7f"
     },
     {
       "filename": "logo-teal-dark-600-fca0ca01f5.webp",
@@ -71,9 +71,9 @@
       "sha256": "e0cd8db649d9d647003ba2852720373d0de9b336bff63d902d0c368b59edc99a"
     },
     {
-      "filename": "logo-teal-light-1200-b92bb05636.webp",
+      "filename": "logo-teal-light-1200-c895348a8f.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 1200,
       "height": 235,
       "crop": {
@@ -82,8 +82,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 51122,
-      "sha256": "60d1e75918042b89ff91b6cf943df77063a2f9a3564bdade499b0dd940587c45"
+      "bytes": 58598,
+      "sha256": "6715840d93e0871f43d8aece212444b880918df2b5d446d67dcd795c39cd3f70"
     },
     {
       "filename": "logo-teal-dark-1200-fca0ca01f5.webp",
@@ -101,9 +101,9 @@
       "sha256": "15fe90f64fc7fb6980f25f7d2be2396e3f302d9256dde797e37ac2c5a85b8272"
     },
     {
-      "filename": "logo-blue-light-600-0ace505c0f.webp",
+      "filename": "logo-blue-light-600-c237975074.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "0ace505c0f50541dc77be36a52afa1b7b5695f94bada2be32c21a9ad5b4804e9",
+      "sourceSha256": "c237975074334279df365f567994a13da2f041ef9fea21f3960da70886c72351",
       "width": 600,
       "height": 118,
       "crop": {
@@ -112,8 +112,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 21134,
-      "sha256": "3e6887f5d1b5de39c9bca6eda494b8cafcddc269d790a2a5a3519da8cf65c8d0"
+      "bytes": 24750,
+      "sha256": "fdde967aff988fcc0fc740b3e572e84a2fb5f644fe072df35aeb702f24ebec9f"
     },
     {
       "filename": "logo-blue-dark-600-bf9589978f.webp",
@@ -131,9 +131,9 @@
       "sha256": "a51822c623302d57e76d4e54cd90271969cb2e54deae07191c6ce9e865f7dada"
     },
     {
-      "filename": "logo-blue-light-1200-0ace505c0f.webp",
+      "filename": "logo-blue-light-1200-c237975074.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "0ace505c0f50541dc77be36a52afa1b7b5695f94bada2be32c21a9ad5b4804e9",
+      "sourceSha256": "c237975074334279df365f567994a13da2f041ef9fea21f3960da70886c72351",
       "width": 1200,
       "height": 235,
       "crop": {
@@ -142,8 +142,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 52906,
-      "sha256": "6d6674dfc3d85f39b6c617454ed649e79e9491bc9d8f303a729a13a93e74579a"
+      "bytes": 61882,
+      "sha256": "3263b545b6eb75e8450f21e0dbdd34c3214c4827274952e5775ded808237383b"
     },
     {
       "filename": "logo-blue-dark-1200-bf9589978f.webp",
@@ -161,9 +161,9 @@
       "sha256": "c858881131c8ac8ac80c9c5645e5d8db22d34cbaf96e960004195505d303eed8"
     },
     {
-      "filename": "logo-indigo-light-600-4c4dcf4a41.webp",
+      "filename": "logo-indigo-light-600-e253a785e2.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "4c4dcf4a4147b8bd4966cf248376aba4030a8836d76f1087151758a0431d7c92",
+      "sourceSha256": "e253a785e25edb5692f85c15cf292cd6ee9a9e5586f36e7b06c99bbb9b6cbb19",
       "width": 600,
       "height": 118,
       "crop": {
@@ -172,8 +172,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 20396,
-      "sha256": "7330f3946c42d16938554816d68cb57ae00ee4b51aec90943b653875d7a7e1db"
+      "bytes": 23938,
+      "sha256": "322f5742fd08c090bb715e25d5584345e910f3c8a8d4317d40bd2fe7564bf60b"
     },
     {
       "filename": "logo-indigo-dark-600-f47525af05.webp",
@@ -191,9 +191,9 @@
       "sha256": "39fc3628247caaae9f439dfcccfbe2268e1f48ae9fa0dbcffe134ec14f7e39ce"
     },
     {
-      "filename": "logo-indigo-light-1200-4c4dcf4a41.webp",
+      "filename": "logo-indigo-light-1200-e253a785e2.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "4c4dcf4a4147b8bd4966cf248376aba4030a8836d76f1087151758a0431d7c92",
+      "sourceSha256": "e253a785e25edb5692f85c15cf292cd6ee9a9e5586f36e7b06c99bbb9b6cbb19",
       "width": 1200,
       "height": 235,
       "crop": {
@@ -202,8 +202,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 51864,
-      "sha256": "31f99722e79b8a2f761ab2a000ed5fb0c66eb1cffd52238589cbc4443020b5ab"
+      "bytes": 59754,
+      "sha256": "b1ea6945b8e01c992cf7e3b7af446db3e332fdb65309b7112a7eb737df8175b6"
     },
     {
       "filename": "logo-indigo-dark-1200-f47525af05.webp",
@@ -221,9 +221,9 @@
       "sha256": "65f16ae861601ae35ede2bbd13ab83cc288754c3d74f7a3970e779a74152fce6"
     },
     {
-      "filename": "logo-orange-light-600-bdcd7c64c6.webp",
+      "filename": "logo-orange-light-600-85127baaf4.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "bdcd7c64c67c8966e0501a140c7992e1828742a9af7fe42be3e0855a2deb3beb",
+      "sourceSha256": "85127baaf4fa1bdbf5c44b693e235753ed515608e3486ade86220c739e464e46",
       "width": 600,
       "height": 118,
       "crop": {
@@ -232,8 +232,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 21318,
-      "sha256": "91442ffdb4749a19c6ced5074da72edc07369df6d8186e26fd6ad1b6a172cd69"
+      "bytes": 24242,
+      "sha256": "3b4b65ce6568d7c3ccffe93dcaeda9fce17ba1cf0553774bf9c49413f45b54fa"
     },
     {
       "filename": "logo-orange-dark-600-000bf2e3ce.webp",
@@ -251,9 +251,9 @@
       "sha256": "eef5a7d222b50a47b9a19f2fb7c16596255a11d16d6909af6fb400dfccbd4c10"
     },
     {
-      "filename": "logo-orange-light-1200-bdcd7c64c6.webp",
+      "filename": "logo-orange-light-1200-85127baaf4.webp",
       "source": "docs/media/logo-blue.png",
-      "sourceSha256": "bdcd7c64c67c8966e0501a140c7992e1828742a9af7fe42be3e0855a2deb3beb",
+      "sourceSha256": "85127baaf4fa1bdbf5c44b693e235753ed515608e3486ade86220c739e464e46",
       "width": 1200,
       "height": 235,
       "crop": {
@@ -262,8 +262,8 @@
         "width": 2015,
         "height": 395
       },
-      "bytes": 53618,
-      "sha256": "1cceaecdd8e63c95f7cb005980f124a955b39bce20b4a7901b4e3894b4170954"
+      "bytes": 61220,
+      "sha256": "0d77c00eafdaf92eb6883aa45a0bd9c17132ef8a21fc5e23581db2dfbeafc429"
     },
     {
       "filename": "logo-orange-dark-1200-000bf2e3ce.webp",
@@ -281,9 +281,9 @@
       "sha256": "f8fa0bfe6394f1fe34ed63d5fe5195bc9ae0cd25e1dfddb953935b7bfa6553d5"
     },
     {
-      "filename": "favicon-16-b92bb05636.png",
+      "filename": "favicon-16-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 16,
       "height": 16,
       "crop": {
@@ -292,13 +292,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 658,
-      "sha256": "a5f8f4d0c768dd6039d01bc331d8cc7770969ee57de43025940b30e05390c5fb"
+      "bytes": 652,
+      "sha256": "b3ff27cf83c2b589ad4510de8a13a128ef07d3372548e588acf2736f343814d8"
     },
     {
-      "filename": "favicon-32-b92bb05636.png",
+      "filename": "favicon-32-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 32,
       "height": 32,
       "crop": {
@@ -307,13 +307,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 1640,
-      "sha256": "818cff031103822c0ac03d8bd4084106d8c688dae2f06d5ba3810e5c02c836a5"
+      "bytes": 1643,
+      "sha256": "f3e216ee8ff4c09c400bdfa733c743c8669c166179d24cad71fcf6da30433f69"
     },
     {
-      "filename": "favicon-48-b92bb05636.png",
+      "filename": "favicon-48-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 48,
       "height": 48,
       "crop": {
@@ -322,13 +322,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 2664,
-      "sha256": "631bb011ab19f5001967a54e3b39d6736668a2a93c77db7cca319a565be4952f"
+      "bytes": 2703,
+      "sha256": "9860d8f239aa660f8d0e703e54a77cc773bf4f94980704b940fa22795be3199d"
     },
     {
-      "filename": "favicon-b92bb05636.png",
+      "filename": "favicon-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 32,
       "height": 32,
       "crop": {
@@ -337,13 +337,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 1640,
-      "sha256": "818cff031103822c0ac03d8bd4084106d8c688dae2f06d5ba3810e5c02c836a5"
+      "bytes": 1643,
+      "sha256": "f3e216ee8ff4c09c400bdfa733c743c8669c166179d24cad71fcf6da30433f69"
     },
     {
-      "filename": "app-icon-192-b92bb05636.png",
+      "filename": "app-icon-192-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 192,
       "height": 192,
       "crop": {
@@ -352,13 +352,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 18067,
-      "sha256": "1b69ee9a4825f8f9caaadc4fa77c7afe71adbc8b031c56a969edcdc5f5caa7ea"
+      "bytes": 19087,
+      "sha256": "7bcb9451c7e5f17f860d728249cd264548cf30f852ae94f79bc3e0a3c83c7a8e"
     },
     {
-      "filename": "app-icon-512-b92bb05636.png",
+      "filename": "app-icon-512-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 512,
       "height": 512,
       "crop": {
@@ -367,13 +367,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 96972,
-      "sha256": "95f1c7e0f647d794fe12d1532f8e9a8b349f2031c65db7620f72302aaec6bea7"
+      "bytes": 103382,
+      "sha256": "9c93ee2bea1e1c689dd3e6f7fd23a2cf4560d894670ea88182712a6481e1a38e"
     },
     {
-      "filename": "app-icon-maskable-512-b92bb05636.png",
+      "filename": "app-icon-maskable-512-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 512,
       "height": 512,
       "crop": {
@@ -382,13 +382,13 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 60096,
-      "sha256": "1adad0a4b0bbe8a9149a23a2c5c5e92950aa584eee0d677b9f7c94f6eda3a9fb"
+      "bytes": 63689,
+      "sha256": "50d16c6e5e94337649433f3ab4943575ecfb0e123bf2cdfb4b42d672b7df9719"
     },
     {
-      "filename": "apple-touch-icon-b92bb05636.png",
+      "filename": "apple-touch-icon-c895348a8f.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "b92bb056369d56296c3b17eda402ceabcdb2c9ab63af01ab0ed9a4d636866589",
+      "sourceSha256": "c895348a8f8f7f7a0dcfadd335472b56c5d3be24960d7a29b7c04429b9e6bae0",
       "width": 180,
       "height": 180,
       "crop": {
@@ -397,8 +397,8 @@
         "width": 476,
         "height": 395
       },
-      "bytes": 15977,
-      "sha256": "c30fdd907fad6d5a07b2ca1b638f1eb3ac511d0dd5e3912d2e4ba7deaa1801ff"
+      "bytes": 16775,
+      "sha256": "9212b002bdd4419a98fe3a1943c8ce7f17575019af3044d32776e90cfa0d3ab6"
     }
   ]
 }
