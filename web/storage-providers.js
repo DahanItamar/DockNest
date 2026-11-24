@@ -25,7 +25,15 @@ export const PROVIDER_GROUPS=[
   {id:'wasabi',label:'Wasabi',kind:'s3',template:'https://s3.{region}.wasabisys.com',region:'us-east-1',path:false,
    endpointHelp:'Built from the region. Edit it if your bucket uses a different endpoint.',regionHelp:'The region of your bucket.'},
   {id:'s3',label:'Other S3 service',kind:'s3',endpointPlaceholder:'https://s3.example.com',region:'us-east-1',path:true,
-   endpointHelp:"Your provider's S3 API endpoint. HTTPS is required.",regionHelp:'Filled in from your endpoint when it names one.'}]}];
+   endpointHelp:"Your provider's S3 API endpoint. HTTPS is required.",regionHelp:'Filled in from your endpoint when it names one.'}]},
+ {label:'Cloud drives',items:[
+  {id:'gdrive',label:'Google Drive',sub:'Sign in with your Google account',kind:'drive',icon:'brand-google-drive'},
+  {id:'onedrive',label:'OneDrive',sub:'Personal, work or school',kind:'onedrive',icon:'brand-onedrive'},
+  {id:'dropbox',label:'Dropbox',kind:'dropbox',icon:'brand-dropbox'}]},
+ {label:'Network and local',items:[
+  {id:'webdav',label:'WebDAV',sub:'Nextcloud, ownCloud and others',kind:'webdav',icon:'world'},
+  {id:'smb',label:'SMB share',sub:'Windows, Synology, Unraid and others',kind:'smb',icon:'network'},
+  {id:'local',label:'Local folder',sub:'A USB disk or NAS folder mounted into DockNest',kind:'local',icon:'folder'}]}];
 export const PROVIDERS=PROVIDER_GROUPS.flatMap(group=>group.items.map(item=>({...item,group:group.label})));
 export const DEFAULT_PROVIDER='own';
 export const providerById=id=>PROVIDERS.find(item=>item.id===id)||PROVIDERS[0];

@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {AlertCircle,ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
 import {useGuard} from '../map/MoveFlow.jsx';
+import {RecoveryCard} from '../recovery/RecoveryCard.jsx';
 import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
@@ -83,6 +84,7 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
  }
 
  return <form className="modal-body site-wizard rt-form" onSubmit={save} noValidate>
+  <RecoveryCard card={card}/>
   {!isAdmin&&<p className="t-caption">Only an administrator can change these settings.</p>}
    <div className="sb-switch-row">
     <span className="sb-switch-text"><span id="rt-auto" className="sb-switch-label">Auto tests</span><span id="rt-auto-help" className="t-caption">Restores your latest backup and checks it.</span></span>

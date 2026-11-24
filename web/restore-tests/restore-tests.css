@@ -37,3 +37,5 @@ dialog.rt-dialog{scrollbar-width:none}dialog.rt-dialog::-webkit-scrollbar{displa
 
 /* Approved select pickers: open downward first, hidden picker scrollbar. */
 @supports (appearance:base-select){select::picker(select){position-area:block-end span-inline-end;position-try-order:normal;position-try-fallbacks:flip-block;scrollbar-width:none}}
+.rt-last{display:grid;gap:var(--dn-space-1);min-width:0}
+.rt-recovery{font-size:var(--fs-caption)}
