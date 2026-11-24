@@ -1,5 +1,5 @@
 /* Container engines (docs/podman-rootless.md). Every colour, size, weight, radius and space is a product token. */
-.runtime-badge{display:inline-flex;align-items:center;gap:var(--dn-space-1);padding:var(--dn-space-1) var(--dn-space-2);border:1px solid var(--dn-brand-border);border-radius:var(--dn-radius-full);background:var(--dn-brand-surface);color:var(--dn-brand-text);font-size:var(--dn-text-xs);line-height:1.5;font-weight:var(--dn-weight-medium);white-space:nowrap;max-width:100%}
+.runtime-badge{display:inline-flex;align-items:center;gap:var(--dn-space-1);color:var(--dn-brand-text);font-size:var(--dn-text-xs);line-height:1.5;font-weight:var(--dn-weight-medium);white-space:nowrap;max-width:100%}
 .runtime-badge svg{flex:none}
 .runtime-badges{display:flex;flex-wrap:wrap;gap:var(--dn-space-2)}
 .runtime-list{display:flex;flex-direction:column;gap:var(--dn-space-1)}

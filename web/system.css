@@ -80,7 +80,7 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 @media(hover:hover){.row-open:hover:not(:disabled){background:var(--dn-bg-hover)}.row-open:hover:not(:disabled) .row-open-chevron{color:var(--dn-text-primary)}}
 .row-open:active:not(:disabled){background:var(--dn-bg-pressed)}
 /* Coloured icon chip from the dashboard: 40px square behind a 20px icon. */
-.icon-chip{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:var(--dn-radius-md);background:var(--dn-brand-chip);color:var(--dn-brand-text)}
+.icon-chip{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;background:none;color:var(--dn-brand-text)}
 /* Text link action: quiet, brand text, icon allowed. Used where a menu would be overkill. */
 button.text-link{height:auto;min-height:var(--dn-control-h-sm);padding:0 var(--dn-space-2);border:0;background:transparent;color:var(--link);font-weight:500;gap:var(--dn-space-1)}
 @media(hover:hover){button.text-link:hover:not(:disabled){background:transparent;text-decoration:underline;text-underline-offset:3px}}

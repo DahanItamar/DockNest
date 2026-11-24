@@ -44,7 +44,7 @@
 
 
 .theme-toggle,.berry-header-tools>.theme-toggle,.auth-header .theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:40px;min-width:40px;min-height:40px;padding:0;border:0;background:transparent;color:var(--header-control);border-radius:8px}
-.theme-toggle:hover{background:transparent;color:var(--header-control-hover)}
+.theme-toggle:hover{background:var(--dn-bg-hover);color:var(--header-control-hover)}
 
 
 
@@ -52,11 +52,11 @@
 
 
 .berry-header-tools .berry-bell{width:40px;min-width:40px;min-height:40px;border:0;background:transparent;color:var(--header-control)}
-.berry-header-tools .berry-bell:hover{background:transparent;color:var(--header-control-hover)}
+.berry-header-tools .berry-bell:hover{background:var(--dn-bg-hover);color:var(--header-control-hover)}
 .berry-bell i{top:5px;right:4px;outline:2px solid var(--surface)}
 @media(max-width:599px){.berry-header-tools .berry-bell{width:34px;min-width:34px;min-height:34px}}
 
-.berry-header-tools>.theme-toggle:hover,.auth-header .theme-toggle:hover{background:transparent;color:var(--header-control-hover)}
+.berry-header-tools>.theme-toggle:hover,.auth-header .theme-toggle:hover{background:var(--dn-bg-hover);color:var(--header-control-hover)}
 .theme-preferences{border:0;padding:0;margin:0;min-width:0}.theme-preferences legend{font-size:var(--fs-body);font-weight:500;margin-bottom:16px;color:var(--heading)}
 .theme-options{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:10px;background:var(--surface-muted)}
 .theme-options label{position:relative;text-align:center;border-radius:7px;padding:10px 4px;cursor:pointer;font-size:var(--fs-body);color:var(--text-secondary);transition:background-color var(--dn-dur-base) var(--dn-ease-standard),color var(--dn-dur-base) var(--dn-ease-standard)}
