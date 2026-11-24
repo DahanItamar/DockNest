@@ -68,6 +68,8 @@ async function diagnostics(uid) {
 }
 async function createUser({ delegated }) {
   // dbus-user-session starts the per-user bus with the user's systemd instance; uidmap provides newuidmap and newgidmap.
+  // Ubuntu 24.04 and later restrict unprivileged user namespaces with AppArmor; a rootless engine needs them. Disposable runner only.
+  await sudo('sysctl', '-w', 'kernel.apparmor_restrict_unprivileged_userns=0').catch(() => '');
   await sudo('apt-get', 'update');
   await sudo('apt-get', 'install', '-y', '--no-install-recommends', 'dbus-user-session', 'uidmap');
   await sudo('useradd', '-m', '-s', '/bin/bash', USER);
@@ -75,7 +77,7 @@ async function createUser({ delegated }) {
   // memory and cpu delegated to the user's systemd instance, or deliberately not (the no-delegation scenario).
   const folder = '/etc/systemd/system/user@.service.d';
   await sudo('mkdir', '-p', folder);
-  await sudo('sh', '-c', `printf '[Service]\\nDelegate=${delegated ? 'cpu cpuset io memory pids' : 'pids'}\\n' > ${folder}/zz-docknest-live.conf`);
+  await sudo('sh', '-c', `printf '[Service]\\nDelegate=\nDelegate=${delegated ? 'cpu cpuset io memory pids' : 'pids'}\\n' > ${folder}/zz-docknest-live.conf`);
   await sudo('systemctl', 'daemon-reload');
   await sudo('loginctl', 'enable-linger', USER);
   await sudo('systemctl', 'restart', `user@${uid}.service`);
@@ -89,7 +91,7 @@ async function createUser({ delegated }) {
   assert.equal(has, delegated, `delegation is ${delegated ? '' : 'not '}in place: ${controllers}`);
   return uid;
 }
-const asUser = (uid, command, args, extraEnv = {}) => sudo('-u', USER, '-H', 'env', `XDG_RUNTIME_DIR=/run/user/${uid}`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`, ...Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`), command, ...args);
+const asUser = (uid, command, args, extraEnv = {}) => sudo('-u', USER, '-H', 'env', `HOME=/home/${USER}`, `XDG_RUNTIME_DIR=/run/user/${uid}`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`, ...Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`), command, ...args);
 
 // ---- the fake app ---------------------------------------------------------------------------------------------------------
 async function stageFixture() {
