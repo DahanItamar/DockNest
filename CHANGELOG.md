@@ -9,6 +9,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 ### Fixed
 
 - Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
+- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard.
 
 ### Added
 
