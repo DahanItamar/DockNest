@@ -27,7 +27,8 @@ export function runtimeConfig(containers) {
 }
 // Rootful Docker first, then by name, so the list reads the same on every visit.
 export function sortByEngine(groups, runtimeOfGroup) {
-  return [...groups].sort((a, b) => engineLabel(runtimeOfGroup(a)).localeCompare(engineLabel(runtimeOfGroup(b)), 'en', { sensitivity: 'base' }) || String(a.name).localeCompare(String(b.name)));
+  // Stable: inside one engine the incoming order (NAS grouping, then name) is kept.
+  return [...groups].sort((a, b) => engineLabel(runtimeOfGroup(a)).localeCompare(engineLabel(runtimeOfGroup(b)), 'en', { sensitivity: 'base' }));
 }
 export const groupRuntime = group => { const shared = sharedRuntime(group.containers ?? []); return shared.runtime ?? shared.conflict[0]; };
 

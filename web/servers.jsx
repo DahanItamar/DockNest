@@ -7,6 +7,7 @@ import {ReportProblem} from './report/ReportProblem.jsx';
 import {ServerEngines} from './runtime-ui.jsx';
 import {buildServerReport} from './report/builders.js';
 import {catalogued,EXPLAIN} from './report/catalogue.js';
+import {NasLabel} from './nas/NasReadiness.jsx';
 import './servers.css';
 
 const ServerIcon=props=><BrandIcon name="server" {...props}/>;
@@ -19,7 +20,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
   return <article className="card server-card" key={server.id} aria-labelledby={`server-title-${server.id}`}>
    <div className="card-body server-card-body">
     <header className="server-card-head"><h2 className="card-title" title={server.name}>{user?.role==='admin'?<RowOpen chip icon={ServerIcon} label={'Edit details for '+server.name} onClick={()=>onEdit(server)}><span className="row-title" id={`server-title-${server.id}`}>{server.name}</span></RowOpen>:<><span className="icon-chip"><ServerIcon size={20}/></span><span className="row-title" id={`server-title-${server.id}`}>{server.name}</span></>}</h2></header>
-    <StatusLabel value={server.status||'unchecked'}/>
+    <p className="server-card-status"><StatusLabel value={server.status||'unchecked'}/>{server.capabilities?.nas?.kind&&<NasLabel kind={server.capabilities.nas.kind}/>}</p>
     <p className="t-caption server-card-note" title={server.note||undefined}>{server.note}</p>
     <dl className="def-list server-metadata">
      <div className="def-row"><dt>Connection</dt><dd><code>{server.username}@{server.host}:{server.port}</code></dd></div>

@@ -4,6 +4,7 @@ import {AlertPanel} from '../system.jsx';
 import {RuntimeBadge} from '../runtime-ui.jsx';
 import {isRootful,testServerProblem} from '../runtime-ui.js';
 import {useGuard} from '../map/MoveFlow.jsx';
+import {RecoveryCard} from '../recovery/RecoveryCard.jsx';
 import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
@@ -86,6 +87,7 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
  }
 
  return <form className="modal-body site-wizard rt-form" onSubmit={save} noValidate>
+  <RecoveryCard card={card}/>
   {!isAdmin&&<p className="t-caption">Only an administrator can change these settings.</p>}
    {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="rt-engine"><span>Engine</span><RuntimeBadge runtime={site.config.runtime}/></div>}
    {engineProblem&&<AlertPanel variant="warning" title={`${target.name} cannot test ${site.name}`}>{engineProblem}</AlertPanel>}

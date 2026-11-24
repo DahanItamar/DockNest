@@ -28,15 +28,15 @@ test('sudo mode is one fixed argv with no shell string', () => {
 });
 
 test('the container runtime has no network, no ports, a pinned image and computed mounts', () => {
-  const argv = helperArgv({ identity: 'sudo', runtime: 'container', operation: 'capture', mounts: ['/mnt/user/appdata/app', '/mnt/user/appdata/app/sub', '/mnt/user/system/docknest'], imageId: fakeId });
+  const argv = helperArgv({ identity: 'sudo', runtime: 'container', operation: 'capture', mounts: ['/mnt/user/appdata/app', '/mnt/user/appdata/app/sub', '/mnt/user/system/docknest'], imageId: fakeId, allowedIds: [fakeId] });
   assert.deepEqual(argv.slice(0, 8), ['sudo', '-n', '--', 'docker', 'run', '--rm', '-i', '--pull']);
   assert.equal(argv[argv.indexOf('--network') + 1], 'none');
   assert.ok(!argv.includes('-p') && !argv.includes('--publish') && !argv.includes('--privileged'));
   assert.ok(argv.includes(fakeId));
   const mounts = argv.filter((_, i) => argv[i - 1] === '--mount');
   assert.deepEqual(mounts, ['type=bind,src=/mnt/user/appdata/app,dst=/mnt/user/appdata/app,bind-propagation=rslave', 'type=bind,src=/mnt/user/system/docknest,dst=/mnt/user/system/docknest,bind-propagation=rslave']);
-  assert.equal(helperArgv({ runtime: 'container', operation: 'domain-routes', mounts: [], imageId: fakeId }).includes('host'), true);
-  assert.equal(helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId })[helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId }).indexOf('--network') + 1], 'none');
+  assert.equal(helperArgv({ runtime: 'container', operation: 'domain-routes', mounts: [], imageId: fakeId, allowedIds: [fakeId] }).includes('host'), true);
+  assert.equal(helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId, allowedIds: [fakeId] })[helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId, allowedIds: [fakeId] }).indexOf('--network') + 1], 'none');
 });
 
 test('the container runtime fails closed without a pinned image or mounts', () => {
@@ -177,4 +177,13 @@ test('more system folders are denied and helper answers cannot set NAS facts', (
   for (const bad of ['/root', '/root/x', '/data', '/var/lib/docker', '/var/lib/docker/volumes', '/usr/bin', '/bin']) assert.throws(() => checkMountPath(bad), MountRefused, bad);
   assert.equal(checkMountPath('/var/lib/docknest'), '/var/lib/docknest');
   assert.deepEqual(withoutNasFacts({ uid: 0, nas: { kind: 'unraid' }, helperRuntime: 'container', stagingBase: '/x', sshIdentity: 'root', docker: '27' }), { uid: 0, docker: '27' });
+});
+
+test('TrueNAS version formats match the helper, and unreadable versions are refused', () => {
+  for (const [text, version] of [['TrueNAS-SCALE-24.10.2', '24.10.2'], ['TrueNAS-SCALE 25.04', '25.04'], ['TrueNAS-25.10.0\n', '25.10.0'], ['25.04.1', '25.04.1']]) {
+    assert.equal(parseTrueNasVersion(text), version, text); assert.equal(trueNasSupported(version), true);
+  }
+  assert.equal(parseTrueNasVersion('TrueNAS-SCALE-garbage'), 'unknown'); assert.equal(trueNasSupported('unknown'), false);
+  assert.equal(parseTrueNasVersion('Debian 12.5'), null);
+  assert.equal(trueNasSupported(parseTrueNasVersion('TrueNAS-SCALE-24.04.2')), false);
 });

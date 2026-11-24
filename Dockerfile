@@ -34,6 +34,9 @@ COPY --from=build --chown=node:node /app/assets/fonts ./assets/fonts
 # Release notes ship with the image so the dashboard can show what changed without going online.
 COPY --from=build --chown=node:node /app/docs/releases ./docs/releases
 COPY --from=build --chown=node:node /app/CHANGELOG.md ./CHANGELOG.md
+# The helper runtime image (docs/nas-servers.md) when the release build made one. CHANGELOG.md is named only so the
+# pattern can match nothing in a plain build (the glob keeps COPY from failing); without the tar the container runtime refuses.
+COPY CHANGELOG.md helper-runtime.ta[r] /app/
 USER node
 EXPOSE 3000
 CMD ["node", "src/server.js"]

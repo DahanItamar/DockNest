@@ -31,9 +31,9 @@ test('a saved app carries its engine only when it is not rootful Docker', () => 
   assert.deepEqual(runtimeConfig([container('a', notes), container('b')]), {}, 'a split app saves no engine; the API refuses it');
 });
 
-test('groups read in the same order every time, rootful Docker first', () => {
+test('groups keep their order inside an engine, rootful Docker first', () => {
   const groups = [{ name: 'queue', containers: [container('q', notes)] }, { name: 'zeta', containers: [container('z')] }, { name: 'alpha', containers: [container('a')] }, { name: 'notes2', containers: [container('n', appUser)] }];
-  assert.deepEqual(sortByEngine(groups, groupRuntime).map(group => group.name), ['alpha', 'zeta', 'notes2', 'queue']);
+  assert.deepEqual(sortByEngine(groups, groupRuntime).map(group => group.name), ['zeta', 'alpha', 'notes2', 'queue']);
   assert.deepEqual(groupRuntime({ containers: [] }), { engine: 'docker', rootless: false });
 });
 

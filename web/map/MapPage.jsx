@@ -5,6 +5,7 @@ import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,I
 import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
 import {IconTrash,IconBell,IconWorld,IconWorldOff} from '@tabler/icons-react';
 import {useDomains} from './domains-client.js';
+import {NasLabel,NasReadiness} from '../nas/NasReadiness.jsx';
 import {dropVerdict,moveState} from './domain-moves.js';
 import {ownersOf,domainStatus,groupDomains,groupStatus,layoutDomains,lineState,WORD as DOMAIN_WORD} from './domains-model.js';
 import {DomainPanel,AppDomains,DomainRows} from './Domains.jsx';
@@ -21,6 +22,9 @@ import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
 import {KeysSection,Padlock,keyState} from '../keys/keys.jsx';
 import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './LaunchFlow.jsx';
+import {RecoveryLine,RecoveryBar,MayBeLow} from '../recovery/parts.jsx';
+import {StorageGlyph} from '../storage-drives/StorageGlyph.jsx';
+import {labelOf} from '../storage-drives/drive-model.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
@@ -464,6 +468,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} icon={<SiteIcon site={s} size={20}/>} sub={<StatusLabel state={failed?'failed':lb?'success':'queued'}>{failed?'Last backup failed':lb?'Backed up '+when(lb.capturedAt):'Not backed up yet'}</StatusLabel>} onClose={close} footer={<>{((canMove&&home)||(canMove&&onSafeEdit&&s.config?.kind!=='static'))&&<span className="link-row">{canMove&&home&&<button type="button" className="link-action" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" className="link-action" onClick={()=>onSafeEdit(s)}>Edit</button>}</span>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
+    {s.recovery&&<section className="map-sec"><h3 className="map-group-title">Recovery</h3><RecoveryLine recovery={s.recovery}/><RecoveryBar phases={s.recovery.phases}/>{s.recovery.mayBeLow&&<MayBeLow/>}</section>}
     <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length>0&&!appRows.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/></section>
     <AppDomains list={appRows} statusOf={statusOf} onOpen={(r,el)=>openPanel({kind:'domain',id:r.domain},el)}/>
     <LinkedSection site={s} servers={servers} nameOf={nameOf} onOpen={(id,el)=>openPanel({kind:'site',id},el)}/>
@@ -477,8 +482,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='server'&&byId.servers[panel.id]){
    const sv=byId.servers[panel.id],c=sv.capabilities||{},mine=sites.filter(x=>x.serverId===sv.id).length,free=bytes(c.freeBytes);
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
-   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} icon={<IconServer size={20} stroke={1.5} aria-hidden="true"/>} sub={serverStatus(sv)} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
-    <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/></section>
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} icon={<IconServer size={20} stroke={1.5} aria-hidden="true"/>} sub={<>{serverStatus(sv)}{c.nas?.kind&&<NasLabel kind={c.nas.kind}/>}</>} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
+    {canMove&&c.nas?.kind&&<NasReadiness api={api} server={sv} onSessionExpired={onSessionExpired}/>}
+    <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],!c.nas&&['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/></section>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
     {showCov&&sv.status==='connected'&&<MapCoverage api={api} server={sv} coverage={coverage} onSessionExpired={onSessionExpired} onAddApp={(serverId,names)=>{closePanel(false);onAddSite?.(serverId,names)}} onOpenApp={siteId=>{if(byId.sites[siteId])openPanel({kind:'site',id:siteId},opener.current)}}/>}
     {canMove&&<section className="map-sec"><h3 className="map-group-title">Tools</h3><span className="link-row"><button type="button" className="link-action" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button></span></section>}
@@ -503,7 +509,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='storage'&&byId.storage[panel.id]){
    const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={t.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenStorage?.(t)}}>Open storage</button>}>
-    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':'SFTP server'],['Space',f.text],['Status',t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet'],['Apps using it',String(here.length)],lastUp&&['Last upload',when(lastUp.capturedAt)]]}/>
+    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':t.kind==='rclone'?labelOf(t.backend):t.kind==='local'?'Local folder':'SFTP server'],['Space',f.text],['Status',t.needsReconnect?'Needs sign-in':t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet'],['Apps using it',String(here.length)],lastUp&&['Last upload',when(lastUp.capturedAt)]]}/>
     <section><h3 className="map-group-title">Backed up here</h3>{here.length?<ul className="map-plain">{here.map(x=><li key={x.id}>{x.name}</li>)}</ul>:<p className="map-caption">No apps back up here yet.</p>}</section>
    </SidePanel>;
   }
@@ -621,7 +627,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}
     {layout.storage.map(r=>{const tg=byId.storage[r.id],f=storageFacts(tg);return <div key={r.id} {...hov('storage:'+r.id)} data-node={'storage:'+r.id} tabIndex={0} role="group" aria-label={`Backup storage ${tg.name}. ${f.text}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'storage',id:r.id})} className={'map-storage'+nodeCls('storage:'+r.id)} style={item(r)}>
-     <IconDatabaseExport size={44} stroke={1.5} aria-hidden="true"/>
+     <StorageGlyph target={tg} size={44}/>
      {f.pct!==null&&<div className="map-meter" role="meter" aria-label={tg.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}
      <span className="map-label"><b className="map-name" title={tg.name}>{tg.name}</b><span className="map-caption">{f.text}</span></span></div>})}
    </div>

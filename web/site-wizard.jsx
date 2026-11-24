@@ -4,6 +4,7 @@ import {AlertPanel,Stepper} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups,suggestedGroups,STACK_MANAGERS} from './container-groups.js';
+import {MANAGER_LABELS,managerCaption,webUiText,TRUENAS_OLD,headingBefore} from './nas/nas.js';
 import {RunDefinition} from './backup-coverage/RunDefinition.jsx';
 import {normalizeDomain} from '../shared/domains.js';
 import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
@@ -74,6 +75,8 @@ export function SiteWizard({canSetUpMaintenance=false,engines=[],api,Field,serve
  // Plain containers on one user-defined network are offered as one pre-selected app; any of them can be unticked.
  const suggested=suggestedGroups(freeContainers).map(group=>({id:'network:'+group.networks.join(','),name:group.networks.join(', '),kind:'network',compose:false,containers:group.containers.map(name=>freeContainers.find(container=>containerName(container)===name))})),grouped=new Set(suggested.flatMap(group=>group.containers.map(containerName)));
  const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...suggested,...groups.flatMap(group=>group.kind==='standalone'?group.containers.filter(container=>!grouped.has(containerName(container))).map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
+ // Engines group the list (rootful Docker first); the order inside each engine is the one NAS grouping already gave.
+ const ordered=sortByEngine(siteChoices,groupRuntime);
  const pickedOnce=useRef(false);
  // Opened from the Map's + on a server: select the site that was clicked, once, after discovery has loaded.
  useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const wanted=[].concat(initialPick),c=siteChoices.find(x=>wanted.length===1&&x.name===wanted[0])||siteChoices.find(x=>wanted.every(name=>x.containers.some(container=>containerName(container)===name)));if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else if(c.kind==='network')selectNames(wanted,wanted[0]);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
@@ -138,11 +141,12 @@ export function SiteWizard({canSetUpMaintenance=false,engines=[],api,Field,serve
      <p>Choose a Docker project or static nginx website. Docker projects include their services; static websites include their files without stopping nginx.</p>
      <Field label="Find an app" value={siteSearch} onChange={event=>setSiteSearch(event.target.value)} help="Search a domain, project or container name."/>
      {!!hidden.length&&<p className="t-caption" role="note">{hiddenCaption(hidden)}</p>}
-     <Paginated rows={sortByEngine(siteChoices,groupRuntime).filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered apps" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map((group,index)=>{
+     <Paginated rows={ordered.filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered apps" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map((group,at)=>{
       const names=group.containers.map(containerName),shared=sharedRuntime(group.containers),runtime=groupRuntime(group),conflict=!!shared.conflict;
-      const heading=group.kind!=='static'&&(index===0||engineLabel(groupRuntime(visible[index-1]))!==engineLabel(runtime));
+      const nasHeading=headingBefore(visible,at,ordered);
+      const heading=group.kind!=='static'&&(at===0||engineLabel(groupRuntime(visible[at-1]))!==engineLabel(runtime));
       const chosen=group.kind==='static'?staticRoot===group.documentRoot:!isStatic&&names.length===selected.length&&names.every(name=>selected.includes(name));
-      return <React.Fragment key={group.id}>{heading&&<h3 className="engine-heading">{engineLabel(runtime)}</h3>}<section className={'application-group'+(chosen?' chosen':'')} {...(conflict?{'data-conflict':''}:{})} aria-label={group.name}>
+      return <React.Fragment key={group.id}>{nasHeading&&<h3 className="nas-group-heading">{nasHeading}</h3>}{heading&&<h3 className="engine-heading">{engineLabel(runtime)}</h3>}<section className={'application-group'+(chosen?' chosen':'')} {...(conflict?{'data-conflict':''}:{})} aria-label={group.name}>
        <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{group.manager&&<p className="stack-manager"><Layers size={16} aria-hidden="true"/><span>Managed by {STACK_MANAGERS[group.manager]}</span></p>}{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}{!conflict&&!isRootful(runtime)&&<p className="runtime-note"><RuntimeBadge runtime={runtime}/></p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} disabled={conflict} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
        {conflict&&<AlertPanel variant="error" title="One app, one engine">{oneEngineMessage(group.name)}</AlertPanel>}
        <p className="site-services">{group.kind==='static'?group.documentRoot:group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
@@ -199,7 +203,7 @@ export function SiteWizard({canSetUpMaintenance=false,engines=[],api,Field,serve
    {!isStatic&&!initialSite&&canSetUpMaintenance&&<label className="check"><input type="checkbox" checked={autoMaintenance} onChange={event=>setAutoMaintenance(event.target.checked)}/> Show a maintenance page during backups. DockNest adds it to this site's nginx, tests it and undoes the change if anything fails.</label>}
    <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
   </>}
-  {error&&<AlertPanel variant="error" title="The app could not be saved">{error}</AlertPanel>}
+  {error&&<AlertPanel variant="error" title={TRUENAS_OLD.test(error)?'This TrueNAS version is not supported':'The app could not be saved'}>{error}</AlertPanel>}
   <div className="modal-foot"><button type="button" className="link-action" onClick={onCancel} disabled={busy}>Cancel</button>{step!==order[0]&&<button type="button" className="link-action" disabled={busy} onClick={()=>{setStep(value=>order[Math.max(0,order.indexOf(value)-1)]);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step==='select'&&!!error)}>{busy?'Saving app…':step==='review'?(initialSite?'Save configuration':'Add app'):'Continue'}</button></div>
  </form>;
 }

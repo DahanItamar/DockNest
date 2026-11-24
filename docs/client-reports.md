@@ -2,7 +2,13 @@
 
 If you run sites for clients, a client report is the monthly proof page: what was backed up, whether a restore was tested
 and how fast an app would be back. DockNest makes it as a PDF per client, on demand or by email on day 1 of each month.
-This page describes the backend of the feature (data, API, PDF, email). The Clients page comes with a later change.
+This page describes the feature (data, API, PDF, email) and the Clients page.
+
+## The Clients page
+
+Clients is in the menu under Operations. Each client is a card with its apps, the last report and the monthly email state (Monthly email on, No email, Email failed). **Edit** opens the editor: name, apps, branding (agency name, contact line and an accent chosen by name), the two privacy ticks (both off), the monthly email with its Connection, time zone and up to 3 recipients. Saved recipients are shown masked and replaced as a whole; changing them asks you to confirm your sign-in again. **Make report** opens the preview for a month (or the last 12 months to choose from): one row per app with backups, restore test, recovery time and state, then **Download PDF** and, for administrators, **Send test email** (it asks first, because it goes to the client's own recipients). Other roles can open a client and download its report, and never see recipients or the schedule.
+
+The accent is stored as a name from a fixed list (default, blue, green, amber, red, violet, teal); the page shows a swatch from the design tokens and never sends a colour.
 
 ## What a report holds
 
