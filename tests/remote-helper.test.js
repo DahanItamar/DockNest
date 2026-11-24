@@ -169,3 +169,8 @@ test('Podman move facts read the architecture from the engine own field, Docker 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for move facts verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('A container record with null Labels is no labels: the backup check does not crash on a Podman image without labels',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_null_labels.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for label verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
