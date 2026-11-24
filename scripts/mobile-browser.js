@@ -102,7 +102,7 @@ try{
  for(const width of [320,390,402,680]){
   await page.setViewportSize({width,height:844});
   await page.evaluate(()=>scrollTo(0,0));
-  await page.getByRole('button',{name:'Active job notifications',exact:true}).click();
+  await page.getByRole('banner').getByRole('button',{name:/^Notifications/}).click();
   const box=await page.locator('.berry-popover').boundingBox();
   assert.ok(box.x>=12&&box.x+box.width<=width-11,'Notifications fit '+width+'px viewport');
   assert.equal(await page.locator('.berry-popover').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
