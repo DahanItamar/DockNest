@@ -67,6 +67,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - Before a move, DockNest checks the new server for owner and permission problems: remapped Docker user IDs, files whose setuid, ACL or extended attributes the new file system would drop, and folders on read-only, noexec, nosuid or root-squashed mounts. A check that cannot run stops the move with a plain message instead of passing quietly. What the checks find about owners and permissions is a warning: you tick "I checked these" before the move can start.
 
 ### Changed
+- Sign-in hardening: a new system password (first setup, or when you change it) must be 12 to 128 characters instead of 4 to 16. Existing passwords keep working; nobody is locked out. After 20 failed sign-ins from anyone within 15 minutes, sign-in pauses for a short, growing time (30 seconds up to 15 minutes) with a plain message, then continues by itself. Release note: New system passwords need 12 to 128 characters, and repeated failed sign-ins now pause sign-in briefly.
 
 - Secondary actions everywhere are quiet text links; each screen and dialog has one clear main button.
 - Map: lines curve smoothly between connection points, like a workflow canvas.

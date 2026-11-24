@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { config } from './config.js';
 import { base32, seal, digest, passwordHash } from './crypto.js';
-import { requireAdmin, requireRecentAuth, securityPolicy, IDLE_MS, INVITATION_MS, opaque, sharedPasswordMatches, qrEnrollment, credentialEpoch } from './auth.js';
+import { requireAdmin, requireRecentAuth, securityPolicy, IDLE_MS, INVITATION_MS, opaque, sharedPasswordMatches, qrEnrollment, credentialEpoch, newPasswordSchema } from './auth.js';
 
 export const access = Router();
 access.use(requireAdmin);
@@ -89,7 +89,7 @@ access.post('/invitations/:id/revoke', requireRecentAuth, (req, res) => {
   res.json({ revoked: true });
 });
 access.post('/password', requireRecentAuth, (req, res) => {
-  const data = z.object({ currentPassword: z.string().min(1).max(256), newPassword: z.string().min(4).max(16) }).parse(req.body);
+  const data = z.object({ currentPassword: z.string().min(1).max(256), newPassword: newPasswordSchema }).parse(req.body);
   if (!sharedPasswordMatches(data.currentPassword)) return res.status(401).json({ error: 'The current universal password is incorrect.' });
   if (data.currentPassword === data.newPassword) return res.status(400).json({ error: 'Choose a different universal password.' });
   transaction(() => {
