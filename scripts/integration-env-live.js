@@ -60,6 +60,9 @@ async function connectRunner() {
 // ---- a rootless user ------------------------------------------------------------------------------------------------------
 const USER = 'dnlive';
 async function createUser({ delegated }) {
+  // dbus-user-session starts the per-user bus with the user's systemd instance; uidmap provides newuidmap and newgidmap.
+  await sudo('apt-get', 'update');
+  await sudo('apt-get', 'install', '-y', '--no-install-recommends', 'dbus-user-session', 'uidmap');
   await sudo('useradd', '-m', '-s', '/bin/bash', USER);
   const uid = Number(await sh('id', ['-u', USER]));
   // memory and cpu delegated to the user's systemd instance, or deliberately not (the no-delegation scenario).
@@ -69,7 +72,7 @@ async function createUser({ delegated }) {
   await sudo('systemctl', 'daemon-reload');
   await sudo('loginctl', 'enable-linger', USER);
   await sudo('systemctl', 'restart', `user@${uid}.service`);
-  await until(async () => (await sh('test', ['-S', `/run/user/${uid}/bus`]).then(() => true, () => false)), 'The user session bus did not start');
+  await until(async () => (await sh('test', ['-S', `/run/user/${uid}/bus`]).then(() => true, () => false)), 'The user session bus did not start', 60);
   const controllers = await sudo('cat', `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`).catch(() => '');
   evidence.delegation = controllers.split(/\s+/).filter(Boolean);
   const has = ['memory', 'cpu'].every(name => evidence.delegation.includes(name));
