@@ -29,6 +29,13 @@ called validated. A real backup or restore is not marked validated without a Lin
 - [ ] Rootless Docker: the same.
 - [ ] Backups of these apps are written as format 3 and refused by 2.16.
 - [ ] Moving an app between container engines is blocked with the plain message.
+- [ ] A server with Podman and no Docker connects, shows its engines, and backs up a Podman app.
+- [ ] A rootless user without memory and CPU delegation: the restore test says it cannot limit memory and does not run.
+- [ ] A restore into a second user with a different subordinate ID range translates owners; one file owned by an unmappable ID refuses the whole restore.
+- [ ] Image copies (load on standard input, save to a file) work for rootless Docker and rootless Podman, and a stopped step ends the engine.
+- [ ] A failed rootless restore leaves no container and no data folder; Server cleanup lists a leftover restore folder.
+- [ ] An app managed by a systemd unit (quadlet), an app with a native database engine and a Compose project split over two engines are each refused with their plain message.
+- [ ] Moves: the preflight blocks ports below the system limit and warns when linger is off.
 
 ## Client reports and recovery time
 
