@@ -18,7 +18,7 @@ GitHub release. Keep them short: one line per bullet, plain words, named the way
   CHANGELOG.md and in the release pull request, which must still state what was tested (a Linux Docker integration
   run for any backup, restore or move claim; see docs/release-validation.md).
 - Delete a section that has nothing to say. Keep the order.
-- Only state what the code proves. A beta or limited feature says so in its bullet.
+- Only state what the code proves. A limited feature says so in its bullet.
 
 The front matter above becomes the signed `highlights` in docknest-release.json, shown in the Update Center.
 It is parsed strictly, and the release fails on any mistake: the first line is exactly ---, then exactly these four

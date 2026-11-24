@@ -1,10 +1,10 @@
-# Safe Edit (beta)
+# Safe Edit
 
 Safe Edit changes an app from DockNest instead of over SSH: its Compose file, environment values, published ports or
 image tag. Saving takes a backup first, applies the change behind the maintenance page and checks that the app comes
 up. When it does not, DockNest puts the previous version back by itself.
 
-Safe Edit is in beta until it passes DockNest's Linux Docker test on a release (see [AGENTS.md](../AGENTS.md)). The
+Safe Edit is not claimed as validated until it passes DockNest's Linux Docker test on a release (see [AGENTS.md](../AGENTS.md)). The
 design and its security rules are in [safe-edit.md](safe-edit.md).
 
 ## Who can use it

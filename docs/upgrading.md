@@ -208,7 +208,7 @@ them on its next maintenance run after you upgrade again.
 ## Incremental backups in 2.12
 
 Incremental backups are new in 2.12 and are off for every app. Nothing needs doing and nothing changes until you turn
-them on for an app under its backup settings ("Incremental backups (beta)"):
+them on for an app under its backup settings ("Incremental backups"):
 
 - Migration 12 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
 - After you turn the option on, the next backup is a full one. By default a full backup is made every 7 backups (the
@@ -229,7 +229,7 @@ plain packages and restore on 2.11 as before. To recover a format 2 backup witho
 
 ## Safe Edit in 2.15
 
-Safe Edit (beta) is new in 2.15. Nothing changes for existing apps until an administrator saves a change:
+Safe Edit is new in 2.15. Nothing changes for existing apps until an administrator saves a change:
 
 - Migration 15 (compatible) only adds tables: the edit history, its steps, and the Compose invocation recorded per
   app. For apps that existed before, DockNest derives that invocation once from the Compose labels Docker keeps on
@@ -393,7 +393,7 @@ If more migrations land before the release, they are added here. If more migrati
 - NAS servers (TrueNAS SCALE; Unraid and Synology when enabled under Settings) connect as root, or as a non-root SSH user with passwordless sudo.
 - Moving an app between container engines is not supported yet and is blocked.
 
-**Beta labels stay.** Features labelled beta in 2.16 (for example incremental backups, launching apps and safe changes) keep their label in 3.0.0 until the soak period on the owner's own servers ends. The label is removed in a later release, not by the upgrade.
+**No Beta labels.** Incremental backups, launching apps and safe changes no longer carry a Beta label in 3.0.0. Nothing about how they work changes with the upgrade. Unraid and Synology support are the only early-access items: they are off by default under Settings.
 
 **`minUpgradeFrom`.** It stays at 2.0.0. The 3.0.0 migrations are additive and the upgrade test below runs from every final release since 2.0.0. A direct upgrade from 2.0.0 and from 2.16.4 both pass it. Upgrading from an older 2.x straight to 3.0.0 therefore needs no intermediate release.
 

@@ -2,7 +2,7 @@
 
 ## What it does
 
-Launch a new site from the **+** beside a server on the Map. This beta feature deploys a Docker Compose site, puts nginx in front of it, and sets up HTTPS when DNS is ready. It also starts backups on the first day and can schedule weekly restore tests.
+Launch a new site from the **+** beside a server on the Map. This feature deploys a Docker Compose site, puts nginx in front of it, and sets up HTTPS when DNS is ready. It also starts backups on the first day and can schedule weekly restore tests.
 
 Only administrators can launch a site. DockNest asks you to confirm your sign-in again before the final launch.
 

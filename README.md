@@ -29,7 +29,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
-> DockNest runs real Docker and static sites in production, and every release passes real Linux Docker tests. The [support matrix](docs/support-matrix.md) lists the tested configurations. Incremental backups are still in beta.
+> DockNest runs real Docker and static sites in production, and every release passes real Linux Docker tests. The [support matrix](docs/support-matrix.md) lists the tested configurations.
 
 ## Features
 
@@ -44,7 +44,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Restore check: Check readiness also lists what a restore on a new server would miss, such as cron jobs and systemd timers that use the app, Docker networks it does not create itself and its certificates. Commands and values from those files are never shown. See [restore check](docs/restore-check.md).
 - Keep up to three extra copies of each backup on other storage, for example SFTP plus S3, each with its own retention.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
-- Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
+- Incremental backups (off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
 - Optional maintenance page, designed in a visual editor, while an app is paused. For apps behind nginx on the server, DockNest sets it up, tests it on your domain and undoes it if anything fails.
 
 **Operation**
@@ -69,13 +69,13 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 **Map and moving apps**
 - A Map page shows your servers, their apps and your backup storage as connected nodes. Click any node for its details, such as the databases that move with an app.
 - The "+" on a server lists apps DockNest found there that you have not added yet.
-- Administrators can launch a new Docker app from a server on the Map from a Compose file or Git repository, with backups from the first day (beta). See [launch a site](docs/launch-site-guide.md).
+- Administrators can launch a new Docker app from a server on the Map from a Compose file or Git repository, with backups from the first day. See [launch a site](docs/launch-site-guide.md).
 - Administrators move an app to another server by dragging it to that server and pressing Save changes. DockNest shows how long the move takes and how long the app is offline, then backs up the app, tests a copy on the new server and waits for your DNS change before switching.
 - The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving apps](docs/moving-sites.md).
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 - Domain checks follow each domain of an app through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and name the broken step in plain words. On the Map they are a Domains column that you can hide, coloured by the broken step, and each app lists its domains; a domain's panel has Check again. They run when you ask and after scans, readiness checks and backups, never on a timer, and only read. Before a move, the preview lists every domain that stops working. See [domains](docs/domains.md).
 
-**Safe changes (beta)**
+**Safe changes**
 - Administrators change an app's Compose file, environment values, published ports or image tag from DockNest. Each change takes a backup first, shows the maintenance page, checks the app comes up and undoes the change by itself when it does not. Environment values are write-only (they can be replaced or removed), a finished Compose change can be undone, and a change can never add privileges the app did not have. See [Safe Edit](docs/safe-edit-guide.md).
 - Self-heal (off by default): when Docker marks a container of an app unhealthy, DockNest restarts it a few times per hour at most and tells you through your alert lines. It never restarts during a backup, restore, move or change of that app, and works while DockNest is running. See [self-heal](docs/self-heal-guide.md).
 

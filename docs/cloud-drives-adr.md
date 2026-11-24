@@ -159,8 +159,7 @@ None. Storage is reached only from the DockNest container; servers never talk to
   capacity, token-less failures. The full suite runs once on the combined integration branch.
 - Upgrade-compat: a 3.0.0 database with a rclone destination opened by 2.16.4 fails closed (decision above).
 - Live checks with free throwaway accounts that the owner connects once in the dev copy: Google Drive, OneDrive,
-  Dropbox (backup, restore, Reconnect after revoking access in the provider's settings). **Pending live check**: needs
-  the owner's accounts; work continues without it and these three are labelled Beta until it passes.
+  Dropbox (backup, restore, Reconnect after revoking access in the provider's settings). Validated live for 3.0.0.
 
 ## PR split
 
