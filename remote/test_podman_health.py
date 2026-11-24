@@ -83,6 +83,31 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(seen, [helper.HEALTHCHECK_LIMIT])
         def boom(ids): raise RuntimeError('x')
         with patch.object(helper, 'inspect', boom), helper.using_runtime(rootless()): helper.drive_podman_healthchecks([ID])
+    def test_one_call_is_bounded_by_a_total_time_not_by_the_number_of_containers(self):
+        clock = {'now': 1000.0}
+        calls = []
+        def record(cid):
+            return {'Id': cid, 'Name': '/c', 'State': {'Running': True, 'Health': {'Status': 'starting', 'Log': []}}}
+        ids = ['%064x' % n for n in range(30)]
+        runtime = rootless()
+        def cli(*args, **options):
+            calls.append((args[2], options['timeout']))
+            clock['now'] += options['timeout']  # every check takes all the time it is given
+            raise subprocess.TimeoutExpired(['podman'], options['timeout'])
+        with patch.object(helper, 'inspect', lambda wanted: [record(i) for i in wanted]), patch.object(runtime, 'cli', cli), patch.object(helper.time, 'monotonic', lambda: clock['now']), helper.using_runtime(runtime):
+            helper.drive_podman_healthchecks(ids)
+        self.assertEqual(len(calls), 2, 'two 30 second checks use the 60 seconds; the rest wait for the next call')
+        self.assertLessEqual(sum(timeout for _, timeout in calls), helper.HEALTHCHECK_TOTAL_SECONDS)
+    def test_a_check_never_gets_more_than_the_time_that_is_left(self):
+        clock = {'now': 0.0}
+        seen = []
+        runtime = rootless()
+        def cli(*args, **options):
+            seen.append(options['timeout']); clock['now'] += 45
+        record = lambda cid: {'Id': cid, 'Name': '/c', 'State': {'Running': True, 'Health': {'Status': 'starting'}}}
+        with patch.object(helper, 'inspect', lambda wanted: [record(i) for i in wanted]), patch.object(runtime, 'cli', cli), patch.object(helper.time, 'monotonic', lambda: clock['now']), helper.using_runtime(runtime):
+            helper.drive_podman_healthchecks(['%064x' % n for n in range(5)])
+        self.assertEqual(seen, [30, 15], 'the second check gets the 15 seconds that remain, and then the budget is gone')
     def test_the_command_goes_through_the_user_path(self):
         runtime = rootless()
         engine = Engine()

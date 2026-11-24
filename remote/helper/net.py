@@ -179,6 +179,7 @@ def public_probe(m,domains=()):
 
 HEALTHCHECK_LIMIT=30
 HEALTHCHECK_SECONDS=30
+HEALTHCHECK_TOTAL_SECONDS=60  # for one call, however many containers: 30 slow checks can never stack to 15 minutes
 def drive_podman_healthchecks(containers):
     """Podman runs an image health check from a systemd timer of the user's session, and that timer is not there for a container that
     DockNest stopped and started (nor under every rootless session). So DockNest runs the check itself, once per call, through the same
@@ -191,12 +192,15 @@ def drive_podman_healthchecks(containers):
     if not ids:return
     try:records=inspect(ids)
     except Exception:return
+    deadline=time.monotonic()+HEALTHCHECK_TOTAL_SECONDS
     for c in records:
+        left=deadline-time.monotonic()
+        if left<=0:return  # the rest wait for the next call; the caller's own timeout still decides
         state=c.get('State') or {};health_state=state.get('Health')
         if not state.get('Running') or not isinstance(health_state,dict) or health_state.get('Status') in (None,'healthy','unhealthy'):continue
         cid=str(c.get('Id') or '')
         if not re.fullmatch(r'[0-9a-f]{64}',cid):continue
-        try:runtime.cli('healthcheck','run',cid,timeout=HEALTHCHECK_SECONDS)
+        try:runtime.cli('healthcheck','run',cid,timeout=max(1,min(HEALTHCHECK_SECONDS,int(left))))
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):pass  # exit 1 is an unhealthy answer; the inspect below reads it
 def health(containers,url=None,domains=(),fallback=False):
     """A policy-refused URL raises unless fallback is set; recovery paths then rely on container
