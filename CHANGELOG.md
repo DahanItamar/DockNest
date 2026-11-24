@@ -77,6 +77,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Fixed
 
+- A Podman or rootless app whose user has no container runtime folder (linger off, user logged out) now gets a plain message with the fix, instead of a bare engine error.
 - The Recovery Guide shows the whole install command instead of cutting it off.
 - The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
 - The move preview dialog no longer has an empty gap above its buttons.

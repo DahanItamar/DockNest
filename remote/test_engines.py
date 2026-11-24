@@ -9,6 +9,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it)
 import helper
+REAL_RUNTIME_DIR_CHECK = helper.Runtime.check_runtime_dir
+helper.Runtime.check_runtime_dir = lambda self, lstat=None: None  # no /run/user in these fakes; the real check has its own tests in test_runtime.py
 
 SUBUID = 'alice:100000:65536\nbob:200000:65536\n# note\nghost:300000:65536\nroot:1:65536\nlow:400000:65536\ntwo:500000:10\ntwo:600000:10\nbad name:1:2\nweird:1:2:3\n'
 USERS = {'alice': ('alice', 1001, '/home/alice'), 'bob': ('bob', 1002, '/home/bob'), 'root': ('root', 0, '/root'),

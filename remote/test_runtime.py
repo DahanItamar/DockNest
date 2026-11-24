@@ -7,6 +7,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it)
 import helper
+REAL_RUNTIME_DIR_CHECK = helper.Runtime.check_runtime_dir
+helper.Runtime.check_runtime_dir = lambda self, lstat=None: None  # no /run/user in these fakes; the real check has its own tests in test_runtime.py
 
 R = helper.RuntimeRefused
 SOURCE = {'uid': 1001, 'gid': 1001, 'subuid': [100000, 65536], 'subgid': [100000, 65536]}
@@ -175,5 +177,44 @@ class ResolveTests(unittest.TestCase):
             with self.assertRaises(R, msg=str(s)): self.resolve(s, **kw)
         with self.assertRaises(R): self.resolve({**spec, 'engine': 'docker'}, passwd=lambda n: (1001, ''))
         with self.assertRaises(R): helper.resolve_runtime({'engine': 'podman', 'rootless': True, 'user': 'root', 'uid': 0}, passwd=lambda n: (0, '/root'), subuid_text='root:1:2')
+
+class RuntimeDirTests(unittest.TestCase):
+    def runtime(self, engine='podman'):
+        return helper.Runtime(engine, True, 'app', 1001, '/home/app')
+    def test_a_missing_folder_is_refused_with_the_linger_hint(self):
+        def gone(path):
+            raise FileNotFoundError(path)
+        with self.assertRaises(R) as caught:
+            REAL_RUNTIME_DIR_CHECK(self.runtime(), gone)
+        self.assertIn('loginctl enable-linger app', str(caught.exception))
+        self.assertIn('runtime folder is missing', str(caught.exception))
+    def test_a_folder_of_another_user_or_a_link_is_refused(self):
+        import stat
+        for mode, owner in ((stat.S_IFDIR, 0), (stat.S_IFLNK, 1001), (stat.S_IFREG, 1001)):
+            info = type('Info', (), {'st_mode': mode | 0o700, 'st_uid': owner})()
+            with self.assertRaises(R):
+                REAL_RUNTIME_DIR_CHECK(self.runtime(), lambda path: info)
+    def test_the_users_own_folder_passes_and_the_check_looks_at_the_uid_path(self):
+        import stat
+        seen = []
+        def mine(path):
+            seen.append(path)
+            return type('Info', (), {'st_mode': stat.S_IFDIR | 0o700, 'st_uid': 1001})()
+        REAL_RUNTIME_DIR_CHECK(self.runtime(), mine)
+        self.assertEqual(seen, ['/run/user/1001'])
+    def test_every_rootless_engine_call_checks_first_and_never_starts_the_engine(self):
+        for engine in ('podman', 'docker'):
+            runtime = self.runtime(engine)
+            with patch.object(helper.Runtime, 'check_runtime_dir', side_effect=R('missing')),                  patch.object(helper, 'run') as run, patch.object(subprocess, 'Popen') as popen:
+                with self.assertRaises(R):
+                    runtime.cli('ps')
+                with self.assertRaises(R):
+                    runtime.stream('save', 'x')
+            run.assert_not_called()
+            popen.assert_not_called()
+    def test_a_rootful_engine_is_not_checked(self):
+        with patch.object(helper.Runtime, 'check_runtime_dir', side_effect=R('missing')), patch.object(helper, 'run', return_value=b'') as run:
+            helper.Runtime('podman').cli('ps')
+        run.assert_called_once()
 
 if __name__ == '__main__': unittest.main()

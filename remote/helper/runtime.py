@@ -99,6 +99,13 @@ class Runtime:
         environment=['PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home]
         if self.engine=='docker':environment.append('DOCKER_HOST=unix:///run/user/%d/docker.sock'%self.uid)
         return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
+    def check_runtime_dir(self,lstat=os.lstat):
+        """Before every rootless engine call: the user's runtime folder must exist and belong to the user. systemd removes it when the
+        user's last session ends and linger is off; the engine then fails with an unhelpful exit status."""
+        path='/run/user/%d'%self.uid
+        try:info=lstat(path)
+        except OSError:raise RuntimeRefused("This user's container runtime folder is missing. Turn on linger for the user (loginctl enable-linger %s) or log the user in."%self.user)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused("This user's container runtime folder does not belong to the user.")
     def check_socket(self,lstat=os.lstat):
         """A rootless Docker socket is checked again right before each use: it must still be a socket of this user."""
         path='/run/user/%d/docker.sock'%self.uid
@@ -112,6 +119,7 @@ class Runtime:
         run than `timeout` is an error. The engine's last STREAM_ERROR_TAIL bytes of error output travel on the exception
         as `.stderr` only; they are never printed or sent."""
         if STOPPING:raise ValueError('DockNest stopped this step.')
+        if self.rootless:self.check_runtime_dir()
         if self.engine=='docker' and self.rootless:self.check_socket()
         import tempfile
         with tempfile.TemporaryFile() as errors:
@@ -141,6 +149,7 @@ class Runtime:
                 errors.seek(0,2);size=errors.tell();errors.seek(max(0,size-STREAM_ERROR_TAIL))
                 raise subprocess.CalledProcessError(code,self.argv(*args)[:1],stderr=errors.read(STREAM_ERROR_TAIL))
     def cli(self,*args,**options):
+        if self.rootless:self.check_runtime_dir()
         if self.engine=='docker' and self.rootless:self.check_socket()
         return run(self.argv(*args),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
