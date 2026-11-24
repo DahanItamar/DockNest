@@ -4,10 +4,12 @@ import { mkdtemp, writeFile, rm, copyFile, readFile, readdir, stat } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
+import net from 'node:net';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 // The rclone binary is a fake (tests/fake-rclone.js): no network and no accounts.
+process.env.DOCKNEST_TEST_AUTH_PORT = String(await new Promise(resolvePort => { const probe = net.createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolvePort(port)); }); }));
 const root = await mkdtemp(join(tmpdir(), 'docknest-rclone-')), fakeDir = join(root, 'fake');
 await (await import('node:fs/promises')).mkdir(fakeDir);
 await copyFile(new URL('./fake-rclone.js', import.meta.url), join(fakeDir, 'rclone.js'));
