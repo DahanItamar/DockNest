@@ -730,7 +730,7 @@ def capture(req,output=None):
             # The inventory pass reads each archive once; the second pass must give the same bytes (SHA-256), so a key
             # read here is a key in the package.
             for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
-            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv('save',*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
+            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv(*current_runtime().save_arguments(len(saved_ids)+len(images)),*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
             # Streamed: the plaintext dump never stays in the staging folder.
             for service in plan['services']:
