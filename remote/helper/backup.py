@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .runtime import (
-    check_runtime_source, current_runtime, engine_architecture, engine_storage_root, host_id_map, runtime_is_default, systemd_unit)
+    check_runtime_source, current_runtime, engine_architecture, engine_save, engine_storage_root, host_id_map, runtime_is_default, systemd_unit)
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
@@ -760,7 +760,7 @@ def capture(req,output=None):
           except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
     emit(stage='packing')
-    if output is None:docker('save','-o',str(root/'images.tar'),*saved_ids,*images)
+    if output is None:engine_save(root/'images.tar',*saved_ids,*images)
     snapshots=snapshot_records(increment) if increment else {}
     if increment and output is None:
         for key in increment['keys']:copy_private(increment['work']/(key+'.snar'),root/('snapshot-%s.snar'%key))

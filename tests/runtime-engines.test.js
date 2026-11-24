@@ -155,4 +155,31 @@ test('restore tests send the engine of a Podman or rootless backup with every st
   assert.equal(testRuntime({ backup_id: null }), null); assert.equal(testRuntime({ backup_id: 'missing' }), null);
 });
 
+test('move preflight: engine kinds, reported target engine, privileged ports, linger and owners are judged, and the move stays blocked', async () => {
+  const { runtimeMoveChecks, RUNTIME_MOVES_EXECUTABLE } = await import('../src/moves/preflight.js');
+  const run = (site, target) => { const found = []; runtimeMoveChecks({ site: { ports: [], ...site }, target: { name: 'Target', ...target } }, (id, status, title, text) => found.push({ id, status, text })); return found; };
+  assert.deepEqual(run({}, {}), [], 'an ordinary move gets no new check');
+  assert.deepEqual(run({ runtime: { engine: 'docker', rootless: false } }, { runtime: { engine: 'docker', rootless: false } }), []);
+  assert.equal(RUNTIME_MOVES_EXECUTABLE, false);
+  const bob = { engine: 'podman', rootless: true, user: 'bob', uid: 1002 }, floor = { portFloor: 1024, linger: { bob: true } };
+  const podmanEngines = [{ ...bob, version: '5.2.1', cgroupDelegated: true }, { engine: 'podman', rootless: false, version: '5.2.1', cgroupDelegated: true }];
+  assert.deepEqual(run({ runtime: alice }, { runtime: { engine: 'docker', rootless: false } }).map(item => item.id), ['runtime-kind']);
+  assert.deepEqual(run({ runtime: { engine: 'docker', rootless: false } }, { runtime: alice, engines: reported }).map(item => item.id).slice(0, 1), ['runtime-kind']);
+  const ok = run({ runtime: alice, ports: [{ hostPort: 8080 }] }, { runtime: bob, engines: podmanEngines, runtimeFacts: floor });
+  assert.deepEqual(ok.map(item => item.id), ['runtime-owners', 'runtime-move']); assert.equal(ok.at(-1).status, 'block');
+  assert.ok(run({ runtime: alice }, { runtime: bob, engines: [], runtimeFacts: floor }).some(item => item.id === 'runtime-target' && item.status === 'block'));
+  const low = run({ runtime: alice, ports: [{ hostPort: 443 }, { hostPort: 80 }, { hostPort: 8080 }] }, { runtime: bob, engines: podmanEngines, runtimeFacts: floor }).find(item => item.id === 'runtime-ports');
+  assert.equal(low.status, 'block'); assert.match(low.text, /ports 80, 443/);
+  assert.equal(run({ runtime: alice, ports: [{ hostPort: 80 }] }, { runtime: bob, engines: podmanEngines, runtimeFacts: { portFloor: 80, linger: { bob: true } } }).some(item => item.id === 'runtime-ports'), false);
+  assert.ok(run({ runtime: alice }, { runtime: bob, engines: podmanEngines, runtimeFacts: { linger: { bob: true } } }).some(item => item.id === 'runtime-ports' && /could not check/.test(item.text)));
+  for (const facts of [{ portFloor: 1024, linger: { bob: false } }, { portFloor: 1024, linger: {} }, { portFloor: 1024 }, undefined])
+    assert.ok(run({ runtime: alice }, { runtime: bob, engines: podmanEngines, runtimeFacts: facts }).some(item => item.id === 'runtime-linger' && item.status === 'warn'), JSON.stringify(facts));
+  assert.deepEqual(run({ runtime: alice }, { engines: [{ ...alice, version: '5.2.1', cgroupDelegated: true }], runtimeFacts: { portFloor: 1024, linger: { alice: true } } }).map(item => item.id), ['runtime-move'], 'the same user needs no translation');
+});
+
+test('server cleanup knows the Podman and rootless kinds', async () => {
+  const { CLEANUP_KINDS } = await import('../src/server-cleanup.js');
+  for (const kind of ['containers', 'images', 'volumes', 'buildCache', 'runtimeData', 'runtimeContainers']) assert.ok(CLEANUP_KINDS.includes(kind), kind);
+});
+
 test.after(() => http.close());

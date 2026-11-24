@@ -5,6 +5,10 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     docker, emit, run)
+from .discovery import (
+    engine_homes, engine_probe, engine_runtime)
+from .runtime import (
+    RUNTIME_DATA_BASE, RuntimeRefused, remove_rootless_data_root, runtime_is_default)
 from .staging import (
     JOB_DIRECTORY, job_folder_finished)
 from .move import (
@@ -274,6 +278,8 @@ def public_item(item):return {k:item.get(k) for k in ['kind','id','name','bytes'
 def cleanup_scan(req,now=None):
     protect=cleanup_protect(req);facts=cleanup_facts(protect,now)
     eligible,kept=cleanup_classify(facts,protect)
+    other_eligible,other_kept=runtime_cleanup_classify(runtime_cleanup_engines(),facts['now'],protect['minAge'],runtime_cleanup_protected(req),runtime_test_journals())
+    eligible,kept=eligible+other_eligible,kept+other_kept
     overall=time.monotonic()+CLEANUP_SIZE_SECONDS
     for item in eligible:
         if item['kind']=='volumes':item['bytes']=volume_bytes(item.get('mountpoint'),overall)
@@ -325,7 +331,7 @@ def cleanup_requested(req):
     if not isinstance(items,list) or not items or len(items)>CLEANUP_MAX_ITEMS:raise ValueError('Choose up to %d items to clean'%CLEANUP_MAX_ITEMS)
     result=[]
     for item in items:
-        if not isinstance(item,dict) or item.get('kind') not in CLEANUP_KINDS or not isinstance(item.get('id'),str) or not CLEANUP_REF.fullmatch(item['id']) or not isinstance(item.get('fingerprint'),str) or len(item['fingerprint'])>64:raise ValueError('Invalid cleanup item')
+        if not isinstance(item,dict) or item.get('kind') not in CLEANUP_KINDS+RUNTIME_CLEANUP_KINDS or not isinstance(item.get('id'),str) or not CLEANUP_REF.fullmatch(item['id']) or not isinstance(item.get('fingerprint'),str) or len(item['fingerprint'])>64:raise ValueError('Invalid cleanup item')
         result.append({'kind':item['kind'],'id':item['id'],'fingerprint':item['fingerprint']})
     return result
 def still_eligible(item):
@@ -366,15 +372,23 @@ def cleanup_apply(req,now=None):
         facts=cleanup_facts(protect,now)
         if facts['active']:raise ValueError(active_message(facts['active']))
         eligible,kept=cleanup_classify(facts,protect)
+        engines=runtime_cleanup_engines();journals_now=runtime_test_journals();protected_jobs=runtime_cleanup_protected(req)
+        other_eligible,other_kept=runtime_cleanup_classify(engines,facts['now'],protect['minAge'],protected_jobs,journals_now)
+        eligible,kept=eligible+other_eligible,kept+other_kept
         current={(i['kind'],i['id']):i for i in eligible};reasons={(i['kind'],i['id']):i['reason'] for i in kept}
         results=[];deadline=started+CLEANUP_APPLY_SECONDS
-        order={kind:n for n,kind in enumerate(CLEANUP_KINDS)}
+        order={kind:n for n,kind in enumerate(CLEANUP_KINDS+RUNTIME_CLEANUP_KINDS)}
         for item in sorted(requested,key=lambda i:order[i['kind']]):
             key=(item['kind'],item['id']);now_item=current.get(key);left=deadline-time.monotonic()
             outcome={'kind':item['kind'],'id':item['id'],'name':(now_item or {}).get('name') or item['id'][:12]}
             if left<=0:outcome.update(status='skipped',reason='timeLimit')
             elif now_item is None:outcome.update(status='skipped',reason=reasons.get(key,'gone'))
             elif now_item['fingerprint']!=item['fingerprint']:outcome.update(status='skipped',reason='changed')
+            elif item['kind']=='runtimeData':
+                try:
+                    refused=runtime_cleanup_remove(item,engines,facts['now'],protect['minAge'],protected_jobs,journals_now)
+                    outcome.update(status='skipped',reason=refused) if refused else outcome.update(status='removed')
+                except (RuntimeRefused,OSError):outcome.update(status='failed',reason='docker')
             elif item['kind']=='buildCache':
                 try:outcome.update(status='removed',bytes=prune_build_cache(min(600,left)))
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):outcome.update(status='failed',reason='buildCache')
@@ -386,3 +400,98 @@ def cleanup_apply(req,now=None):
             results.append(outcome)
         emit(result={'results':results})
     finally:lock.close()
+
+# ---- Podman and rootless engines (docs/podman-rootless.md) ----
+# DockNest's own copies in other engines are listed like the rootful ones: containers carrying the restore labels are
+# shown as kept ('restoreCopy', 'restoreTest', never removed here), and the data folder of a rootless restore that has
+# no container left in its engine and no running test is offered for removal. Only root-owned folders directly below
+# <base>/<uid> are looked at, never through a link, and nothing outside the job folders of this list is touched.
+RUNTIME_CLEANUP_KINDS=('runtimeData','runtimeContainers')
+RUNTIME_CLEANUP_LABELS=(('docker-backup-manager.restore','restoreCopy'),('docknest.restore-test','restoreTest'))
+JOB_FOLDER=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+def runtime_key(runtime):
+    return runtime.engine+('-'+runtime.user+'-'+str(runtime.uid) if runtime.rootless else '-root')
+def runtime_cleanup_engines(engines=None,homes=None):
+    """[(runtime, key)] for every Podman or rootless engine this server reports. Never raises."""
+    try:
+        engines=engine_probe() if engines is None else engines;homes=engine_homes() if homes is None else homes
+        found=[]
+        for engine in engines:
+            runtime=engine_runtime(engine,homes)
+            if runtime is not None and not runtime_is_default(runtime):found.append((runtime,runtime_key(runtime)))
+        return found
+    except Exception:return []
+def runtime_engine_containers(runtime):
+    """{job: (kind, id, name, created, running)} of the restore copies and restore-test copies in one engine."""
+    found={}
+    for label,kind in RUNTIME_CLEANUP_LABELS:
+        try:
+            listing=runtime.cli('ps','-aq','--no-trunc','--filter','label='+label,timeout=30)
+            if len(listing)>1024*1024:continue
+            ids=[i for i in listing.decode('utf-8','replace').split()][:CLEANUP_MAX_ITEMS]
+            if not ids or not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):continue
+            answer=runtime.cli('inspect',*ids,timeout=60)
+            records=json.loads(answer) if len(answer)<=8*1024*1024 else []
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):continue
+        for c in records if isinstance(records,list) else []:
+            if not isinstance(c,dict) or not isinstance(c.get('Id'),str):continue
+            labels=(c.get('Config') or {}).get('Labels') or {};job=labels.get(label)
+            if not isinstance(job,str) or not JOB_FOLDER.fullmatch(job):continue
+            state=c.get('State') or {}
+            found[(kind,job)]=(kind,c['Id'],str(c.get('Name') or '').lstrip('/')[:128],c.get('Created'),bool(state.get('Running')) or state.get('Status') not in CLEANUP_STOPPED)
+    return found
+def runtime_data_folders(runtime,base=RUNTIME_DATA_BASE,lstat=os.lstat,scandir=os.scandir):
+    """[(job, mtime_ns, inode)] of the rootless restore folders of one user that are real, root-owned folders."""
+    if not runtime.rootless:return []
+    folder=posixpath.join(base,str(runtime.uid))
+    try:
+        info=lstat(folder)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:return []
+        entries=list(scandir(folder))[:CLEANUP_MAX_ITEMS]
+    except OSError:return []
+    result=[]
+    for entry in entries:
+        if not JOB_FOLDER.fullmatch(entry.name):continue
+        try:item=lstat(posixpath.join(folder,entry.name))
+        except OSError:continue
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISDIR(item.st_mode) or item.st_uid!=0 or item.st_mode&0o022:continue
+        result.append((entry.name,item.st_mtime_ns,item.st_ino))
+    return result
+def runtime_cleanup_classify(engines,now,age,protected_jobs,journals,containers=None,folders=None):
+    """(eligible, kept) for the other engines. Pure over what the callbacks answer, so tests need no engine."""
+    eligible,kept=[],[]
+    containers=containers or runtime_engine_containers;folders=folders or runtime_data_folders
+    for runtime,key in engines:
+        copies=containers(runtime)
+        for (kind,job),(_,cid,name,created,running) in copies.items():
+            kept.append({'kind':'runtimeContainers','id':key+'/'+cid[:64],'name':name or cid[:12],'reason':kind})
+        have={job for (_,job) in copies}
+        for job,mtime,inode in folders(runtime):
+            item={'kind':'runtimeData','id':key+'/'+job,'name':job[:8],'bytes':None,'fingerprint':cleanup_digest(key,job,mtime,inode)}
+            if job in protected_jobs:kept.append({**item,'reason':'inUse'})
+            elif job in journals:kept.append({**item,'reason':'restoreTest'})
+            elif job in have:kept.append({**item,'reason':'restoreCopy'})
+            elif now-mtime/1e9<age:kept.append({**item,'reason':'tooNew'})
+            else:eligible.append(item)
+    return eligible,kept
+def runtime_cleanup_protected(req):
+    protect=req.get('protect') or {}
+    jobs=protect.get('jobs') if isinstance(protect,dict) else None
+    if jobs is None:return set()
+    if not isinstance(jobs,list) or len(jobs)>CLEANUP_MAX_ITEMS or any(not isinstance(j,str) or not JOB_FOLDER.fullmatch(j) for j in jobs):raise ValueError('Invalid protected jobs')
+    return set(jobs)
+def runtime_test_journals():
+    """Restore test ids whose journal still exists: the reaper owns those copies."""
+    try:return {e.name for e in os.scandir(RESTORE_TESTS_ROOT) if e.is_dir(follow_symlinks=False) and JOB_FOLDER.fullmatch(e.name)} if RESTORE_TESTS_ROOT.is_dir() and not RESTORE_TESTS_ROOT.is_symlink() else set()
+    except OSError:return set()
+def runtime_cleanup_remove(item,engines,now,age,protected_jobs,journals,**callbacks):
+    """Removes one runtimeData item after looking again: same fingerprint, still eligible, engine still reported."""
+    key,_,job=item['id'].rpartition('/')
+    chosen=[(r,k) for r,k in engines if k==key]
+    if not chosen or not JOB_FOLDER.fullmatch(job):return 'gone'
+    eligible,kept=runtime_cleanup_classify(chosen,now,age,protected_jobs,journals,**callbacks)
+    now_item=next((i for i in eligible if i['id']==item['id']),None)
+    if now_item is None:return next((i['reason'] for i in kept if i['id']==item['id']),'gone')
+    if now_item['fingerprint']!=item['fingerprint']:return 'changed'
+    remove_rootless_data_root(chosen[0][0],job)
+    return None
