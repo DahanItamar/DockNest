@@ -25,8 +25,8 @@ button.nc-iconbtn.nc-iconbtn:hover{background:var(--dn-bg-hover);color:var(--dn-
 .nc-popover>footer{display:flex;justify-content:center;padding:var(--dn-space-2);border-top:1px solid var(--dn-border-subtle)}
 button.nc-pinned.nc-pinned{display:flex;align-items:center;justify-content:flex-start;gap:var(--dn-space-3);width:100%;height:auto;min-height:56px;padding:var(--dn-space-3) var(--dn-space-4);border:0;border-bottom:1px solid var(--dn-border-subtle);border-radius:0;background:var(--dn-bg-subtle);color:var(--dn-text-primary);text-align:left;font-weight:400}
 .nc-pinned-text{display:flex;flex-direction:column;min-width:0;flex:1}.nc-pinned-text b{font-size:var(--dn-text-sm);font-weight:500}.nc-pinned-text small{font-size:var(--dn-text-xs);color:var(--dn-text-secondary)}
-.nc-spinner{flex:none;width:16px;height:16px;border-radius:var(--dn-radius-full);border:2px solid var(--dn-info-border);border-top-color:var(--dn-info-solid);animation:nc-spin 1s linear infinite}
-@keyframes nc-spin{to{transform:rotate(360deg)}}
+.nc-spinner{flex:none;width:16px;height:16px;border-radius:var(--dn-radius-full);border:2px solid var(--dn-info-border);border-top-color:var(--dn-info-solid);animation:dn-spin 1s linear infinite}
+
 .nc-bell-list{list-style:none;margin:0;padding:0;max-height:min(60dvh,420px);overflow-y:auto}
 button.nc-bell-item.nc-bell-item{display:flex;align-items:flex-start;justify-content:flex-start;gap:var(--dn-space-3);width:100%;height:auto;min-height:0;padding:var(--dn-space-3) var(--dn-space-4);border:0;border-bottom:1px solid var(--dn-border-subtle);border-radius:0;background:transparent;color:var(--dn-text-primary);text-align:left;font-weight:400}
 button.nc-bell-item.nc-bell-item:hover{background:var(--dn-bg-hover)}
