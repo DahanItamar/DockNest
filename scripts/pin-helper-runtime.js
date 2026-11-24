@@ -11,13 +11,14 @@ import { IMAGE_ID_PATTERN, TAR_SHA256_PATTERN, isLayerList } from '../shared/hel
 
 const defaultFile = fileURLToPath(new URL('../shared/helper-runtime.js', import.meta.url));
 
-export function pinText(text, imageId, tarSha256, layers) {
+export function pinText(text, imageId, tarSha256, layers, manifestDigest) {
+  if (!IMAGE_ID_PATTERN.test(String(manifestDigest))) throw new Error('The manifest digest must be sha256: followed by 64 lowercase hex characters.');
   if (!isLayerList(layers)) throw new Error('The layers must be a list of sha256 values.');
   if (!IMAGE_ID_PATTERN.test(String(imageId))) throw new Error('The image ID must be sha256: followed by 64 lowercase hex characters.');
   if (!TAR_SHA256_PATTERN.test(String(tarSha256))) throw new Error('The tar checksum must be 64 lowercase hex characters.');
   const line = name => new RegExp(`^export const ${name} = (?:null|'[^']*'|\\[[^\\]]*\\]);`, 'm');
   let out = text;
-  for (const [name, value] of [['HELPER_RUNTIME_IMAGE_ID', `'${imageId}'`], ['HELPER_RUNTIME_TAR_SHA256', `'${tarSha256}'`], ['HELPER_RUNTIME_LAYERS', JSON.stringify(layers).replaceAll('"', "'")]]) {
+  for (const [name, value] of [['HELPER_RUNTIME_IMAGE_ID', `'${imageId}'`], ['HELPER_RUNTIME_MANIFEST_DIGEST', `'${manifestDigest}'`], ['HELPER_RUNTIME_TAR_SHA256', `'${tarSha256}'`], ['HELPER_RUNTIME_LAYERS', JSON.stringify(layers).replaceAll('"', "'")]]) {
     if (!line(name).test(out)) throw new Error(`${name} was not found in the expected form.`);
     out = out.replace(line(name), () => `export const ${name} = ${value};`);
   }
@@ -34,6 +35,16 @@ export function imageIdFromTar(tarPath) {
   const match = /^(?:blobs\/sha256\/)?([a-f0-9]{64})(?:\.json)?$/.exec(manifest[0].Config);
   if (!match) throw new Error('The image configuration is not named by its SHA-256.');
   return 'sha256:' + match[1];
+}
+
+// The manifest digest of the one image in a docker save tar (OCI layout): its ID on the containerd image store. Exactly one
+// manifest is accepted, so an attestation or a second image cannot hide beside it.
+export function manifestDigestFromTar(tarPath) {
+  const out = spawnSync('tar', ['-xOf', basename(tarPath), 'index.json'], { cwd: dirname(tarPath), encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  if (out.status !== 0) throw new Error('The tar has no index.json.');
+  const manifests = JSON.parse(out.stdout)?.manifests;
+  if (!Array.isArray(manifests) || manifests.length !== 1 || !IMAGE_ID_PATTERN.test(String(manifests[0]?.digest))) throw new Error('The tar must hold exactly one manifest.');
+  return manifests[0].digest;
 }
 
 // The layer IDs (rootfs diff IDs) of the one image in a docker save tar: read from its configuration blob.
@@ -54,10 +65,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), value = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
   try {
     if (value('--id-from-tar')) console.log(imageIdFromTar(value('--id-from-tar')));
+    else if (value('--manifest-digest-from-tar')) console.log(manifestDigestFromTar(value('--manifest-digest-from-tar')));
     else if (value('--layers-from-tar')) console.log(JSON.stringify(layersFromTar(value('--layers-from-tar'))));
     else {
       const file = value('--file') ?? defaultFile;
-      writeFileSync(file, pinText(readFileSync(file, 'utf8'), value('--image-id'), value('--tar-sha256'), JSON.parse(value('--layers') ?? 'null')));
+      writeFileSync(file, pinText(readFileSync(file, 'utf8'), value('--image-id'), value('--tar-sha256'), JSON.parse(value('--layers') ?? 'null'), value('--manifest-digest')));
       console.log('Pinned the helper runtime image ' + value('--image-id'));
     }
   } catch (error) { console.error(error.message); process.exit(1); }

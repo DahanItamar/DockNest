@@ -1,4 +1,4 @@
-import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_LABEL, HOST_NETWORK_OPERATIONS, isPinnedImageId } from '../../shared/helper-runtime.js';
+import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_LABEL, HOST_NETWORK_OPERATIONS, isPinnedImageId, pinnedRuntimeIds } from '../../shared/helper-runtime.js';
 import { computeMounts, mountArguments } from './mounts.js';
 
 // The helper loader reads the trusted helper source from the first stdin line, then the JSON request. Request values
@@ -19,12 +19,12 @@ export const argvToCommand = argv => argv.map(quote).join(' ');
 export const sudoPrefix = () => ['sudo', '-n', '--'];
 
 // identity: 'root' | 'sudo'. runtime: 'host' | 'container'.
-export function helperArgv({ identity = 'root', runtime = 'host', operation = null, mounts = [], nasKind = null, imageId = HELPER_RUNTIME_IMAGE_ID } = {}) {
+export function helperArgv({ identity = 'root', runtime = 'host', operation = null, mounts = [], nasKind = null, imageId = HELPER_RUNTIME_IMAGE_ID, allowedIds = pinnedRuntimeIds() } = {}) {
   if (identity !== 'root' && identity !== 'sudo') throw new CommandRefused('Unknown SSH identity.');
   if (runtime !== 'host' && runtime !== 'container') throw new CommandRefused('Unknown helper runtime.');
   const lead = identity === 'sudo' ? sudoPrefix() : [];
   if (runtime === 'host') return [...lead, 'python3', '-c', LOADER];
-  if (!isPinnedImageId(imageId)) throw new CommandRefused('The helper runtime image is not pinned in this DockNest build.');
+  if (!isPinnedImageId(imageId) || !allowedIds.includes(imageId)) throw new CommandRefused('The helper runtime image is not pinned in this DockNest build.');
   const network = HOST_NETWORK_OPERATIONS.includes(operation) ? 'host' : 'none';
   const folders = computeMounts(mounts, { nasKind });
   return [...lead, 'docker', 'run', '--rm', '-i', '--pull', 'never', '--network', network, '--pid', 'host', '--security-opt', 'label=disable',

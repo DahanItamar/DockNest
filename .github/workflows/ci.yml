@@ -78,7 +78,7 @@ jobs:
       - name: The DockNest image carries the tar that was pinned
         run: |
           set -euo pipefail
-          pinned=$(node --input-type=module -e "import { HELPER_RUNTIME_TAR_SHA256 as s, HELPER_RUNTIME_IMAGE_ID as i, HELPER_RUNTIME_LAYERS as L, isLayerList, isTarSha256, isPinnedImageId } from './shared/helper-runtime.js'; if (!isTarSha256(s) || !isPinnedImageId(i) || !isLayerList(L)) process.exit(1); console.log(s)")
+          pinned=$(node --input-type=module -e "import { HELPER_RUNTIME_TAR_SHA256 as s, HELPER_RUNTIME_IMAGE_ID as i, HELPER_RUNTIME_LAYERS as L, HELPER_RUNTIME_MANIFEST_DIGEST as M, isLayerList, isTarSha256, isPinnedImageId } from './shared/helper-runtime.js'; if (!isTarSha256(s) || !isPinnedImageId(i) || !isLayerList(L) || !isPinnedImageId(M)) process.exit(1); console.log(s)")
           docker build -t docknest:ci-runtime .
           shipped=$(docker run --rm --entrypoint sha256sum docknest:ci-runtime /app/helper-runtime.tar | cut -d' ' -f1)
           [ "$shipped" = "$pinned" ] || { echo "::error::the shipped tar $shipped differs from the pin $pinned"; exit 1; }

@@ -13,6 +13,7 @@ docker buildx build --platform linux/amd64 --provenance=false --sbom=false --no-
 chmod 0644 helper-runtime.tar
 id=$(node scripts/pin-helper-runtime.js --id-from-tar helper-runtime.tar)
 layers=$(node scripts/pin-helper-runtime.js --layers-from-tar helper-runtime.tar)
+manifest=$(node scripts/pin-helper-runtime.js --manifest-digest-from-tar helper-runtime.tar)
 sha=$(sha256sum helper-runtime.tar | cut -d' ' -f1)
 size=$(stat -c %s helper-runtime.tar)
 [ "$size" -gt 0 ] && [ "$size" -le $((512 * 1024 * 1024)) ] || { echo "::error::unexpected tar size $size"; exit 1; }
@@ -24,6 +25,8 @@ docker image rm -f "$tag" > /dev/null 2>&1 || true
 docker load -i helper-runtime.tar > /dev/null
 [ "$(docker image inspect --format '{{json .RootFS.Layers}}' "$tag")" = "$layers" ] || { echo "::error::the loaded layers differ from the tar's"; exit 1; }
 run_id=$(docker image inspect --format '{{.Id}}' "$tag")
+# The ID this Docker reports is the config digest (classic store) or the manifest digest (containerd store): one of the two pins.
+[ "$run_id" = "$id" ] || [ "$run_id" = "$manifest" ] || { echo "::error::the loaded image ID $run_id is neither the config digest $id nor the manifest digest $manifest"; exit 1; }
 [ "$(docker image inspect --format '{{index .Config.Labels "org.docknest.helper"}}' "$run_id")" = 1 ] || { echo "::error::the DockNest label is missing"; exit 1; }
 [ "$(docker image inspect --format '{{.Architecture}}/{{.Os}}' "$run_id")" = amd64/linux ] || { echo "::error::not a linux/amd64 image"; exit 1; }
 # The helper's needs: Python 3.9+, the Docker CLI and tar, with no network.
@@ -35,6 +38,7 @@ docker run --rm --network none "$run_id" tar --version > /dev/null
 
 echo "helper runtime image: $id (this Docker runs it as $run_id)"
 echo "helper runtime layers: $layers"
+echo "helper runtime manifest digest: $manifest"
 echo "helper runtime tar sha256: $sha ($size bytes)"
 [ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo "Helper runtime image \`$id\` (tar sha256 \`$sha\`, $size bytes)" >> "$GITHUB_STEP_SUMMARY"; }
-if [ "${1:-}" = --pin ]; then node scripts/pin-helper-runtime.js --image-id "$id" --tar-sha256 "$sha" --layers "$layers"; fi
+if [ "${1:-}" = --pin ]; then node scripts/pin-helper-runtime.js --image-id "$id" --tar-sha256 "$sha" --layers "$layers" --manifest-digest "$manifest"; fi

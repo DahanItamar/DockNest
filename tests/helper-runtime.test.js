@@ -6,34 +6,34 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import { pinText, imageIdFromTar, layersFromTar } from '../scripts/pin-helper-runtime.js';
+import { pinText, imageIdFromTar, layersFromTar, manifestDigestFromTar } from '../scripts/pin-helper-runtime.js';
 import { ensureRuntimeImage, verifiedTar, removeOldRuntimes, RuntimeImageRefused } from '../src/nas/runtime-image.js';
 import { computeRuntimeMounts, requestPaths } from '../src/nas/runtime-prepare.js';
 import { prepareHelper } from '../src/nas/run.js';
 import { MountRefused } from '../src/nas/mounts.js';
-import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_TAR_SHA256, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG } from '../shared/helper-runtime.js';
+import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_TAR_SHA256, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG, HELPER_RUNTIME_MANIFEST_DIGEST } from '../shared/helper-runtime.js';
 
 // Fake values built at runtime: no hash literals in the repository.
 const hex = seed => createHash('sha256').update(seed).digest('hex');
 const sha = seed => 'sha256:' + hex(seed);
-const imageId = sha('image'), runId = sha('server-id'), otherId = sha('other'), oldId = sha('old');
+const imageId = sha('image'), runId = sha('manifest'), otherId = sha('other'), oldId = sha('old');
 const layers = [sha('layer-1'), sha('layer-2')];
 const directory = await mkdtemp(join(tmpdir(), 'docknest-runtime-'));
 
 test('the repository pins nothing: a source build refuses the container runtime', () => {
-  assert.equal(HELPER_RUNTIME_IMAGE_ID, null); assert.equal(HELPER_RUNTIME_TAR_SHA256, null); assert.equal(HELPER_RUNTIME_LAYERS, null);
+  assert.equal(HELPER_RUNTIME_IMAGE_ID, null); assert.equal(HELPER_RUNTIME_TAR_SHA256, null); assert.equal(HELPER_RUNTIME_LAYERS, null); assert.equal(HELPER_RUNTIME_MANIFEST_DIGEST, null);
 });
 
 test('the pin script writes only valid values and only into the expected lines', async () => {
   const source = await readFile(new URL('../shared/helper-runtime.js', import.meta.url), 'utf8');
-  const pinned = pinText(source, imageId, hex('tar'), layers);
+  const pinned = pinText(source, imageId, hex('tar'), layers, runId);
   assert.ok(pinned.includes(`export const HELPER_RUNTIME_IMAGE_ID = '${imageId}';`) && pinned.includes(`export const HELPER_RUNTIME_TAR_SHA256 = '${hex('tar')}';`));
   assert.ok(pinned.includes(`['${layers[0]}','${layers[1]}']`));
-  assert.equal(pinText(pinned, otherId, hex('tar2'), [sha('x')]).includes(imageId), false, 'pinning again replaces, never appends');
-  for (const bad of ['docknest-helper-runtime:latest', 'sha256:' + 'A'.repeat(64), imageId + '\nexport const x = 1;', 'sha256:abc']) assert.throws(() => pinText(source, bad, hex('tar'), layers), /image ID/);
-  for (const bad of ['xyz', hex('tar').toUpperCase(), hex('tar') + '; rm']) assert.throws(() => pinText(source, imageId, bad, layers), /checksum/);
-  for (const bad of [null, [], ['x'], [sha('a') + "'];process.exit(1);['"]]) assert.throws(() => pinText(source, imageId, hex('tar'), bad), /layers/);
-  assert.throws(() => pinText('export const HELPER_RUNTIME_IMAGE_ID = 5;', imageId, hex('tar'), layers), /not found/);
+  assert.equal(pinText(pinned, otherId, hex('tar2'), [sha('x')], otherId).includes(imageId), false, 'pinning again replaces, never appends');
+  for (const bad of ['docknest-helper-runtime:latest', 'sha256:' + 'A'.repeat(64), imageId + '\nexport const x = 1;', 'sha256:abc']) assert.throws(() => pinText(source, bad, hex('tar'), layers, runId), /image ID/);
+  for (const bad of ['xyz', hex('tar').toUpperCase(), hex('tar') + '; rm']) assert.throws(() => pinText(source, imageId, bad, layers, runId), /checksum/);
+  for (const bad of [null, [], ['x'], [sha('a') + "'];process.exit(1);['"]]) assert.throws(() => pinText(source, imageId, hex('tar'), bad, runId), /layers/);
+  assert.throws(() => pinText('export const HELPER_RUNTIME_IMAGE_ID = 5;', imageId, hex('tar'), layers, runId), /not found/);
 });
 
 async function makeTar(name, manifest, blobs = {}) {
@@ -78,7 +78,7 @@ function fakeServer({ held = null, loadsAs = { id: runId, layers }, loadCode = 0
 const tarFile = join(directory, 'helper-runtime.tar');
 await writeFile(tarFile, 'fake image tar bytes');
 const tarSha256 = hex('fake image tar bytes');
-const pinnedArgs = { layers, tarPath: tarFile, tarSha256 };
+const pinnedArgs = { layers, ids: [imageId, runId], tarPath: tarFile, tarSha256 };
 
 test('an image already held with the pinned layers is used by the ID the server reports, with nothing sent', async () => {
   const server = fakeServer({ held: { id: runId, layers } });
@@ -96,7 +96,7 @@ test('a missing or different image is loaded from the checked tar, verified by l
 });
 
 test('fail closed: wrong layers after load, failed load, unpinned build, damaged or missing tar', async () => {
-  await assert.rejects(ensureRuntimeImage({ ...fakeServer({ loadsAs: { id: runId, layers: [sha('evil')] } }), ...pinnedArgs }), /does not match the pinned layers/);
+  await assert.rejects(ensureRuntimeImage({ ...fakeServer({ loadsAs: { id: runId, layers: [sha('evil')] } }), ...pinnedArgs }), /pinned ID and layers/);
   await assert.rejects(ensureRuntimeImage({ ...fakeServer({ loadCode: 1 }), ...pinnedArgs }), /could not load/);
   await assert.rejects(ensureRuntimeImage({ ...fakeServer(), ...pinnedArgs, layers: null }), RuntimeImageRefused);
   await assert.rejects(ensureRuntimeImage({ ...fakeServer(), ...pinnedArgs, layers: [] }), RuntimeImageRefused);
@@ -115,7 +115,7 @@ test('old runtime removal only touches labelled image IDs other than the current
 
 test('the helper is run by the server-reported ID; a source build or a bad ID is refused', () => {
   const server = { id: 's1', username: 'admin', capabilities: JSON.stringify({ nas: { kind: 'truenas' }, helperRuntime: 'container' }) };
-  const prepared = prepareHelper(server, { operation: 'test' }, { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: runId });
+  const prepared = prepareHelper(server, { operation: 'test' }, { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: runId, allowedIds: [runId] });
   assert.ok(prepared.command.includes(`'${runId}'`) && !prepared.command.includes('sh -c'));
   assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: [] }), /not pinned/, 'no ID, no pin: refused');
   assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: [], runtimeImageId: 'docknest-helper-runtime:release' }), /not pinned/);
@@ -150,4 +150,38 @@ test('a looking call skips what the deny-list refuses; names that are not contai
   assert.deepEqual(requestPaths(nasServer, { stagingBase: '/mnt/tank/x', config: { composeFiles: ['/a/b/c.yml', 5] } }, { stagingBase: '/mnt/tank/.docknest' }).sort(), ['/a/b', '/mnt/tank/.docknest', '/mnt/tank/x'].sort());
   const unraid = await computeRuntimeMounts({ server: { id: 'u', capabilities: '{}' }, request: { operation: 'discover' }, run: mountRunner([]), identity: 'root', nasKind: 'unraid' });
   assert.deepEqual(unraid, ['/boot/config/plugins/dockerMan/templates-user']);
+});
+
+test('the manifest digest comes from the tar index and exactly one manifest is accepted', async () => {
+  const make = async (name, index) => {
+    const root = await mkdtemp(join(directory, name + '-'));
+    await writeFile(join(root, 'index.json'), JSON.stringify(index));
+    assert.equal(spawnSync('tar', ['-cf', 'image.tar', 'index.json'], { cwd: root }).status, 0);
+    return join(root, 'image.tar');
+  };
+  assert.equal(manifestDigestFromTar(await make('m1', { manifests: [{ digest: runId }] })), runId);
+  const two = await make('m2', { manifests: [{ digest: runId }, { digest: otherId }] }), bad = await make('m3', { manifests: [{ digest: 'x' }] });
+  assert.throws(() => manifestDigestFromTar(two), /exactly one/); assert.throws(() => manifestDigestFromTar(bad), /exactly one/);
+  const source = await readFile(new URL('../shared/helper-runtime.js', import.meta.url), 'utf8');
+  assert.throws(() => pinText(source, imageId, hex('tar'), layers, 'nope'), /manifest digest/);
+  assert.ok(pinText(source, imageId, hex('tar'), layers, runId).includes(`export const HELPER_RUNTIME_MANIFEST_DIGEST = '${runId}';`));
+});
+
+test('both image stores are accepted when the ID is pinned, and a swapped-config image with the same layers is refused', async () => {
+  // Classic store: the server reports the config digest. Containerd store: the manifest digest.
+  for (const id of [imageId, runId]) assert.deepEqual(await ensureRuntimeImage({ ...fakeServer({ held: { id, layers } }), ...pinnedArgs }), { runId: id, loaded: false });
+  // Same layers, different config (another Entrypoint or User) means a different ID: never trusted, held or freshly loaded.
+  const swappedHeld = fakeServer({ held: { id: sha('swapped-config'), layers }, loadsAs: { id: sha('swapped-config'), layers } });
+  await assert.rejects(ensureRuntimeImage({ ...swappedHeld, ...pinnedArgs }), /pinned ID and layers/);
+  assert.ok(swappedHeld.calls.some(call => call[0] === 'exec'), 'a held image that is not genuine is replaced by loading the checked tar');
+  await assert.rejects(ensureRuntimeImage({ ...fakeServer({ loadsAs: { id: sha('swapped-config'), layers } }), ...pinnedArgs }), /pinned ID and layers/);
+  await assert.rejects(ensureRuntimeImage({ ...fakeServer(), ...pinnedArgs, ids: [] }), RuntimeImageRefused);
+});
+
+test('the helper command accepts only a pinned ID, however it was passed', () => {
+  const server = { id: 's1', username: 'admin', capabilities: JSON.stringify({ nas: { kind: 'truenas' }, helperRuntime: 'container' }) };
+  const options = { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: sha('swapped-config') };
+  assert.throws(() => prepareHelper(server, { operation: 'test' }, options), /not pinned/, 'source build: nothing is pinned');
+  assert.throws(() => prepareHelper(server, { operation: 'test' }, { ...options, allowedIds: [imageId, runId] }), /not pinned/, 'a shaped ID that is not in the set');
+  assert.ok(prepareHelper(server, { operation: 'test' }, { ...options, runtimeImageId: runId, allowedIds: [imageId, runId] }).command.includes(runId));
 });
