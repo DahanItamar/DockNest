@@ -291,3 +291,17 @@ def certificate_facts():
     """What an operation's result carries: this run's probe certificates, then the certbot certificates."""
     try:return list(PEER_CERTIFICATES.values())[:CERT_LIMIT]+certbot_certificates()
     except Exception:return []
+
+def restart_reason(containers):
+    """One plain sentence for a restart that did not become healthy, read from the containers themselves, or
+    None when nothing specific shows (the caller keeps the old generic text). Names only: no environment, command or log text."""
+    try:
+        for c in inspect(containers) if containers else []:
+            name=(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12]
+            state=c.get('State') or {};health_state=state.get('Health') or {}
+            if not state.get('Running'):return '%s is not running after the restart (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status')=='starting' and not health_state.get('Log'):
+                return 'the health check of %s never started, so it cannot report healthy; a rootless Podman container needs its user session (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status') not in (None,'healthy'):return '%s reports %s (watchdog remains armed, maintenance retained)'%(name,str(health_state.get('Status'))[:20])
+    except Exception:pass
+    return None
