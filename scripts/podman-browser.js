@@ -65,7 +65,7 @@ async function discover(scheme,width){
  await d.getByRole('combobox',{name:/Source server/}).selectOption('s1');
  await d.locator('.application-group').first().waitFor();
  // Headings name the engine; rootful Docker comes first.
- const headings=await d.locator('.engine-heading').allInnerTexts();
+ const headings=await d.locator('h3.engine-heading').allInnerTexts();
  assert.equal(headings[0],'Docker');
  // A Compose project split over two engines is refused in words, and cannot be selected.
  const shop=d.getByRole('region',{name:'shop'});
