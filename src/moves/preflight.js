@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { installInfo, dockerNeed, MIN_DOCKER_MAJOR } from '../install-plan.js';
 import { formatBytes } from '../../shared/format-bytes.js';
+import { isRootfulDocker, runtimeRefusal } from '../runtime.js';
 
 /**
  * @typedef {{ hostIp?: string, hostPort: number, containerPort: number, protocol?: 'tcp'|'udp' }} PortBinding
@@ -96,6 +97,29 @@ export function cpuFit(cpus, cpuset, count) {
 // Only when the tool is missing (never for an old version) and only on a reachable target whose system was read.
 const installable = (target, name, need) => (target.os ? { install: installInfo(target, name, need) } : {});
 
+// Podman and rootless apps (docs/podman-rootless.md, decision 10). The rules a move between engines follows are judged here, so
+// the owner sees every reason; the move itself stays blocked until the move steps run in the app's engine.
+export const RUNTIME_MOVES_EXECUTABLE = false;
+const ROOTFUL = Object.freeze({ engine: 'docker', rootless: false });
+export function runtimeMoveChecks(facts, add) {
+  const { site, target } = facts, source = site.runtime ?? ROOTFUL, wanted = target.runtime ?? site.runtime ?? ROOTFUL;
+  if (isRootfulDocker(source) && isRootfulDocker(wanted)) return;  // an ordinary move: nothing here
+  if (source.engine !== wanted.engine) { add('runtime-kind', 'block', 'Container engine', 'Docker and Podman apps cannot be moved to each other in this release.'); return; }
+  const refusal = runtimeRefusal(wanted, { engines: target.engines });
+  if (refusal) add('runtime-target', 'block', 'Container engine', refusal);
+  if (wanted.rootless) {
+    const floor = target.runtimeFacts?.portFloor;
+    if (!Number.isInteger(floor)) add('runtime-ports', 'block', 'Ports', `DockNest could not check which ports ${wanted.user} may use on ${target.name}.`);
+    else {
+      const low = [...new Set((site.ports ?? []).map(binding => binding.hostPort).filter(port => port < floor))].sort((a, b) => a - b);
+      if (low.length) add('runtime-ports', 'block', 'Ports', `${wanted.user} cannot use port${low.length > 1 ? 's' : ''} ${low.join(', ')} on ${target.name} (ports below ${floor} need root). Change the app's port first.`);
+    }
+    if (target.runtimeFacts?.linger?.[wanted.user] !== true) add('runtime-linger', 'warn', 'Keeping the app running', `${wanted.user} on ${target.name} may stop the app when its last login ends. Run loginctl enable-linger ${wanted.user} there.`, ACK);
+  }
+  if (source.rootless !== wanted.rootless || source.user !== wanted.user || source.uid !== wanted.uid) add('runtime-owners', 'warn', 'Owners and groups', 'File owners are translated to the new user, and the move stops if one file has an owner that cannot be mapped.', ACK);
+  if (!RUNTIME_MOVES_EXECUTABLE) add('runtime-move', 'block', 'Moving this app', 'Moving Podman and rootless apps is not available yet in this release.');
+}
+
 /** @param {MoveFacts} facts @param {{ envRewrite?: string[] }} [options] */
 export function evaluateMove(facts, options = {}) {
   const { site, source, target, state = {}, dns = { mode: 'manual' } } = facts;
@@ -153,6 +177,7 @@ export function evaluateMove(facts, options = {}) {
       else if (!MODES.includes(targetMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses');
       else if (sourceMode !== 'none' || targetMode !== 'none') add('owner-map', 'warn', 'Owners and groups', `Docker on ${sourceMode !== 'none' ? source.name : target.name} runs with remapped user IDs (${sourceMode !== 'none' ? sourceMode : targetMode}). File owners keep their numbers, but the owners the containers see on ${target.name} can differ, so the app may not read its own files. Check it after the move.`, ACK);
     }
+    runtimeMoveChecks(facts, add);
     const modes = source.ownership?.modes, fsFacts = target.ownership?.filesystem;
     if (sameServer) { /* nothing moves */ }
     else if (!modes || modes.checked !== true) unverified('file-mode', 'File permissions', "the app's file permissions", source.name);

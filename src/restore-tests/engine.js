@@ -13,6 +13,7 @@ import { helperSource } from '../helper-bundle.js';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, uploadBackupTo, jobRunners, restoreSources } from '../engine.js';
+import { runtimeSchema, isRootfulDocker } from '../runtime.js';
 import { chainSize, loadChain, verifyChainLinks } from '../incremental.js';
 import { targetSummary } from '../site-storage.js';
 import { recordTestVerification, recordVerification } from '../recovery-evidence.js';
@@ -288,9 +289,19 @@ async function guarded(test, work) {
   catch (error) { if (why) throw Object.assign(new Error(why), { stopped: why }); throw error; }
   finally { clearInterval(timer); }
 }
+// The container engine of a Podman or rootless backup travels with every step; the helper checks it against what it recorded at
+// prepare, and teardown and the reaper use the recorded one. Nothing here needs it for rootful Docker.
+export function testRuntime(test) {
+  try {
+    const row = test.backup_id && db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id);
+    const runtime = JSON.parse(row?.manifest || '{}').runtime;
+    return runtime && runtimeSchema.safeParse(runtime).success && !isRootfulDocker(runtime) ? runtime : null;
+  } catch { return null; }
+}
 async function call(test, request, signal) {
   const options = LOCKED.has(request.operation) ? { keepStdinOpen: true, ...(signal ? { signal } : {}) } : {};
-  return testTransport.remote(server(test.server_id), LOCKED.has(request.operation) ? { ...request, watchStdin: true } : request, options);
+  const runtime = testRuntime(test), sent = runtime ? { ...request, runtime } : request;
+  return testTransport.remote(server(test.server_id), LOCKED.has(request.operation) ? { ...sent, watchStdin: true } : sent, options);
 }
 const helperLimits = test => ({ memoryMb: test.limits.memoryMb, cpus: test.limits.cpus, internet: !!test.limits.internet });
 function stopped(test, error) {

@@ -90,7 +90,8 @@ class UnpackGateTests(unittest.TestCase):
     def test_only_restore_may_open_a_format_3_package(self):
         manifest = {'formatVersion': 3, 'runtime': ALICE, 'idMap': SOURCE}
         self.assertEqual(self.unpack(manifest, 'restore')['runtime'], ALICE)
-        for operation in ('deploy-restore', 'restore-test-prepare', 'restore-test-run', 'verify-restore-recovery', 'move-facts'):
+        self.assertEqual(self.unpack(manifest, 'restore-test-run')['runtime'], ALICE)
+        for operation in ('deploy-restore', 'restore-test-prepare', 'verify-restore-recovery', 'deploy-teardown'):
             with self.assertRaisesRegex(ValueError, 'not available yet'): self.unpack(manifest, operation)
     def test_odd_runtimes_in_a_package_are_refused_for_restore_too(self):
         for manifest in ({'formatVersion': 3, 'runtime': {'engine': 'docker', 'rootless': False}}, {'formatVersion': 3, 'runtime': ALICE},
@@ -235,9 +236,9 @@ class OperationTests(unittest.TestCase):
     def test_capture_operations_resolve_a_runtime_and_others_are_refused(self):
         request = lambda op, runtime=ALICE: {'operation': op, 'config': {'runtime': runtime}}
         with patch.object(helper, 'resolve_runtime', return_value=rootless()):
-            for op in ('plan', 'readiness', 'capture', 'capture-stream'):
+            for op in ('plan', 'readiness', 'capture', 'capture-stream', 'move-facts'):
                 helper.refuse_foreign_runtime(request(op)); self.assertEqual(helper.request_runtime(request(op)).user, 'alice')
-        for op in ('maintenance', 'self-heal-restart', 'incremental-commit', 'deploy-restore', 'install-boot-recovery', 'move-facts'):
+        for op in ('maintenance', 'self-heal-restart', 'incremental-commit', 'deploy-restore', 'install-boot-recovery', 'deploy-teardown'):
             with self.assertRaisesRegex(R, 'not available yet'): helper.refuse_foreign_runtime(request(op))
         self.assertIsNone(helper.request_runtime({'operation': 'capture', 'config': {}}))
         self.assertIsNone(helper.request_runtime({'operation': 'discover', 'config': {'runtime': ALICE}}))

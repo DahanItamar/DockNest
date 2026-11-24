@@ -16,6 +16,7 @@ import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
+import { cleanEngines } from '../runtime.js';
 import { coverageConflict } from '../site-coverage.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { confirmKnownGood } from '../keys-safe/scan.js';
@@ -98,6 +99,7 @@ function healthPath(cfg) { try { const url = new URL(cfg.healthUrl); return (url
 
 // Collects facts from both servers (read-only) and evaluates them. Returns the owner-facing result and the private
 // execution plan the worker needs. Neither holds secret values: env findings are masked by the helper and again here.
+const targetEngines = target => { try { return cleanEngines(JSON.parse(target.capabilities || '{}')?.engines); } catch { return []; } };
 export async function previewFacts(siteId, targetServerId, options, ownMove = null) {
   const { site, server: source } = siteInfo(siteId);
   const target = server(targetServerId);
@@ -127,11 +129,11 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const composeOverride = sf.kind === 'compose' && !!sf.compose && composeAtLeast(targetFacts?.composeVersion, [2, 24]);
   const mailBlocking = sf.kind !== 'static' && !!targetFacts?.firewall?.mailBlocking;
   const facts = {
-    site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
+    site: { ...(cfg.runtime ? { runtime: cfg.runtime } : {}), id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
       ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening, domainPaths,
       ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])], ownership: sourceFacts.ownership },
-    target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
+    target: targetFacts ? { engines: targetEngines(target), id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
     state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id) || !!editingSite(site.id),
       archived: !!db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id), deploymentHold: deploymentHeld(db),
