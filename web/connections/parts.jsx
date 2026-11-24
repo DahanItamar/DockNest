@@ -1,8 +1,8 @@
 import React,{useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
-import {IconBrandTelegram,IconMail,IconBrandWhatsapp,IconBrandDiscord,IconBrandSlack,IconBrandTeams,IconBrandGoogle,IconMessage,IconBell,IconBellRinging,IconDeviceMobile,IconBrandMatrix,IconWebhook,IconPlugConnected,IconChevronDown,IconCheck,IconSearch,IconPlus} from '@tabler/icons-react';
+import {IconBrandTelegram,IconMail,IconBrandWhatsapp,IconBrandDiscord,IconBrandSlack,IconBrandTeams,IconBrandGoogle,IconMessage,IconBell,IconBellRinging,IconDeviceMobile,IconBrandMatrix,IconWebhook,IconPlugConnected,IconChevronDown,IconCheck,IconSearch,IconPlus,IconBrandGoogleDrive,IconBrandOnedrive,IconBrandDropbox,IconWorld,IconNetwork,IconFolder,IconServer2,IconCloud} from '@tabler/icons-react';
 
 // Brand marks only as the provider's own mark; everything else is a plain Tabler icon (docs/design/DESIGN.md).
-const ICONS={'brand-telegram':IconBrandTelegram,mail:IconMail,'brand-whatsapp':IconBrandWhatsapp,'brand-discord':IconBrandDiscord,'brand-slack':IconBrandSlack,'brand-teams':IconBrandTeams,'brand-google':IconBrandGoogle,message:IconMessage,bell:IconBell,'bell-ringing':IconBellRinging,'device-mobile':IconDeviceMobile,'brand-matrix':IconBrandMatrix,webhook:IconWebhook};
+const ICONS={'brand-telegram':IconBrandTelegram,mail:IconMail,'brand-whatsapp':IconBrandWhatsapp,'brand-discord':IconBrandDiscord,'brand-slack':IconBrandSlack,'brand-teams':IconBrandTeams,'brand-google':IconBrandGoogle,message:IconMessage,bell:IconBell,'bell-ringing':IconBellRinging,'device-mobile':IconDeviceMobile,'brand-matrix':IconBrandMatrix,webhook:IconWebhook,'brand-google-drive':IconBrandGoogleDrive,'brand-onedrive':IconBrandOnedrive,'brand-dropbox':IconBrandDropbox,world:IconWorld,network:IconNetwork,folder:IconFolder,server:IconServer2,cloud:IconCloud};
 export function ProviderIcon({icon,size=20,stroke=1.5,className='cx-ic'}){const I=ICONS[icon]||IconPlugConnected;return <I size={size} stroke={stroke} className={className} aria-hidden="true"/>}
 
 // A dropdown that always opens downward, below its button, with an optional search and grouped options, and one action
