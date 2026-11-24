@@ -11,6 +11,7 @@ RUNTIME_USER=re.compile(r'[a-z_][a-z0-9_-]{0,31}')
 RUNTIME_UNIT=re.compile(r'[A-Za-z0-9_][A-Za-z0-9:_.@-]{0,200}\.service')
 RUNTIME_ENGINES=('docker','podman')
 MIN_RUNTIME_UID=1000
+RUNTIME_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 class RuntimeRefused(ValueError):
     """A fixed, plain reason; never contains file contents."""
 UNMAPPABLE='A file is owned by an ID the new user cannot map.'
@@ -86,7 +87,8 @@ class Runtime:
         if self.engine=='docker' and not self.rootless:return ['docker',*args]
         if self.engine=='docker':return ['docker','--host','unix:///run/user/%d/docker.sock'%self.uid,*args]
         if not self.rootless:return ['podman',*args]
-        return ['runuser','-u',self.user,'--','env','XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home,'podman',*args]
+        # env -i: nothing of root's environment reaches the user's podman; PATH is fixed.
+        return ['runuser','-u',self.user,'--','env','-i','PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home,'podman',*args]
     def cli(self,*args,**options):return run(self.argv(*args),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
     def compose(self,*args):

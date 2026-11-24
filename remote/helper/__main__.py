@@ -131,20 +131,23 @@ def main(req):
     if req.get('operation') in WATCHED_LAUNCH_OPS and req.get('watchStdin') and isinstance(req.get('launchId'),str) and LAUNCH_UUID.fullmatch(req['launchId']):
         SNAPSHOT_FILTER='label=docknest.launch='+req['launchId'];watch_stdin()
     op=req['operation']
+    refuse_foreign_runtime(req)
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
+        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engine_probe(),**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
     elif op=='discover':
         cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs);managers=stack_managers(cs)
-        emit(result={**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
+        engines=engine_probe();homes=engine_homes()
+        foreign=other_engine_containers(engines,homes)
+        emit(result={**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)})
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='describe-containers':describe_containers(req)
     elif op=='key-scan':key_scan_operation(req)
