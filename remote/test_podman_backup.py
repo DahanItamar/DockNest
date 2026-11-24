@@ -1,0 +1,221 @@
+"""Backup and restore of Podman and rootless apps (docs/podman-rootless.md, ADR decisions 4, 5, 8, 11).
+Run: python3 remote/test_podman_backup.py
+Proves, with fake engines and temporary folders only: format 3 manifests are checked in one place and only a restore may
+use one; source folders must be real folders inside the rootless user's home; owners are translated with the ID maps
+(refusing the whole restore on the first unmappable file, never producing host root); restore targets keep the engine
+kind and rootless-ness; a rootless restore folder is root-owned and traversable only; systemd-managed containers and
+native database engines are refused; and operations that cannot work in another engine are refused. No real engine runs."""
+import hashlib, io, json, os, pathlib, stat, sys, tarfile, tempfile, unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import helper_path  # the built helper.py (one file, as servers run it)
+import helper
+
+R = helper.RuntimeRefused
+ALICE = {'engine': 'podman', 'rootless': True, 'user': 'alice', 'uid': 1001}
+SOURCE = {'uid': 1001, 'gid': 1001, 'subuid': [100000, 65536], 'subgid': [100000, 65536]}
+TARGET = {'uid': 1500, 'gid': 1500, 'subuid': [300000, 65536], 'subgid': [300000, 65536]}
+rootless = lambda engine='podman': helper.Runtime(engine, True, 'alice', 1001, '/home/alice')
+
+def fake_lstat(table):
+    def lstat(path):
+        if path not in table: raise FileNotFoundError(path)
+        mode, uid = table[path]
+        return SimpleNamespace(st_mode=mode | 0o755, st_uid=uid, st_gid=uid)
+    return lstat
+
+class SourceTests(unittest.TestCase):
+    def test_rootful_docker_is_not_checked_here(self):
+        self.assertEqual(helper.check_runtime_source(helper.Runtime(), '/anything/../x'), '/anything/../x')
+    def test_rootless_source_must_be_inside_home_without_links(self):
+        table = {p: (stat.S_IFDIR, 1001) for p in ('/home', '/home/alice', '/home/alice/data', '/home/alice/data/app')}
+        ok = fake_lstat(table)
+        self.assertEqual(helper.check_runtime_source(rootless(), '/home/alice/data/app', ok), '/home/alice/data/app')
+        for bad in ('/srv/data', '/home/alice2/x', '/home/alice/../root', '/home/alice/data/', 'relative', '/home/alice/data\n', '/home/alice/\0x', 5, None):
+            with self.assertRaises(R, msg=str(bad)): helper.check_runtime_source(rootless(), bad, ok)
+        linked = {**table, '/home/alice/data': (stat.S_IFLNK, 1001)}
+        with self.assertRaisesRegex(R, 'link'): helper.check_runtime_source(rootless(), '/home/alice/data/app', fake_lstat(linked))
+        with self.assertRaises(R): helper.check_runtime_source(rootless(), '/home/alice/missing', ok)
+    def test_rootful_podman_still_refuses_links_and_odd_paths(self):
+        table = {'/srv': (stat.S_IFDIR, 0), '/srv/x': (stat.S_IFLNK, 0)}
+        with self.assertRaises(R): helper.check_runtime_source(helper.Runtime('podman'), '/srv/x', fake_lstat(table))
+        with self.assertRaises(R): helper.check_runtime_source(helper.Runtime('podman'), '/srv/../x', fake_lstat(table))
+
+class SocketTests(unittest.TestCase):
+    def test_rechecked_before_every_use(self):
+        runtime = helper.Runtime('docker', True, 'alice', 1001, '/home/alice')
+        path = '/run/user/1001/docker.sock'
+        runtime.check_socket(fake_lstat({path: (stat.S_IFSOCK, 1001)}))
+        for entry in ((stat.S_IFSOCK, 0), (stat.S_IFREG, 1001), (stat.S_IFLNK, 1001)):
+            with self.assertRaises(R): runtime.check_socket(fake_lstat({path: entry}))
+        with self.assertRaises(R): runtime.check_socket(fake_lstat({}))
+        with patch.object(helper, 'run', return_value=b'') as run, patch.object(helper.os, 'lstat', side_effect=FileNotFoundError):
+            with self.assertRaises(R): runtime.cli('ps')
+        run.assert_not_called()
+
+class ManifestTests(unittest.TestCase):
+    base = {'formatVersion': 3, 'complete': True, 'runtime': ALICE, 'idMap': SOURCE}
+    def test_good_and_old_formats(self):
+        self.assertIsNone(helper.manifest_runtime_problem(self.base))
+        self.assertIsNone(helper.manifest_runtime_problem({'formatVersion': 3, 'runtime': {'engine': 'podman', 'rootless': False}}))
+        self.assertIsNone(helper.manifest_runtime_problem({'formatVersion': 1}))
+        self.assertIsNone(helper.manifest_runtime_problem({'formatVersion': 2, 'backupKind': 'full'}))
+    def test_refused(self):
+        bad = [{**self.base, 'runtime': {'engine': 'docker', 'rootless': False}}, {**self.base, 'runtime': 'podman'}, {**self.base, 'runtime': {**ALICE, 'x': 1}},
+               {**self.base, 'runtime': {**ALICE, 'uid': 5}}, {k: v for k, v in self.base.items() if k != 'idMap'}, {**self.base, 'idMap': {**SOURCE, 'uid': 0}},
+               {**self.base, 'idMap': {**SOURCE, 'subuid': [0, 5]}}, {**self.base, 'backupKind': 'full'}, {**self.base, 'chain': {}},
+               {'formatVersion': 3, 'runtime': {'engine': 'podman', 'rootless': False}, 'idMap': SOURCE}, {'formatVersion': 3},
+               {'formatVersion': 1, 'runtime': ALICE}, {'formatVersion': 2, 'idMap': SOURCE}, [], None]
+        for manifest in bad: self.assertIsNotNone(helper.manifest_runtime_problem(manifest), str(manifest))
+
+def package(manifest, folder):
+    unpacked = pathlib.Path(folder) / 'build'
+    unpacked.mkdir()
+    (unpacked / 'images.tar').write_bytes(b'')
+    inventory = helper.artifact_inventory(unpacked)
+    (unpacked / 'manifest.json').write_text(json.dumps({**manifest, 'artifacts': inventory, 'containers': [], 'architecture': 'x86_64'}))
+    payload = pathlib.Path(folder) / 'payload.tar.gz'
+    with tarfile.open(payload, 'w:gz') as tar:
+        for name in ('images.tar', 'manifest.json'): tar.add(unpacked / name, arcname=name)
+    return payload, hashlib.sha256(payload.read_bytes()).hexdigest()
+
+class UnpackGateTests(unittest.TestCase):
+    def unpack(self, manifest, operation):
+        with tempfile.TemporaryDirectory() as folder:
+            payload, digest = package({'complete': True, **manifest}, folder)
+            root = pathlib.Path(folder) / 'job'; root.mkdir()
+            (root / 'payload.tar.gz').write_bytes(payload.read_bytes())
+            return helper.unpack_verified({'plaintextChecksum': digest, 'operation': operation}, root)[1]
+    def test_only_restore_may_open_a_format_3_package(self):
+        manifest = {'formatVersion': 3, 'runtime': ALICE, 'idMap': SOURCE}
+        self.assertEqual(self.unpack(manifest, 'restore')['runtime'], ALICE)
+        for operation in ('deploy-restore', 'restore-test-prepare', 'restore-test-run', 'verify-restore-recovery', 'move-facts'):
+            with self.assertRaisesRegex(ValueError, 'not available yet'): self.unpack(manifest, operation)
+    def test_odd_runtimes_in_a_package_are_refused_for_restore_too(self):
+        for manifest in ({'formatVersion': 3, 'runtime': {'engine': 'docker', 'rootless': False}}, {'formatVersion': 3, 'runtime': ALICE},
+                         {'formatVersion': 2, 'backupKind': 'full', 'chain': {'position': 0}, 'runtime': ALICE}):
+            with self.assertRaises(ValueError): self.unpack(manifest, 'restore')
+    def test_rootful_docker_packages_are_untouched(self):
+        self.assertEqual(self.unpack({'formatVersion': 1}, 'deploy-restore')['formatVersion'], 1)
+
+class TargetTests(unittest.TestCase):
+    manifest = {'formatVersion': 3, 'runtime': ALICE, 'idMap': SOURCE}
+    def resolver(self, mapping):
+        return lambda spec: mapping[json.dumps(spec, sort_keys=True)]
+    def test_same_user_needs_no_translation(self):
+        target, translation = helper.restore_target(self.manifest, None, resolve=lambda spec: rootless(), host_map=lambda runtime: dict(SOURCE))
+        self.assertIsNone(translation); self.assertEqual(target.user, 'alice')
+    def test_other_user_translates(self):
+        other = helper.Runtime('podman', True, 'bob', 1500, '/home/bob')
+        target, translation = helper.restore_target(self.manifest, {**ALICE, 'user': 'bob', 'uid': 1500}, resolve=lambda spec: other, host_map=lambda runtime: TARGET)
+        self.assertEqual(translation, (SOURCE, TARGET))
+    def test_engine_kind_and_rootlessness_must_match(self):
+        for resolved in (helper.Runtime(), helper.Runtime('docker', True, 'bob', 1500, '/home/bob'), helper.Runtime('podman')):
+            with self.assertRaises(R): helper.restore_target(self.manifest, None, resolve=lambda spec: resolved, host_map=lambda r: TARGET)
+        rootful = {'formatVersion': 3, 'runtime': {'engine': 'podman', 'rootless': False}}
+        with self.assertRaises(R): helper.restore_target(rootful, None, resolve=lambda spec: rootless(), host_map=lambda r: TARGET)
+        target, translation = helper.restore_target(rootful, None, resolve=lambda spec: helper.Runtime('podman'))
+        self.assertIsNone(translation); self.assertFalse(target.rootless)
+
+class TranslateTreeTests(unittest.TestCase):
+    def make(self, folder, owners):
+        paths = []
+        for name, uid in owners.items():
+            p = pathlib.Path(folder) / name
+            if name.endswith('/'): p.mkdir(parents=True, exist_ok=True)
+            else: p.parent.mkdir(parents=True, exist_ok=True); p.write_text('x')
+            paths.append((p, uid))
+        return paths
+    def fake(self, owners):
+        """lstat that reports chosen owners and an lchown that records, so no real chown is needed."""
+        real = os.lstat
+        def lstat(path):
+            info = real(path)
+            uid = owners.get(os.path.basename(str(path)), 1001)
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=uid, st_gid=uid)
+        return lstat
+    def test_translates_every_entry_and_links_are_not_followed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder) / 'data'; (root / 'sub').mkdir(parents=True); (root / 'sub' / 'f').write_text('x'); (root / 'a').write_text('x')
+            os.symlink('/etc', root / 'link')
+            changed = []
+            owners = {'data': 1001, 'sub': 100000, 'f': 100005, 'a': 1001, 'link': 100001}
+            count = helper.translate_tree(str(root), SOURCE, TARGET, lchown=lambda p, u, g: changed.append((os.path.basename(p), u, g)), lstat=self.fake(owners))
+            self.assertEqual(count, 5)
+            self.assertEqual(dict((n, (u, g)) for n, u, g in changed), {'data': (1500, 1500), 'sub': (300000, 300000), 'f': (300005, 300005), 'a': (1500, 1500), 'link': (300001, 300001)})
+    def test_first_unmappable_file_refuses_before_anything_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder) / 'data'; (root / 'sub').mkdir(parents=True); (root / 'sub' / 'secret.txt').write_text('x')
+            changed = []
+            for odd in (0, 1002, 999999):
+                owners = {'data': 1001, 'sub': 100000, 'secret.txt': odd}
+                with self.assertRaisesRegex(R, 'cannot map.*secret.txt'):
+                    helper.translate_tree(str(root), SOURCE, TARGET, lchown=lambda *a: changed.append(a), lstat=self.fake(owners))
+            self.assertEqual(changed, [], 'nothing is re-owned when any file cannot be mapped')
+    def test_no_result_is_host_root_and_a_link_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder) / 'data'; root.mkdir()
+            with self.assertRaises(R): helper.translate_tree(str(root), SOURCE, {**TARGET, 'uid': 0}, lchown=lambda *a: None, lstat=self.fake({'data': 1001}))
+            link = pathlib.Path(folder) / 'l'
+            try: os.symlink(root, link)
+            except OSError: self.skipTest('no symlinks')
+            with self.assertRaisesRegex(R, 'link'): helper.translate_tree(str(link), SOURCE, TARGET, lchown=lambda *a: None)
+
+class DataRootTests(unittest.TestCase):
+    def test_created_root_owned_and_traversable_only(self):
+        made = []
+        table = {}
+        def lstat(path):
+            if path not in table: raise FileNotFoundError(path)
+            return table[path]
+        def mkdir(path, mode): made.append((path, mode)); table[path] = SimpleNamespace(st_mode=stat.S_IFDIR | mode, st_uid=0)
+        base = '/var/lib/x/rootless'
+        path = helper.rootless_data_root(rootless(), '3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b', base, lstat, mkdir, lambda p, m: None, lambda: 0, lambda p: [])
+        self.assertEqual(path, base + '/1001/3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b')
+        self.assertEqual([m for _, m in made], [0o711, 0o711, 0o711])
+    def test_unsafe_existing_folders_refused(self):
+        job = '3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b'
+        for entry in (SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0), SimpleNamespace(st_mode=stat.S_IFDIR | 0o777, st_uid=0), SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=1001), SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0)):
+            with self.assertRaises(R): helper.rootless_data_root(rootless(), job, '/b', lambda p: entry, lambda p, m: None, lambda p, m: None, lambda: 0, lambda p: [])
+        safe = SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=0)
+        with self.assertRaisesRegex(R, 'not empty'): helper.rootless_data_root(rootless(), job, '/b', lambda p: safe, lambda p, m: None, lambda p, m: None, lambda: 0, lambda p: ['x'])
+        with self.assertRaises(R): helper.rootless_data_root(rootless(), 'not-a-job', '/b', lambda p: safe, lambda p, m: None, lambda p, m: None, lambda: 0, lambda p: [])
+        with self.assertRaises(R): helper.rootless_data_root(rootless(), job, '/b', lambda p: safe, lambda p, m: None, lambda p, m: None, lambda: 1000, lambda p: [])
+        with self.assertRaises(R): helper.rootless_data_root(helper.Runtime('podman'), job, '/b', lambda p: safe, lambda p, m: None, lambda p, m: None, lambda: 0, lambda p: [])
+
+class OperationTests(unittest.TestCase):
+    def test_capture_operations_resolve_a_runtime_and_others_are_refused(self):
+        request = lambda op, runtime=ALICE: {'operation': op, 'config': {'runtime': runtime}}
+        with patch.object(helper, 'resolve_runtime', return_value=rootless()):
+            for op in ('plan', 'readiness', 'capture', 'capture-stream'):
+                helper.refuse_foreign_runtime(request(op)); self.assertEqual(helper.request_runtime(request(op)).user, 'alice')
+        for op in ('maintenance', 'self-heal-restart', 'incremental-commit', 'deploy-restore', 'install-boot-recovery', 'move-facts'):
+            with self.assertRaisesRegex(R, 'not available yet'): helper.refuse_foreign_runtime(request(op))
+        self.assertIsNone(helper.request_runtime({'operation': 'capture', 'config': {}}))
+        self.assertIsNone(helper.request_runtime({'operation': 'discover', 'config': {'runtime': ALICE}}))
+        with patch.object(helper, 'resolve_runtime', return_value=helper.Runtime()):
+            self.assertIsNone(helper.request_runtime(request('capture', {'engine': 'docker', 'rootless': False})))
+        with patch.object(helper, 'resolve_runtime', side_effect=R('nope')), self.assertRaises(R): helper.request_runtime(request('capture'))
+    def test_architecture_and_storage_follow_the_engine(self):
+        answers = {'Docker': b'x86_64\n', 'Podman': b'amd64\n'}
+        with patch.object(helper, 'docker', side_effect=lambda *a: answers['Docker']):
+            self.assertEqual(helper.engine_architecture(), 'x86_64')
+        with helper.using_runtime(helper.Runtime('podman')), patch.object(helper, 'docker', side_effect=lambda *a: answers['Podman']):
+            self.assertEqual(helper.engine_architecture(), 'x86_64')
+        with helper.using_runtime(helper.Runtime('podman')), patch.object(helper, 'docker', side_effect=lambda *a: b'/x/storage\n') as docker:
+            self.assertEqual(helper.engine_storage_root(), '/x/storage')
+        self.assertEqual(docker.call_args[0], ('info', '--format', '{{.Store.GraphRoot}}'))
+
+class PreflightTests(unittest.TestCase):
+    """The systemd-managed and native-database refusals, through the real functions with fake inspect data."""
+    def test_systemd_managed_container_refused_only_for_other_engines(self):
+        record = {'Id': 'a' * 64, 'Name': '/web', 'Config': {'Image': 'registry.invalid/web:1', 'Labels': {'PODMAN_SYSTEMD_UNIT': 'web.service'}}, 'HostConfig': {}, 'Mounts': [], 'State': {'Running': True}}
+        cfg = {'containers': ['web'], 'exclusiveSourcesConfirmed': True, 'cleanShutdownConfirmed': True}
+        with patch.object(helper, 'inspect', return_value=[record]), patch.object(helper, 'docker', return_value=b''):
+            with helper.using_runtime(helper.Runtime('podman')), self.assertRaisesRegex(ValueError, 'systemd unit'):
+                helper.preflight(cfg)
+            with helper.using_runtime(helper.Runtime('podman')), self.assertRaises(ValueError):
+                helper.preflight({**cfg, 'kind': 'static'})
+
+if __name__ == '__main__': unittest.main()

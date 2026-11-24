@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker, cleanDiscovered, hasForeignRuntime } from '../src/runtime.js';
+import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker, cleanDiscovered, hasForeignRuntime, manifestRuntime, restoreRuntimeProblem } from '../src/runtime.js';
 // The container engine of an app (docs/podman-rootless.md): saved only when the server reported it, never changed by an edit.
 const alice = { engine: 'podman', rootless: true, user: 'alice', uid: 1001 };
 const reported = [{ engine: 'docker', rootless: false, version: '28.0.1', cgroupDelegated: true }, { ...alice, version: '5.2.1', cgroupDelegated: false }];
@@ -63,6 +63,33 @@ test('discovered containers of other engines are rebuilt, capped and only kept f
   assert.equal(cleanDiscovered(Array.from({ length: 500 }, (_, n) => entry({ name: 'c' + n })), { engines: reported }).length, 200);
   assert.equal(cleanDiscovered([entry()], {}).length, 0, 'no reported engines keeps nothing foreign');
   assert.equal(hasForeignRuntime({ runtime: alice }) && hasForeignRuntime(JSON.stringify({ runtime: alice })) && !hasForeignRuntime({}) && !hasForeignRuntime({ runtime: { engine: 'docker', rootless: false } }) && !hasForeignRuntime('{bad'), true);
+});
+
+const idMap = { uid: 1001, gid: 1001, subuid: [100000, 65536], subgid: [100000, 65536] };
+test('format 3 backups record the engine and ID map, and only when they match the app', () => {
+  assert.deepEqual(manifestRuntime({}, undefined), {});
+  assert.deepEqual(manifestRuntime({ formatVersion: 1 }, { engine: 'docker', rootless: false }), {});
+  assert.deepEqual(manifestRuntime({ formatVersion: 3, runtime: alice, idMap }, alice), { formatVersion: 3, runtime: alice, idMap });
+  assert.deepEqual(manifestRuntime({ formatVersion: 3, runtime: { engine: 'podman', rootless: false } }, { engine: 'podman', rootless: false }), { formatVersion: 3, runtime: { engine: 'podman', rootless: false } });
+  for (const [manifest, saved] of [[{}, alice], [{ formatVersion: 3, runtime: alice }, alice], [{ formatVersion: 3, runtime: alice, idMap: { ...idMap, uid: 0 } }, alice], [{ formatVersion: 3, runtime: alice, idMap: { ...idMap, subuid: [0, 5] } }, alice],
+    [{ formatVersion: 3, runtime: alice, idMap }, { ...alice, uid: 1002 }], [{ formatVersion: 3, runtime: alice, idMap }, undefined], [{ formatVersion: 1, runtime: alice, idMap }, alice], [{ formatVersion: 3, runtime: { engine: 'docker', rootless: false } }, undefined],
+    [{ formatVersion: 3, runtime: { engine: 'podman', rootless: false }, idMap }, { engine: 'podman', rootless: false }], [{ formatVersion: 3, runtime: 'x' }, alice]])
+    assert.ok(manifestRuntime(manifest, saved).error, JSON.stringify(manifest));
+});
+
+test('a restore target must be the same engine kind, rootless-ness and one container, and be reported by the server', () => {
+  const caps = { engines: reported };
+  assert.equal(restoreRuntimeProblem(alice, undefined, caps), '');
+  assert.equal(restoreRuntimeProblem(alice, alice, caps), '');
+  assert.equal(restoreRuntimeProblem(undefined, undefined, caps), '');
+  assert.match(restoreRuntimeProblem(undefined, alice, caps), /rootful Docker/);
+  assert.match(restoreRuntimeProblem(alice, { engine: 'docker', rootless: true, user: 'alice', uid: 1001 }, caps), /same container engine/);
+  assert.match(restoreRuntimeProblem(alice, { engine: 'podman', rootless: false }, caps), /rootless/);
+  assert.match(restoreRuntimeProblem(alice, { ...alice, uid: 1002 }, caps), /does not have that container engine/);
+  assert.match(restoreRuntimeProblem(alice, alice, {}), /Test connection/);
+  assert.match(restoreRuntimeProblem(alice, alice, caps, { containers: 2 }), /several containers/);
+  assert.match(restoreRuntimeProblem(alice, alice, caps, { chainLength: 2 }), /not incremental/);
+  assert.match(restoreRuntimeProblem(alice, 'junk', caps), /not valid/);
 });
 
 const directory = await mkdtemp(join(tmpdir(), 'docknest-runtime-'));

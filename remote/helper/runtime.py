@@ -3,6 +3,7 @@
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,pathlib,re,posixpath,stat
+from .common import docker, run
 # </build:header>
 # Root SSH stays the trust model. Root reaches every engine; no shell is ever used and every value that reaches an
 # argv is validated first. The default runtime is rootful Docker and builds exactly the argv `docker` always had.
@@ -89,7 +90,15 @@ class Runtime:
         if not self.rootless:return ['podman',*args]
         # env -i: nothing of root's environment reaches the user's podman; PATH is fixed.
         return ['runuser','-u',self.user,'--','env','-i','PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home,'podman',*args]
-    def cli(self,*args,**options):return run(self.argv(*args),**options)
+    def check_socket(self,lstat=os.lstat):
+        """A rootless Docker socket is checked again right before each use: it must still be a socket of this user."""
+        path='/run/user/%d/docker.sock'%self.uid
+        try:info=lstat(path)
+        except OSError:raise RuntimeRefused('The rootless Docker engine is not running for this user.')
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
+    def cli(self,*args,**options):
+        if self.engine=='docker' and self.rootless:self.check_socket()
+        return run(self.argv(*args),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
     def compose(self,*args):
         """Compose through the same engine: `docker compose` or `podman compose` (which runs the installed provider)."""
@@ -172,3 +181,116 @@ class using_runtime:
         global RUNTIME
         RUNTIME=self.previous
         return False
+
+# ---- Backup and restore through another engine (docs/podman-rootless.md, decisions 4, 5, 8) ----
+# Facts of a rootless user's files are untrusted (that user controls them), so every source is checked on its way:
+# absolute, normalised, no link in any component, and inside the user's home.
+RUNTIME_ARCHITECTURES={'amd64':'x86_64','x86_64':'x86_64','arm64':'aarch64','aarch64':'aarch64'}
+RUNTIME_OPERATIONS=('plan','readiness','capture','capture-stream')
+def runtime_is_default(runtime):return runtime.engine=='docker' and not runtime.rootless
+def check_runtime_source(runtime,path,lstat=os.lstat):
+    """The path unchanged when it can be read as root for this runtime, else a refusal. Rootful Docker is never checked
+    here (its existing checks apply). No link in any component, so a path cannot be swapped to point elsewhere."""
+    if runtime_is_default(runtime):return path
+    if not isinstance(path,str) or not path.startswith('/') or '\0' in path or '\n' in path or posixpath.normpath(path)!=path:raise RuntimeRefused('A source folder of this app has a path DockNest cannot use.')
+    if runtime.rootless and not (runtime.home and (path==runtime.home or path.startswith(runtime.home.rstrip('/')+'/'))):raise RuntimeRefused('A rootless app can only be copied from its own home folder; a source is outside it.')
+    current=''
+    for part in path.strip('/').split('/'):
+        current+='/'+part
+        try:info=lstat(current)
+        except OSError:raise RuntimeRefused('A source folder of this app cannot be read.')
+        if stat.S_ISLNK(info.st_mode):raise RuntimeRefused('A source folder of this app goes through a link, which needs a reviewed capture adapter.')
+    return path
+def host_id_map(runtime,subuid_text=None,subgid_text=None,group=None):
+    """The ID map of a rootless runtime on this server (docs ADR decision 5). Refused when anything is missing."""
+    if not runtime.rootless:raise RuntimeRefused('A rootful engine has no ID map.')
+    if subuid_text is None or subgid_text is None:
+        try:subuid_text,subgid_text=pathlib.Path('/etc/subuid').read_text(),pathlib.Path('/etc/subgid').read_text()
+        except OSError:raise RuntimeRefused('This server has no subordinate ID files, so DockNest cannot work with rootless containers.')
+    if group is None:
+        import pwd
+        try:group=pwd.getpwnam(runtime.user).pw_gid
+        except KeyError:raise RuntimeRefused('The rootless user does not match this server.')
+    return id_map(runtime.uid,parse_subid(subuid_text,runtime.user,runtime.uid),parse_subid(subgid_text,runtime.user,runtime.uid),group)
+def manifest_runtime_problem(manifest):
+    """None for a manifest this release may handle, else the plain refusal. Format 3 carries `runtime` (and `idMap` for
+    rootless); it is the only format allowed to name anything but rootful Docker, and an incremental chain never is."""
+    if not isinstance(manifest,dict):return 'Unsupported or incomplete backup'
+    version,runtime=manifest.get('formatVersion'),manifest.get('runtime')
+    if version!=3:return 'Unsupported or incomplete backup' if runtime is not None or 'idMap' in manifest else None
+    if manifest.get('backupKind') is not None or manifest.get('chain') is not None:return 'Backups of Podman and rootless apps are not incremental yet.'
+    if not isinstance(runtime,dict) or set(runtime)-{'engine','rootless','user','uid'}:return 'Unsupported or incomplete backup'
+    try:
+        engine=Runtime(runtime.get('engine'),runtime.get('rootless'),runtime.get('user'),runtime.get('uid'),'/home/x' if runtime.get('rootless') else None)
+    except RuntimeRefused:return 'Unsupported or incomplete backup'
+    if runtime_is_default(engine):return 'Unsupported or incomplete backup'
+    if engine.rootless:
+        try:id_map(manifest['idMap']['uid'],manifest['idMap']['subuid'],manifest['idMap']['subgid'],manifest['idMap']['gid'])
+        except (RuntimeRefused,KeyError,TypeError):return 'This backup has no usable ID map.'
+    elif 'idMap' in manifest:return 'Unsupported or incomplete backup'
+    return None
+def restore_target(manifest,requested,resolve=None,host_map=None):
+    """(target Runtime, translation or None) for restoring a format 3 manifest. The target must be the same engine kind
+    and the same rootless-ness; a rootless target with another map translates every owner (decision 5).
+    Docker to Podman and rootful to rootless (or back) are refused in this release."""
+    resolve=resolve or resolve_runtime
+    spec=requested if requested is not None else manifest.get('runtime')
+    target=resolve(spec)
+    source=manifest.get('runtime') or {}
+    if target.engine!=source.get('engine'):raise RuntimeRefused('A backup restores only into the same container engine in this release.')
+    if target.rootless!=bool(source.get('rootless')):raise RuntimeRefused('A rootless backup restores only into a rootless engine, and a rootful one into a rootful engine, in this release.')
+    if not target.rootless:return target,None
+    target_map=(host_map or host_id_map)(target)
+    source_map=manifest['idMap']
+    same=all(source_map.get(key)==target_map.get(key) for key in ('uid','gid','subuid','subgid'))
+    return target,(None if same else (source_map,target_map))
+def translate_tree(directory,source,target,lchown=None,lstat=os.lstat,limit=2000000):
+    """Re-own every entry under `directory` (which must be a real folder) from the source map to the target map.
+    All owners are translated first, and the first file with an owner that cannot be mapped refuses the whole restore
+    before anything is changed. Links are re-owned, never followed."""
+    lchown=lchown or os.lchown
+    plan=[];first=None
+    def visit(path):
+        info=lstat(path)
+        try:plan.append((path,translate_id(info.st_uid,source,target,'uid'),translate_id(info.st_gid,source,target,'gid')))
+        except RuntimeRefused:
+            nonlocal first
+            if first is None:first=path
+    if stat.S_ISLNK(lstat(directory).st_mode):raise RuntimeRefused('A restore folder cannot be a link.')
+    visit(directory)
+    for current,dirs,files in os.walk(directory,followlinks=False):
+        for name in dirs+files:
+            visit(os.path.join(current,name))
+            if len(plan)>limit:raise RuntimeRefused('A backup holds too many files to restore with ID translation.')
+    if first is not None:
+        relative=os.path.relpath(first,directory)
+        raise RuntimeRefused(UNMAPPABLE+' First file: '+(relative if len(relative)<=200 else relative[:200]))
+    for path,uid,gid in plan:lchown(path,uid,gid)
+    return len(plan)
+def engine_architecture():
+    runtime=current_runtime()
+    if runtime.engine=='docker':return docker('info','--format','{{.Architecture}}').decode().strip()
+    name=docker('info','--format','{{.Host.Arch}}').decode().strip()
+    return RUNTIME_ARCHITECTURES.get(name,name)
+def engine_storage_root():
+    runtime=current_runtime()
+    if runtime.engine=='docker':return docker('info','--format','{{.DockerRootDir}}').decode().strip()
+    return docker('info','--format','{{.Store.GraphRoot}}').decode().strip()
+
+RUNTIME_DATA_BASE='/var/lib/docker-backup-manager/rootless-restore'
+def rootless_data_root(runtime,job,base=RUNTIME_DATA_BASE,lstat=os.lstat,mkdir=os.mkdir,chmod=os.chmod,geteuid=None,listdir=os.listdir):
+    """The folder where a rootless restore keeps its data: root-owned and only traversable (0711) all the way down, so the
+    rootless user can reach the data of its copy but never create, swap or link anything in the folders root writes into.
+    An existing folder that is a link, not root-owned or writable by others is refused."""
+    if not runtime.rootless or (geteuid or os.geteuid)()!=0:raise RuntimeRefused('A rootless restore needs root and a rootless engine.')
+    if not isinstance(job,str) or not re.fullmatch(r'[0-9a-f-]{36}',job):raise RuntimeRefused('The restore job is not valid.')
+    path=base
+    for part in ['',str(runtime.uid),job]:
+        path=posixpath.join(path,part) if part else path
+        try:info=lstat(path)
+        except FileNotFoundError:
+            mkdir(path,0o711);chmod(path,0o711);info=lstat(path)
+        except OSError:raise RuntimeRefused('The restore folder cannot be checked.')
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to use.')
+        if part==job and listdir(path):raise RuntimeRefused('The restore folder is not empty.')
+    return path

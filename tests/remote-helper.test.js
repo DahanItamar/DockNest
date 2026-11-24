@@ -129,3 +129,8 @@ test('engine discovery: subuid users, real storage folders, owned sockets, tagge
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for engine verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Podman and rootless backup and restore: format 3 gate, home-only sources, ID translation, root-owned restore folder, and refusals',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_backup.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for rootless backup verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

@@ -22,7 +22,7 @@ SITE_KEY=re.compile(r'[A-Za-z0-9-]{1,64}')
 CHAIN_ID=re.compile(r'[A-Za-z0-9-]{1,64}')
 HEX64=re.compile(r'[0-9a-f]{64}')
 IMAGE_ID=re.compile(r'sha256:[0-9a-f]{64}')
-FORMAT_VERSIONS=(1,2)
+FORMAT_VERSIONS=(1,2,3)  # 3: Podman and rootless apps (runtime, idMap); never incremental
 MAX_CHAIN=31
 FALLBACK_TEXT={'snapshot-missing':'the snapshot file of a mount is missing on this server','snapshot-mismatch':'the snapshot file of a mount does not match the previous backup','mount-set-changed':'the set of mounts changed since the previous backup'}
 def snapshot_key(source):return hashlib.sha256(str(source).encode()).hexdigest()

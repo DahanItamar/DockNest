@@ -103,7 +103,7 @@ def discover_keys(req,containers):
         except Exception:continue
     return {'keyScans':scans}
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED,RUNTIME
     # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
     if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:
         try:CLEANUP_SHARED=cleanup_shared()
@@ -132,6 +132,7 @@ def main(req):
         SNAPSHOT_FILTER='label=docknest.launch='+req['launchId'];watch_stdin()
     op=req['operation']
     refuse_foreign_runtime(req)
+    RUNTIME=request_runtime(req)  # None: rootful Docker, exactly as before
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})

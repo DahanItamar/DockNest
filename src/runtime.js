@@ -99,3 +99,30 @@ export function cleanDiscovered(containers, capabilities) {
   }
   return kept;
 }
+
+// Format 3 backups (Podman and rootless apps). The helper wrote `runtime` (and `idMap` for rootless) from the app's saved
+// runtime; the metadata manifest keeps them so a restore can pick a matching target. Fails closed on any mismatch.
+const idRange = value => Array.isArray(value) && value.length === 2 && value.every(Number.isInteger) && value[0] >= 1 && value[1] >= 1 && value[0] + value[1] <= 2 ** 32 - 1;
+export function manifestRuntime(helperManifest, savedRuntime) {
+  const runtime = helperManifest?.runtime;
+  if (runtime === undefined) return isRootfulDocker(savedRuntime) ? {} : { error: 'The backup did not record the container engine of this app.' };
+  const parsed = runtimeSchema.safeParse(runtime);
+  if (!parsed.success || isRootfulDocker(parsed.data) || helperManifest.formatVersion !== 3 || !sameEngine(parsed.data, savedRuntime)) return { error: 'The backup recorded a container engine that does not match the app.' };
+  if (!parsed.data.rootless) return helperManifest.idMap === undefined ? { formatVersion: 3, runtime: parsed.data } : { error: 'The backup recorded an ID map for a rootful engine.' };
+  const map = helperManifest.idMap;
+  if (!map || !Number.isInteger(map.uid) || !Number.isInteger(map.gid) || map.uid < MIN_UID || map.gid < MIN_UID || !idRange(map.subuid) || !idRange(map.subgid)) return { error: 'The backup has no usable ID map.' };
+  return { formatVersion: 3, runtime: parsed.data, idMap: { uid: map.uid, gid: map.gid, subuid: map.subuid, subgid: map.subgid } };
+}
+
+// Why a backup cannot restore into a target engine, or ''. Same engine kind, same rootless-ness, one container, no chain
+// (docs/podman-rootless.md). Docker to Podman and rootful to rootless need a later release.
+export function restoreRuntimeProblem(source, target, capabilities, { containers = 1, chainLength = 1 } = {}) {
+  if (!source) return isRootfulDocker(target) ? '' : 'This backup was made from rootful Docker. Restoring it into another engine is not available yet.';
+  const parsed = runtimeSchema.safeParse(target ?? source);
+  if (!parsed.success) return 'The target container engine is not valid.';
+  if (parsed.data.engine !== source.engine) return 'A backup restores only into the same container engine in this release.';
+  if (parsed.data.rootless !== source.rootless) return 'A rootless backup restores only into a rootless engine, and a rootful one into a rootful engine, in this release.';
+  if (containers !== 1) return 'Restoring an app with several containers into Podman or a rootless engine is not available yet.';
+  if (chainLength !== 1) return 'Backups of Podman and rootless apps are not incremental yet.';
+  return runtimeRefusal(parsed.data, capabilities);
+}

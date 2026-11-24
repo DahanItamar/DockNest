@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .runtime import (
-    RUNTIME_USER, MIN_RUNTIME_UID, Runtime, RuntimeRefused, parse_subid, using_runtime)
+    RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
 from .paths import (
     SITE_PATH, lexical, within)
 from .routing import (
@@ -510,9 +510,17 @@ def foreign_container(runtime,c):
 # self-heal-*, describe-containers and list-project-files take names) are blocked in Node (src/runtime.js hasForeignRuntime),
 # but the helper cannot see their engine yet. The restore PR must refuse a manifest whose runtime is not rootful Docker.
 RUNTIME_FREE_OPERATIONS=('discover','test','domain-routes','install-status')
+def request_runtime(request):
+    """The Runtime a request's app uses when this release can capture it (plan, readiness, capture), else None."""
+    config=request.get('config') if isinstance(request,dict) else None
+    spec=config.get('runtime') if isinstance(config,dict) else None
+    if spec is None or request.get('operation') not in RUNTIME_OPERATIONS:return None
+    runtime=resolve_runtime(spec)
+    return None if runtime_is_default(runtime) else runtime
 def refuse_foreign_runtime(request):
     config=request.get('config') if isinstance(request,dict) else None
     runtime=config.get('runtime') if isinstance(config,dict) else None
     if runtime is None or request.get('operation') in RUNTIME_FREE_OPERATIONS:return
+    if request.get('operation') in RUNTIME_OPERATIONS:return  # resolved and checked by request_runtime
     if isinstance(runtime,dict) and runtime.get('engine')=='docker' and runtime.get('rootless') is False and not runtime.get('user') and runtime.get('uid') is None:return
     raise RuntimeRefused('Backups and restores of Podman and rootless apps are not available yet in this release.')
