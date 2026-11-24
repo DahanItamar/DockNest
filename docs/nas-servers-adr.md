@@ -82,7 +82,7 @@ TrueNAS apps) are not recognized, so owners get a wall of "plain container" apps
      "SSH service", then a root key via `sudo -i`. After a DSM update, a failed login shows "Synology may have reset SSH
      after an update" instead of a generic error.
    - TrueNAS: root login is off by default since 24.04 (the `truenas_admin` user). The wizard explains enabling it for
-     key-only login in System > SSH. DockNest still needs root; sudo mode is not added in 3.0.0 (open question).
+     key-only login in System > SSH. Verified on 25.10: root SSH is disabled and the admin user (`truenas_admin`) has passwordless sudo, so the sudo mode below is required.
 6. **Readiness checks per NAS**: helper runtime ready (Python version or runtime image digest), staging folder
    persistent and writable, free space there, Docker version, key persistence (Unraid), NAS version supported. Each
    failed check names one fix.
@@ -143,3 +143,21 @@ or in the runtime container except through one fact it reports.
 2. NAS detection, staging base, readiness checks, wizard text (backend + docs).
 3. Discovery for Unraid templates, Synology projects, TrueNAS apps; Unraid template capture and restore.
 4. UI: NAS server card, readiness list, discover grouping (after board approval).
+
+## Update: SSH identity (supersedes the root-key-only decision)
+
+Root-only would lock out most NAS users (TrueNAS 25.10 disables root SSH; Synology is the same pattern). 3.0.0 supports
+either identity, **only on servers detected as a NAS**:
+
+- **Root key** (Unraid default).
+- **Non-root user with passwordless sudo.** The helper and `docker` run as `sudo -n <fixed command>`. Fail closed: if
+  `sudo -n` asks for a password, the readiness check fails with one fix ("give this user passwordless sudo") and no
+  command runs.
+
+Security rules for sudo mode (deep security review required in the helper-runtime PR):
+- DockNest sends one fixed argv form (`sudo -n -- <python3|docker> ...`), never a shell string; every value is passed as
+  a separate argument or on stdin, with no interpolation into a shell.
+- No `sudo -S`, no password storage, no `sudo -i`, no changes to sudoers files by DockNest.
+- Every sudo-run operation is audited (operation name, server id, result), never arguments that can hold secrets.
+- Non-NAS servers keep today's behaviour (root or the existing rules); this mode is not offered there.
+- Readiness check shows which identity is in use and whether sudo is passwordless.
