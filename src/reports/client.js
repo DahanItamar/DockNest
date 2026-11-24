@@ -12,7 +12,7 @@ import { recoveryTime, formatRecoveryTime } from '../../shared/recovery-time.js'
 import { longDate } from './period.js';
 
 export const INCLUDE_DEFAULTS = Object.freeze({ serverNames: false, findingTitles: false });
-export const ACCENTS = Object.freeze(['default', 'blue', 'green', 'amber', 'red', 'violet']);
+export const ACCENTS = Object.freeze(['default', 'blue', 'green', 'amber', 'red', 'violet', 'teal']);
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 // A name the owner typed, shown as typed minus control characters and bidi overrides (a name can never reorder its neighbours).
 export const plain = (value, max = 80) => String(value ?? '').replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);

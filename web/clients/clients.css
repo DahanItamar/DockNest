@@ -1,0 +1,50 @@
+/* Clients (3.0.0). Product tokens only; the layout reuses the storage card and the Connections dialog. */
+.cl-page{display:grid;gap:var(--edge)}
+.cl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--edge);align-items:start}
+.cl-name{overflow-wrap:anywhere}
+.cl-card .def-row dd{overflow-wrap:anywhere;text-align:right}
+.cl-strong{font-weight:var(--dn-weight-semibold)}
+
+/* Editor */
+dialog.cl-dialog{width:min(640px,calc(100vw - 2 * var(--edge)))}
+.cl-group{border:0;margin:0;padding:0;display:grid;gap:var(--spacing);min-width:0}
+.cl-group>legend{padding:0;margin-bottom:var(--spacing);font-weight:var(--dn-weight-medium)}
+.cl-search{margin:0}
+.cl-apps{list-style:none;margin:0;padding:var(--spacing);display:grid;gap:var(--dn-space-1);max-height:200px;overflow:auto;border:1px solid var(--border-subtle);border-radius:var(--dn-radius-md)}
+.cl-apps .check{margin:0;min-height:var(--control-height);display:flex;align-items:center;gap:var(--spacing)}
+.cl-privacy .check{margin:0}
+.cl-privacy p{margin:var(--spacing) 0 0}
+.cl-swatches{display:flex;flex-wrap:wrap;gap:var(--spacing)}
+.cl-swatch{position:relative;display:inline-flex;align-items:center;gap:var(--spacing);min-height:var(--control-height-sm,32px);padding:0 var(--edge) 0 var(--spacing);border:1px solid var(--border-subtle);border-radius:var(--dn-radius-full);cursor:pointer}
+.cl-swatch input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.cl-swatch.is-on{border-color:var(--link);background:var(--surface-muted)}
+.cl-swatch:has(input:focus-visible){outline:var(--dn-focus-width) solid var(--dn-focus-color);outline-offset:var(--dn-focus-offset)}
+.cl-dot{width:14px;height:14px;border-radius:var(--dn-radius-full);flex:none}
+.cl-saved{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing)}
+.cl-saved span{display:flex;align-items:center;gap:var(--spacing);overflow-wrap:anywhere}
+.cl-bad{color:var(--error)}
+.cl-keep{justify-self:start}
+.cl-confirm{display:flex;gap:var(--spacing);align-items:center;flex-wrap:wrap}
+.cl-delete{margin-right:var(--spacing);color:var(--error)}
+
+/* Preview */
+.cl-back{display:inline-flex;align-items:center;gap:var(--dn-space-1)}
+.cl-report{padding:0}
+.cl-report-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--edge);padding:var(--edge) var(--edge) 0;flex-wrap:wrap}
+.cl-report-head h2{margin:0}.cl-report-head p{margin:var(--dn-space-1) 0 0}
+.cl-period{min-width:220px}
+.cl-report-body{padding:var(--edge);display:grid;gap:var(--spacing);min-width:0}
+.cl-summary{margin:0;max-width:60ch}
+.cl-notes{padding:0 var(--edge);display:grid;gap:var(--spacing)}
+.cl-notes:empty{display:none}
+.cl-foot{display:flex;justify-content:flex-end;align-items:center;gap:var(--edge);padding:var(--edge);flex-wrap:wrap}
+
+@media(max-width:600px){
+ .cl-period{min-width:0;width:100%}
+ .cl-foot{justify-content:stretch}.cl-foot .primary{flex:1 1 100%;order:-1}
+ .cl-card .def-row dd{text-align:right}
+}
+.cl-card .card-footer.storage-card-actions{justify-content:flex-end;gap:var(--edge)}
+.cl-card .card-footer.storage-card-actions>button{flex:0 0 auto}
+/* The storage card stretches an odd last card; clients keep one column width. */
+.cl-grid>.cl-card:last-child:nth-child(odd){grid-column:auto}
