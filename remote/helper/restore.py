@@ -8,11 +8,11 @@ from .common import (
 from .paths import (
     excluded_path, mount_table)
 from .databases import (
-    cached_sqlite_file_proof, data_checks, file_sha256, restart_services)
+    cached_sqlite_file_proof, data_checks, file_sha256, restart_services, sqlite_file_source)
 from .backup import (
     archive_renames_safely, tree_digest, verify_artifacts)
 from .runtime import (
-    current_runtime, engine_architecture, manifest_runtime_problem, restore_target, rootless_data_root, translate_tree)
+    chmod_folder, current_runtime, engine_architecture, manifest_runtime_problem, refuse_links, restore_target, rootless_data_root, translate_tree)
 from .incremental import (
     CHAIN_ID, FORMAT_VERSIONS, HEX64, MAX_CHAIN, manifest_snapshots)
 from .net import (
@@ -571,6 +571,11 @@ def chain_extract(archives,destination):
         # from a relative template, which -C (openat-based) does not move.
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
     strip_privileges(destination)
+def refuse_restored_links(service,restored):
+    """Root reads the restored SQLite files of a copy that belongs to a rootless user: no link on any of their paths."""
+    for filename in service.get('sqliteFiles') or []:
+        source,_=sqlite_file_source(filename,restored)
+        for suffix in ('','-journal','-wal','-shm'):refuse_links(str(source)+suffix)
 def restore(req):
     global RUNTIME
     root=owned_job_root(req)
@@ -614,8 +619,9 @@ def restore(req):
             if data_root!=root and source not in owned:
                 # Root-owned, traversable folder; the data inside gets the target user's IDs (ADR decision 5), refused as a whole
                 # when any file's owner cannot be mapped, before anything is re-owned.
-                os.chmod(source.parent,0o711)
-                if translation:translate_tree(str(source),translation[0],translation[1])
+                chmod_folder(source.parent,0o711)
+                # Even with the same ID map every owner is checked: nothing in a rootless copy may belong to host root.
+                translate_tree(str(source),*(translation or (manifest['idMap'],manifest['idMap'])))
                 owned.add(source)
             mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
             args+=['--mount',mount]
@@ -628,6 +634,7 @@ def restore(req):
         if not service.get('sqliteFiles'):continue
         original=next(c for c in containers if c['Id']==service['container'])
         restored={**original,'Mounts':[{**mount,'Source':str(sources[(mount['Type'],mount['Source'])])} for mount in original['Mounts']]}
+        if foreign:refuse_restored_links(service,restored)
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
         sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
