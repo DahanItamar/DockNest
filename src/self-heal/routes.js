@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { db, audit, transaction } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { remote } from '../ssh.js';
+import { hasForeignRuntime } from '../runtime.js';
 import { LIMITS, MIN_GAP_MS, CONTAINER, NOT_WATCHING, WATCH_PER_SERVER, reasonText } from './limits.js';
 
 // SSH from the API for "find containers with a health check"; tests replace it.
@@ -108,6 +109,7 @@ selfHealRoutes.put('/sites/:id/self-heal', requireAdmin, handle(async (req, res)
   let watched = watchedOf(current);
   if (data.enabled) {
     if (site.config.kind === 'static') throw NO_HEALTHCHECK();
+    if (hasForeignRuntime(site.config)) throw httpError(409, 'ENGINE_UNSUPPORTED', 'Self-heal is available for rootful Docker only in this release.');
     // Turning it on (or on again) finds the watched containers on the server; a change of limits keeps them.
     if (!current?.enabled || !watched.length) {
       const names = (site.config.containers ?? []).filter(name => typeof name === 'string' && CONTAINER.test(name));

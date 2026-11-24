@@ -101,15 +101,30 @@ class ContainerTests(unittest.TestCase):
         calls = []
         def fake_run(argv, **kw):
             calls.append(argv)
-            if argv[-2:] == ['ps', '-aq']: return b'c1\n'
-            if argv[-2:] == ['inspect', 'c1']: return helper.json.dumps([self.RECORD]).encode()
+            self.assertLessEqual(kw.get('timeout', 3600), 60)
+            if argv[-2:] == ['ps', '-aq']: return b'aabbccddeeff\n'
+            if argv[-2:] == ['inspect', 'aabbccddeeff']: return helper.json.dumps([self.RECORD]).encode()
             raise AssertionError(argv)
         with patch.object(helper, 'run', fake_run):
             found = helper.other_engine_containers(engines, {'alice': '/home/alice'})
         self.assertEqual([r.describe() for r, c in found], [{'engine': 'podman', 'rootless': False}, {'engine': 'podman', 'rootless': True, 'user': 'alice', 'uid': 1001}])
         self.assertEqual(calls[0], ['podman', 'ps', '-aq'])
-        self.assertEqual(calls[2][:6], ['runuser', '-u', 'alice', '--', 'env', 'XDG_RUNTIME_DIR=/run/user/1001'])
+        self.assertEqual(calls[2][:7], ['runuser', '-u', 'alice', '--', 'env', '-i', 'PATH=' + helper.RUNTIME_PATH])
         self.assertIsNone(helper.RUNTIME)  # scoped: nothing leaks out
+    def test_oversized_slow_or_odd_answers_add_nothing(self):
+        engines = [{'engine': 'podman', 'rootless': False}]
+        for listing in (b'x' * (helper.ENGINE_OUTPUT_LIMIT + 1), b'not-an-id\n', b'../../etc\n', b'', b'aabbccddeeff --all\n'):
+            with patch.object(helper, 'run', return_value=listing): self.assertEqual(helper.other_engine_containers(engines, {}), [], listing[:20])
+        def run(argv, **kw):
+            return b'aabbccddeeff\n' if argv[-1] == '-aq' else b'{"not": "a list"}'
+        with patch.object(helper, 'run', run): self.assertEqual(helper.other_engine_containers(engines, {}), [])
+        with patch.object(helper, 'run', side_effect=subprocess.TimeoutExpired('x', 30)): self.assertEqual(helper.other_engine_containers(engines, {}), [])
+    def test_counts_are_capped(self):
+        ids = ' '.join('%012x' % n for n in range(500)).encode()
+        records = [{**self.RECORD, 'Id': '%012x' % n} for n in range(500)]
+        def run(argv, **kw): return ids if argv[-1] == '-aq' else helper.json.dumps(records).encode()
+        with patch.object(helper, 'run', run):
+            self.assertEqual(len(helper.other_engine_containers([{'engine': 'podman', 'rootless': False}], {})), helper.ENGINE_CONTAINER_LIMIT)
     def test_failing_engine_adds_nothing(self):
         with patch.object(helper, 'run', side_effect=subprocess.CalledProcessError(1, 'x')):
             self.assertEqual(helper.other_engine_containers([{'engine': 'podman', 'rootless': False}], {}), [])

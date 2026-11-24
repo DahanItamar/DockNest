@@ -42,25 +42,32 @@ const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);
 // An app with work that may be changing it (a backup, restore, move, Safe Edit or restore test) is not scanned now, so
 // its own work never reads as a change made outside DockNest.
 export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
-const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
-import { cleanEngines } from './runtime.js';
+const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!hasForeignRuntime(site.config)&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
+import { cleanEngines, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL } from './runtime.js';
+// Container names of this server's active apps that run in Podman or a rootless engine.
+const foreignNames=serverId=>new Set(db.prepare('SELECT config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>hasForeignRuntime(site.config)).flatMap(site=>site.config?.containers??[]));
+const refuseForeignNames=(server,names)=>{const foreign=foreignNames(server.id);if((names??[]).some(name=>foreign.has(name)))throw Object.assign(new Error(FOREIGN_REFUSAL),{status:409});};
 export const discover=async(server,{record=false,scanKeys=false}={})=>{
   const apps=scanKeys?keyApps(server.id):[];
   // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
   let answer=await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})}),scans=null;
   if(answer&&typeof answer==='object'&&!Array.isArray(answer)&&'keyScans' in answer)({keyScans:scans,...answer}=answer);
-  const result=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
+  const checked=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
+  let capabilities={};try{capabilities=JSON.parse(server.capabilities||'{}')||{};}catch{capabilities={};}
+  const result=checked&&Array.isArray(checked.containers)?{...checked,containers:cleanDiscovered(checked.containers,capabilities)}:checked;
   if(record){
-    try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
-    try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}
+    // Hardening grades and links read rootful Docker facts only; containers of other engines never reach them.
+    const rootful=result&&Array.isArray(result.containers)?{...result,containers:result.containers.filter(container=>!container?.runtime||(container.runtime.engine==='docker'&&container.runtime.rootless===false))}:result;
+    try{recordDiscoveredHardening(server.id,rootful);}catch{/* A grade is never worth failing a scan. */}
+    try{recordDiscoveredLinks(server.id,rootful);}catch{/* Neither are links. */}
   }
   for(const app of apps)if(scans?.[app.id])recordKeyScan(app.id,scans[app.id]);
   return result;
 };
-export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+export const browseProjectFiles=(server,containers,directory)=>{refuseForeignNames(server,containers);return remote(server,{operation:'list-project-files',containers,directory});};
 // Read-only: how DockNest would recreate plain containers (run spec, unsupported settings, Compose preview). The helper
 // never returns environment values here, only their names.
-export const describeContainers=(server,containers)=>transport.remote(server,{operation:'describe-containers',containers});
+export const describeContainers=(server,containers)=>{refuseForeignNames(server,containers);return transport.remote(server,{operation:'describe-containers',containers});};
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}

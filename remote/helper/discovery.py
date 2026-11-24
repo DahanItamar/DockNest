@@ -475,18 +475,27 @@ def engine_runtime(engine,homes):
         home=homes.get(engine.get('user')) if engine.get('rootless') else None
         return Runtime(engine['engine'],engine['rootless'],engine.get('user'),engine.get('uid'),home)
     except (RuntimeRefused,KeyError,TypeError,AttributeError):return None
+ENGINE_CONTAINER_LIMIT=200
+ENGINE_OUTPUT_LIMIT=8*1024*1024
 def other_engine_containers(engines,homes):
-    """(runtime, inspect record) for every container of every non-default engine. A broken engine adds nothing."""
+    """(runtime, inspect record) for every container of every non-default engine. A broken, slow or oversized engine
+    adds nothing: a rootless user controls its engine's answers, so time, size and count are all capped."""
     tagged=[]
-    for engine in engines:
+    for engine in engines[:ENGINE_LIST_LIMIT]:
         runtime=engine_runtime(engine,homes)
         if runtime is None or (runtime.engine=='docker' and not runtime.rootless):continue
         try:
-            with using_runtime(runtime):
-                records,_=inspect_each(docker('ps','-aq').decode().split())
+            listing=runtime.cli('ps','-aq',timeout=30)
+            if len(listing)>ENGINE_OUTPUT_LIMIT:continue
+            ids=listing.decode('utf-8','replace').split()[:ENGINE_CONTAINER_LIMIT]
+            if not ids or not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):continue
+            answer=runtime.cli('inspect',*ids,timeout=60)
+            if len(answer)>ENGINE_OUTPUT_LIMIT:continue
+            records=json.loads(answer)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):continue
-        tagged+=[(runtime,c) for c in records if isinstance(c,dict) and isinstance(c.get('Id'),str)]
-    return tagged
+        if not isinstance(records,list):continue
+        tagged+=[(runtime,c) for c in records[:ENGINE_CONTAINER_LIMIT] if isinstance(c,dict) and isinstance(c.get('Id'),str)]
+    return tagged[:ENGINE_CONTAINER_LIMIT]
 def foreign_container(runtime,c):
     """The discover entry of a container from a Podman or rootless engine: only fields the engine really answered.
     No hardening facts, links, web hints or configuration files yet: those read the rootful Docker engine only."""
@@ -497,6 +506,9 @@ def foreign_container(runtime,c):
         'webHints':[],'backupConfiguration':{'composeFiles':[],'configFiles':[],'directory':''}}
 # Until backup and restore understand other engines, an app that names one is refused by every operation that would
 # otherwise run its containers through rootful Docker.
+# KNOWN GAP for the backup/restore PR: operations that carry no config (restore and prepare-restore take a manifest;
+# self-heal-*, describe-containers and list-project-files take names) are blocked in Node (src/runtime.js hasForeignRuntime),
+# but the helper cannot see their engine yet. The restore PR must refuse a manifest whose runtime is not rootful Docker.
 RUNTIME_FREE_OPERATIONS=('discover','test','domain-routes','install-status')
 def refuse_foreign_runtime(request):
     config=request.get('config') if isinstance(request,dict) else None

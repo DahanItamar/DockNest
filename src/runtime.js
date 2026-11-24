@@ -58,3 +58,44 @@ export function appRuntime(containers) {
   if (runtimes.length > 1) return { error: 'These containers run in two engines. Make two apps.' };
   return { runtime: runtimes[0] ?? { engine: 'docker', rootless: false } };
 }
+
+// Until backup, restore and the other operations understand other engines (docs/podman-rootless.md), every Node path that
+// would act on an app's containers through rootful Docker refuses an app whose saved runtime is anything else.
+export const FOREIGN_REFUSAL = 'This app runs in Podman or a rootless engine, which this release cannot do that for yet.';
+export const hasForeignRuntime = config => {
+  let value = config;
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { value = null; } }
+  const runtime = value?.runtime;
+  return runtime !== undefined && runtime !== null && !isRootfulDocker(runtime);
+};
+
+const text = (value, max) => (typeof value === 'string' && value.length <= max ? value : null);
+const small = (object, keys, max = 4096) => Object.fromEntries(keys.flatMap(key => text(object?.[key], max) !== null ? [[key, object[key]]] : []));
+const FOREIGN_LIMIT = 200;
+const isPlainRootful = runtime => runtime === undefined || (runtimeSchema.safeParse(runtime).success && isRootfulDocker(runtime));
+// Containers of Podman and rootless engines, from a helper answer rootless users can influence: only entries whose
+// runtime this server reported are kept, and every field is rebuilt with a type and a length limit.
+// Rootful Docker entries pass through untouched (they are what discovery always returned).
+export function cleanDiscovered(containers, capabilities) {
+  if (!Array.isArray(containers)) return containers;
+  const engines = cleanEngines(capabilities?.engines), kept = [];
+  let foreign = 0;
+  for (const entry of containers) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (isPlainRootful(entry.runtime)) { kept.push(entry); continue; }
+    const parsed = runtimeSchema.safeParse(entry.runtime);
+    if (!parsed.success || !engines.some(engine => sameEngine(engine, parsed.data)) || ++foreign > FOREIGN_LIMIT) continue;
+    const name = text(entry.name, 128), id = text(entry.id, 64);
+    if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name) || !id || !/^[0-9a-f]{12,64}$/.test(id)) continue;
+    const labels = Object.fromEntries(Object.entries(entry.labels && typeof entry.labels === 'object' ? entry.labels : {}).filter(([key, value]) => key.length <= 256 && text(value, 1024) !== null).slice(0, 50));
+    const ports = Object.fromEntries(Object.entries(entry.ports && typeof entry.ports === 'object' ? entry.ports : {}).slice(0, 50)
+      .map(([port, bindings]) => [text(port, 32) ?? '', (Array.isArray(bindings) ? bindings : []).slice(0, 8).map(binding => small(binding, ['HostIp', 'HostPort'], 64))]).filter(([port]) => port));
+    kept.push({
+      hardening: null, links: null, runtime: parsed.data, id, name, image: text(entry.image, 512), state: text(entry.state, 32), running: entry.running === true, health: text(entry.health, 32),
+      labels, mounts: (Array.isArray(entry.mounts) ? entry.mounts : []).slice(0, 100).map(mount => ({ ...small(mount, ['Type', 'Name', 'Source', 'Destination', 'Driver', 'Mode']), RW: mount?.RW !== false })),
+      temporaryMemoryFolders: (Array.isArray(entry.temporaryMemoryFolders) ? entry.temporaryMemoryFolders : []).slice(0, 90).filter(folder => text(folder, 4096) !== null),
+      ports, webHints: [], backupConfiguration: { composeFiles: [], configFiles: [], directory: '' }
+    });
+  }
+  return kept;
+}

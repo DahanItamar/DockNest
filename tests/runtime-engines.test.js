@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker } from '../src/runtime.js';
+import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker, cleanDiscovered, hasForeignRuntime } from '../src/runtime.js';
 // The container engine of an app (docs/podman-rootless.md): saved only when the server reported it, never changed by an edit.
 const alice = { engine: 'podman', rootless: true, user: 'alice', uid: 1001 };
 const reported = [{ engine: 'docker', rootless: false, version: '28.0.1', cgroupDelegated: true }, { ...alice, version: '5.2.1', cgroupDelegated: false }];
@@ -44,6 +44,25 @@ test('one app, one engine: containers from two engines are refused with the plai
   assert.match(appRuntime([{ runtime: alice }, { runtime: { ...alice, uid: 1002 } }]).error, /two engines/);
   assert.match(appRuntime([{ runtime: { engine: 'lxc', rootless: false } }]).error, /does not understand/);
   assert.deepEqual(appRuntime([]), { runtime: { engine: 'docker', rootless: false } });
+});
+
+const entry = (extra = {}) => ({ hardening: null, links: null, runtime: alice, id: 'aabbccddeeff', name: 'shop', image: 'registry.invalid/shop:1', state: 'running', running: true, health: null, labels: { a: 'b' },
+  mounts: [{ Type: 'volume', Name: 'data', Source: '/x', Destination: '/data', RW: true, Extra: 'dropped' }], temporaryMemoryFolders: ['/tmp'], ports: { '80/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080', Junk: 1 }] }, webHints: [{ evil: 1 }], backupConfiguration: { configFiles: ['/etc/passwd'] }, ...extra });
+
+test('discovered containers of other engines are rebuilt, capped and only kept for engines the server reported', () => {
+  const rootful = { id: 'x', name: 'web', anything: ['kept as is'] };
+  const clean = cleanDiscovered([rootful, entry(), entry({ id: 'ffeeddccbbaa', name: 'worker', runtime: { ...alice, uid: 1002 } })], { engines: reported });
+  assert.equal(clean.length, 2); assert.equal(clean[0], rootful);
+  assert.deepEqual(clean[1].mounts, [{ Type: 'volume', Name: 'data', Source: '/x', Destination: '/data', RW: true }]);
+  assert.deepEqual(clean[1].ports, { '80/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080' }] });
+  assert.deepEqual(clean[1].webHints, []); assert.deepEqual(clean[1].backupConfiguration, { composeFiles: [], configFiles: [], directory: '' });
+  for (const bad of [{ name: '../x' }, { name: 5 }, { id: 'zz' }, { id: 'a'.repeat(65) }, { runtime: 'podman' }, { runtime: { engine: 'lxc', rootless: false } }])
+    assert.equal(cleanDiscovered([entry(bad)], { engines: reported }).length, 0, JSON.stringify(bad));
+  const long = cleanDiscovered([entry({ image: 'i'.repeat(600), labels: { ['k'.repeat(300)]: 'v', fine: 'v'.repeat(2000), ok: 'v' } })], { engines: reported })[0];
+  assert.equal(long.image, null); assert.deepEqual(long.labels, { ok: 'v' });
+  assert.equal(cleanDiscovered(Array.from({ length: 500 }, (_, n) => entry({ name: 'c' + n })), { engines: reported }).length, 200);
+  assert.equal(cleanDiscovered([entry()], {}).length, 0, 'no reported engines keeps nothing foreign');
+  assert.equal(hasForeignRuntime({ runtime: alice }) && hasForeignRuntime(JSON.stringify({ runtime: alice })) && !hasForeignRuntime({}) && !hasForeignRuntime({ runtime: { engine: 'docker', rootless: false } }) && !hasForeignRuntime('{bad'), true);
 });
 
 const directory = await mkdtemp(join(tmpdir(), 'docknest-runtime-'));
@@ -88,6 +107,15 @@ test('API: an edit keeps the engine, cannot change it, and a rootful app cannot 
   const upgrade = await call('/sites/' + rootful.id, 'PATCH', { serverId: withEngines, name: 'Shop', config: { ...rootful.config, runtime: alice } });
   assert.equal(upgrade.status, 400); assert.match(JSON.stringify(await upgrade.json()), /keeps its container engine/);
   assert.equal((await call('/sites/' + rootful.id, 'PATCH', { serverId: withEngines, name: 'Shop', config: { ...rootful.config, runtime: { engine: 'docker', rootless: false } } })).status, 200);
+});
+
+test('API: operations that would use rootful Docker refuse the containers of a Podman or rootless app', async () => {
+  const site = await (await call('/sites', 'POST', body(withEngines, alice))).json();
+  const described = await call(`/servers/${withEngines}/describe-containers?containers=shop`, 'GET');
+  assert.equal(described.status, 409); assert.match(JSON.stringify(await described.json()), /Podman or a rootless engine/);
+  assert.equal((await call(`/servers/${withEngines}/project-files?containers=shop`, 'GET')).status, 409);
+  const heal = await call(`/sites/${site.id}/self-heal`, 'PUT', { enabled: true, maxRestarts: 3, windowMinutes: 60 });
+  assert.equal(heal.status, 409); assert.match(JSON.stringify(await heal.json()), /rootful Docker only/);
 });
 
 test.after(() => http.close());
