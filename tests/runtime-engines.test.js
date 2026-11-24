@@ -145,4 +145,14 @@ test('API: operations that would use rootful Docker refuse the containers of a P
   assert.equal(heal.status, 409); assert.match(JSON.stringify(await heal.json()), /rootful Docker only/);
 });
 
+test('restore tests send the engine of a Podman or rootless backup with every step, and nothing for rootful Docker', async () => {
+  const { testRuntime } = await import('../src/restore-tests/engine.js');
+  db.pragma ? db.pragma('foreign_keys = OFF') : db.exec('PRAGMA foreign_keys = OFF');
+  const backup = (manifest, name) => { const row = id(); db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(row, name, name, 'x', '/x', 1, 'x', JSON.stringify(manifest), 'x'); return row; };
+  assert.deepEqual(testRuntime({ backup_id: backup({ formatVersion: 3, runtime: alice, idMap }, 'a') }), alice);
+  for (const manifest of [{}, { formatVersion: 1 }, { runtime: { engine: 'docker', rootless: false } }, { runtime: { engine: 'lxc', rootless: false } }, { runtime: 'x' }])
+    assert.equal(testRuntime({ backup_id: backup(manifest, 'b') }), null, JSON.stringify(manifest));
+  assert.equal(testRuntime({ backup_id: null }), null); assert.equal(testRuntime({ backup_id: 'missing' }), null);
+});
+
 test.after(() => http.close());

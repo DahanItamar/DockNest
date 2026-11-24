@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .runtime import (
-    RUNTIME_DATA_BASE, RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
+    RESTORE_TEST_RUNTIME_OPERATIONS, RUNTIME_DATA_BASE, RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, remove_rootless_data_root, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
 from .paths import (
     SITE_PATH, lexical, within)
 from .routing import (
@@ -514,7 +514,9 @@ def request_runtime(request):
     """The Runtime a request's app uses when this release can capture it (plan, readiness, capture), else None."""
     config=request.get('config') if isinstance(request,dict) else None
     spec=config.get('runtime') if isinstance(config,dict) else None
-    if spec is None or request.get('operation') not in RUNTIME_OPERATIONS:return None
+    if request.get('operation') in RESTORE_TEST_RUNTIME_OPERATIONS:spec=request.get('runtime')
+    elif request.get('operation') not in RUNTIME_OPERATIONS:return None
+    if spec is None:return None
     runtime=resolve_runtime(spec)
     return None if runtime_is_default(runtime) else runtime
 def refuse_foreign_runtime(request):
@@ -550,10 +552,5 @@ def runtime_restore_cleanup(request,base=RUNTIME_DATA_BASE,lstat=os.lstat,rmtree
             docker('stop','--time','30',*ids)
             docker('rm','-f',*ids)
             removed['containers']=len(ids)
-    if runtime.rootless:
-        path=posixpath.join(base,str(runtime.uid),job)
-        try:info=lstat(path)
-        except FileNotFoundError:return removed
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to remove.')
-        rmtree(path);removed['dataRoot']=True
+    if runtime.rootless:removed['dataRoot']=remove_rootless_data_root(runtime,job,base,lstat,rmtree)
     return removed

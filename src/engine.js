@@ -466,6 +466,9 @@ async function executeRestoreJob(job){
    db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
    audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
  }catch(error){
+  // A restore into Podman or a rootless engine that failed leaves no copy behind: its containers (by this job's label) and its
+  // data folder are removed by the helper, whatever step failed. Best effort; the failure itself is what gets recorded.
+  if(restore?.plan?.runtime){try{await transport.remote(server,{operation:'runtime-restore-cleanup',job:job.id,runtime:restore.plan.runtime});}catch{console.error('Cleanup of a failed Podman or rootless restore did not finish.');}}
   if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
    for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
    db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);

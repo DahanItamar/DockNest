@@ -187,6 +187,8 @@ class using_runtime:
 # absolute, normalised, no link in any component, and inside the user's home.
 RUNTIME_ARCHITECTURES={'amd64':'x86_64','x86_64':'x86_64','arm64':'aarch64','aarch64':'aarch64'}
 RUNTIME_OPERATIONS=('plan','readiness','capture','capture-stream')
+# Restore tests carry the runtime of the backup in `runtime`; the helper records it at prepare and every later step reads it back.
+RESTORE_TEST_RUNTIME_OPERATIONS=('restore-test-check','restore-test-prepare')
 def runtime_is_default(runtime):return runtime.engine=='docker' and not runtime.rootless
 def check_runtime_source(runtime,path,lstat=os.lstat):
     """The path unchanged when it can be read as root for this runtime, else a refusal. Rootful Docker is never checked
@@ -294,3 +296,23 @@ def rootless_data_root(runtime,job,base=RUNTIME_DATA_BASE,lstat=os.lstat,mkdir=o
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to use.')
         if part==job and listdir(path):raise RuntimeRefused('The restore folder is not empty.')
     return path
+
+def remove_rootless_data_root(runtime,job,base=RUNTIME_DATA_BASE,lstat=os.lstat,rmtree=None):
+    """Removes <base>/<uid>/<job> of a rootless restore. A folder that is a link, not root-owned or writable by others is
+    left alone and refused. Nothing there to remove is fine. Returns True when a folder was removed."""
+    if not runtime.rootless or not isinstance(job,str) or not re.fullmatch(r'[0-9a-f-]{36}',job):raise RuntimeRefused('The restore job is not valid.')
+    path=posixpath.join(base,str(runtime.uid),job)
+    try:info=lstat(path)
+    except FileNotFoundError:return False
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise RuntimeRefused('The restore folder is not safe to remove.')
+    if rmtree is None:
+        import shutil
+        if os.name=='posix' and not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise RuntimeRefused('Safe directory removal is unavailable on this host.')
+        rmtree=shutil.rmtree
+    rmtree(path)
+    return True
+def rootless_hardening_problem(runtime,hardening):
+    """A rootless engine reads a custom seccomp profile as the user, from a file only root can read here: refused rather
+    than created without it. `hardening` is the original container's hardening record."""
+    if runtime.rootless and hardening.get('seccomp') not in ('default','unconfined'):return 'This app uses a custom seccomp profile, which a rootless copy cannot load yet.'
+    return None

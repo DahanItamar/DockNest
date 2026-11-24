@@ -134,3 +134,8 @@ test('Podman and rootless backup and restore: format 3 gate, home-only sources, 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for rootless backup verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Podman and rootless restore tests: own engine, one isolated container, cgroup delegation, recorded engine for teardown and the reaper, and refusals',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_restore_tests.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for restore test verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

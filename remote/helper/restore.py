@@ -12,7 +12,7 @@ from .databases import (
 from .backup import (
     archive_renames_safely, tree_digest, verify_artifacts)
 from .runtime import (
-    current_runtime, engine_architecture, manifest_runtime_problem, restore_target, rootless_data_root, translate_tree)
+    current_runtime, engine_architecture, manifest_runtime_problem, remove_rootless_data_root, restore_target, rootless_data_root, rootless_hardening_problem, translate_tree)
 from .incremental import (
     CHAIN_ID, FORMAT_VERSIONS, HEX64, MAX_CHAIN, manifest_snapshots)
 from .net import (
@@ -267,7 +267,7 @@ def unpack_verified(req,root):
     # Format 3 (Podman and rootless apps): checked here, where every restore, restore test, move and recovery reads a manifest.
     problem=manifest_runtime_problem(manifest)
     if problem:raise ValueError(problem)
-    if manifest.get('runtime') is not None and req.get('operation')!='restore':raise ValueError('Restore tests, moves and recovery of Podman and rootless apps are not available yet in this release.')
+    if manifest.get('runtime') is not None and req.get('operation') not in ('restore','restore-test-run'):raise ValueError('Moves and recovery of Podman and rootless apps are not available yet in this release.')
     # A v2 full package stands alone; an increment needs its whole chain.
     if manifest['formatVersion']==2 and (manifest.get('backupKind')!='full' or (manifest.get('chain') or {}).get('position')!=0):raise ValueError('This backup is incremental; restore it together with its chain.')
     return unpacked,manifest,verify_artifacts(unpacked,manifest)
@@ -572,6 +572,15 @@ def chain_extract(archives,destination):
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
     strip_privileges(destination)
 def restore(req):
+    try:restore_copy(req)
+    except BaseException:
+        # A rootless copy's data folder is root-made for this job only: a failed restore never leaves it behind.
+        runtime=current_runtime()
+        if runtime.rootless:
+            try:remove_rootless_data_root(runtime,req.get('job'))
+            except Exception:pass
+        raise
+def restore_copy(req):
     global RUNTIME
     root=owned_job_root(req)
     unpacked,manifest,artifacts_verified=unpack_verified(req,root)
@@ -608,6 +617,8 @@ def restore(req):
         args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+        problem=rootless_hardening_problem(current_runtime(),hardening(c))
+        if problem:raise ValueError(problem)
         args+=hardening_args(c,root)
         for j,m in enumerate(c['Mounts']):
             source=extract_mount(unpacked,i,j,m,sources,data_root)

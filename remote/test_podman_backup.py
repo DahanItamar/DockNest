@@ -90,7 +90,8 @@ class UnpackGateTests(unittest.TestCase):
     def test_only_restore_may_open_a_format_3_package(self):
         manifest = {'formatVersion': 3, 'runtime': ALICE, 'idMap': SOURCE}
         self.assertEqual(self.unpack(manifest, 'restore')['runtime'], ALICE)
-        for operation in ('deploy-restore', 'restore-test-prepare', 'restore-test-run', 'verify-restore-recovery', 'move-facts'):
+        self.assertEqual(self.unpack(manifest, 'restore-test-run')['runtime'], ALICE)
+        for operation in ('deploy-restore', 'restore-test-prepare', 'verify-restore-recovery', 'move-facts'):
             with self.assertRaisesRegex(ValueError, 'not available yet'): self.unpack(manifest, operation)
     def test_odd_runtimes_in_a_package_are_refused_for_restore_too(self):
         for manifest in ({'formatVersion': 3, 'runtime': {'engine': 'docker', 'rootless': False}}, {'formatVersion': 3, 'runtime': ALICE},
