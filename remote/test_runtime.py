@@ -14,7 +14,7 @@ TARGET = {'uid': 1500, 'gid': 1500, 'subuid': [300000, 65536], 'subgid': [300000
 
 class ArgvTests(unittest.TestCase):
     def test_default_is_unchanged_rootful_docker(self):
-        self.assertEqual(helper.RUNTIME.argv('ps', '-a'), ['docker', 'ps', '-a'])
+        self.assertEqual(helper.current_runtime().argv('ps', '-a'), ['docker', 'ps', '-a'])
         with patch.object(helper, 'run', return_value=b'[]') as run:
             helper.docker('inspect', 'abc')
         run.assert_called_once_with(['docker', 'inspect', 'abc'])
@@ -120,7 +120,7 @@ class UsingRuntimeTests(unittest.TestCase):
         podman = helper.Runtime('podman')
         before = helper.RUNTIME
         with helper.using_runtime(podman):
-            self.assertEqual(helper.RUNTIME.argv('ps'), ['podman', 'ps'])
+            self.assertEqual(helper.current_runtime().argv('ps'), ['podman', 'ps'])
         self.assertIs(helper.RUNTIME, before)
         with self.assertRaises(KeyError), helper.using_runtime(podman): raise KeyError()
         self.assertIs(helper.RUNTIME, before)

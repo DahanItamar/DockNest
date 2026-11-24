@@ -153,7 +153,9 @@ def resolve_runtime(spec,passwd=None,subuid_text=None,socket_owner=None):
         except OSError:raise RuntimeRefused('The rootless Docker engine is not running for this user.')
         if owner!=uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
     return runtime
-RUNTIME=Runtime()
+def current_runtime():
+    """The engine of the running operation (RUNTIME lives in common.py); rootful Docker when none is set."""
+    return RUNTIME or Runtime()
 class using_runtime:
     """`with using_runtime(runtime):` sets the module-wide RUNTIME for one operation and always restores the previous one,
     so one operation's engine can never leak into the next. Helper operations run one at a time in one process."""
