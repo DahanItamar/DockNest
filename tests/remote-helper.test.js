@@ -164,3 +164,8 @@ test('staged package movers: confined to the staging folders, no links, checked 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for staged package verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Podman move facts read the architecture from the engine own field, Docker unchanged',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_move_facts.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for move facts verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

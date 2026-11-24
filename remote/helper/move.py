@@ -21,7 +21,7 @@ from .maintenance import (
 from .discovery import (
     engine_rootless, nginx_sites, rootless_users)
 from .runtime import (
-    current_runtime, runtime_is_default)
+    current_runtime, engine_architecture, runtime_is_default)
 from .runspec import (
     UNREADABLE_MOUNTS, create_args, fit_host, port_argument, port_bindings, run_spec, unbound_exposed, yaml_str)
 from .restore import (
@@ -251,7 +251,7 @@ def source_site_facts(cfg,tokens):
     if compose and len(names)==1 and all(l.get('com.docker.compose.service') for l in labels) and files and all(f in cfg.get('composeFiles',[]) for f in files):
         project={'project':labels[0]['com.docker.compose.project'],'workingDir':labels[0].get('com.docker.compose.project.working_dir',''),'files':files,'services':{c['Name'].lstrip('/'):l['com.docker.compose.service'] for c,l in zip(cs,labels)}}
     hand=hand_placed(cfg.get('composeFiles',[])+cfg.get('configFiles',[]),(project['files'] if project else [])+[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind'])
-    return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
+    return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':engine_architecture(),
         'ports':ports,'bindPaths':[b for b in binds if b not in hand],'handPlaced':hand,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
         'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []},
