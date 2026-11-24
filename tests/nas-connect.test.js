@@ -52,9 +52,7 @@ test('a container-runtime NAS that cannot run yet is a 409 with a fix, not a cra
 });
 test('Unraid key command keeps existing keys and is idempotent', () => {
   const command = unraidInstallCommand('ssh-rsa ' + Buffer.from('fake-key-material').toString('base64') + ' docknest');
-  assert.match(command, /\[ -s \/boot\/config\/ssh\/root\/authorized_keys \] \|\| cp \/root\/\.ssh\/authorized_keys/);
-  assert.ok(!/cp \/boot[^
-]*\/root\/\.ssh\/authorized_keys
-/.test(command), 'the persistent file never overwrites /root keys');
+  assert.ok(command.includes('[ -s /boot/config/ssh/root/authorized_keys ] || cp /root/.ssh/authorized_keys /boot/config/ssh/root/authorized_keys'));
+  assert.ok(!command.includes('cp /boot'), 'the persistent file never overwrites /root keys');
   assert.equal((command.match(/grep -qxF/g) || []).length, 2);
 });
