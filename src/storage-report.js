@@ -17,9 +17,9 @@ const number = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Nu
 
 // "sftp:<id>:/path", "s3:<id>:key", legacy "sftp:/path" (environment destination) or a plain local path.
 export function storageIdOf(path) {
-  const match = /^(sftp|s3):([^:]*):/.exec(String(path ?? ''));
+  const match = /^(sftp|s3|rclone|folder):([^:]*):/.exec(String(path ?? ''));
   if (match) return match[2] === '' ? 'env' : match[2];
-  return /^(sftp|s3):/.test(String(path ?? '')) ? 'env' : 'local';
+  return /^(sftp|s3|rclone|folder):/.test(String(path ?? '')) ? 'env' : 'local';
 }
 
 // needed = max(largest package, first package + every increase between consecutive packages); upTo = stored - needed.
@@ -115,7 +115,7 @@ async function capacityOf(id) {
 
 export async function storageReport() {
   const backups = db.prepare('SELECT id,site_id AS siteId,captured_at AS capturedAt,path,size FROM backups WHERE id NOT IN (SELECT backup_id FROM retention_operations)').all();
-  const sites = db.prepare('SELECT id,name FROM sites').all(), targets = db.prepare("SELECT id,name,CASE auth_type WHEN 's3-access-key' THEN 's3' ELSE 'sftp' END AS mode FROM storage_targets").all();
+  const sites = db.prepare('SELECT id,name FROM sites').all(), targets = db.prepare("SELECT id,name,CASE auth_type WHEN 's3-access-key' THEN 's3' WHEN 'rclone' THEN 'rclone' WHEN 'local' THEN 'folder' ELSE 'sftp' END AS mode FROM storage_targets").all();
   const copies = db.prepare("SELECT c.target_id AS targetId,b.size FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE c.status='verified' AND b.id NOT IN (SELECT backup_id FROM retention_operations)").all();
   const mainRemoved = new Set(db.prepare('SELECT backup_id FROM backup_main_removed').all().map(row => row.backup_id));
   const ids = [...new Set([...backups.filter(row => !mainRemoved.has(row.id)).map(row => storageIdOf(row.path)), ...copies.map(row => row.targetId)])];

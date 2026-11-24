@@ -13,15 +13,19 @@ import { backupLayout,backupRoot } from '../backup-layout.js';
 import * as local from './local.js';
 import * as sftp from './sftp.js';
 import * as s3 from './s3.js';
+import * as rclone from './rclone.js';
+import * as folder from './folder.js';
+import { settingsOf,loadSecrets } from './rclone-state.js';
 import { writeMode,keptError,markDeletesRefused,recordLeftovers } from './write-mode.js';
 export { keptByStorage,KEPT_BY_STORAGE,KEPT_UNTIL_RETEST } from './write-mode.js';
 
-export const adapters={sftp,s3};
+export const adapters={sftp,s3,rclone,folder};
 const schemes=Object.keys(adapters);
 export const remoteModes=schemes;
 export const targetPrefix=options=>options.mode+':'+options.id+':';
 // Rows store S3 settings beside the shared columns; the credential is sealed like SFTP secrets.
-export const targetMode=row=>row.auth_type==='s3-access-key'?'s3':'sftp';
+// A row of auth type 'rclone' is a cloud drive or network share. 2.16.x reads it as SFTP and fails closed on its sentinel host.
+export const targetMode=row=>row.auth_type==='local'?'folder':row.auth_type==='rclone'?'rclone':row.auth_type==='s3-access-key'?'s3':'sftp';
 export const isRemoteFile=file=>schemes.some(scheme=>file.startsWith(scheme+':'));
 export function targetOptions(id){
  if(id==='env')return {...config.storage,id:'env'};
@@ -32,6 +36,16 @@ export function targetOptions(id){
   if(!settings)throw new Error('S3 destination settings are missing; reconnect the destination');
   const {accessKeyId,secretAccessKey}=JSON.parse(open(row.credential));
   return {id:row.id,mode:'s3',name:row.name,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,capacity:null,accessKeyId,secretAccessKey};
+ }
+ if(targetMode(row)==='folder'){
+  const settings=settingsOf(row.id);
+  if(!settings?.path)throw new Error('Folder settings are missing; reconnect the destination');
+  return {id:row.id,mode:'folder',name:row.name,folder:settings.path,root:row.root,capacity:null,status:row.status};
+ }
+ if(targetMode(row)==='rclone'){
+  const settings=settingsOf(row.id);
+  if(!settings?.backend)throw new Error('Cloud drive settings are missing; reconnect the destination');
+  return {id:row.id,mode:'rclone',name:row.name,backend:settings.backend,settings,root:row.root,capacity:row.capacity_bytes,status:row.status,secrets:loadSecrets(row.id)};
  }
  const {writeMode:mode,keepsFiles}=writeMode(row.id);
  return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,writeMode:mode,keepsFiles,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
