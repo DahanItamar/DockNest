@@ -51,6 +51,8 @@ const resolvedLabel = (row, client) => { try { return resolvePeriod(row.period_s
 export async function attempt(row, { now = Date.now() } = {}) {
   const client = db.prepare('SELECT * FROM clients WHERE id=?').get(row.client_id);
   if (!client) { db.prepare("UPDATE client_reports SET status='failed',next_attempt_at=NULL,error='The client was deleted.' WHERE id=?").run(row.id); return 'failed'; }
+  // A queued scheduled report is not sent after the owner turned the schedule off.
+  if (row.trigger === 'schedule' && client.schedule_enabled !== 1) { db.prepare("UPDATE client_reports SET status='failed',next_attempt_at=NULL,error='The schedule was turned off.' WHERE id=?").run(row.id); return 'failed'; }
   const attempts = row.attempts + 1;
   try {
     const period = resolvePeriod(row.period_start, row.period_end, { timeZone: client.timezone, now: Date.parse(row.created_at) + 1 });

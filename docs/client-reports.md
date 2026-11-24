@@ -45,6 +45,8 @@ download it instead"). A failed send retries after 1, 2 and 3 hours, then raises
 (`report.failed`) on your normal alert lines. A success is recorded, never alerted. "Send test" sends last month's
 report to the recipients right away.
 
+Sending is at-least-once: if DockNest stops right after the mail server accepted a report but before it records the send, the same report can go out a second time. If the schedule is turned off while a report is waiting to retry, it is not sent.
+
 Recipients are sealed with the master key, shown only masked (`c***@example.com`), and changing them needs you to confirm
 your sign-in again. The audit log records the change with the addresses hashed. The PDF itself is never stored; DockNest
 keeps only its size and SHA-256 so you can match a sent file.

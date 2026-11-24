@@ -3,9 +3,9 @@
 //   (a***@example.com); the full list is opened only to send a report, and never reaches a log, a job text or an audit row
 //   (the audit row holds a SHA-256 of each address).
 // - A viewer sees the client, its apps and the report settings that shape the PDF, but no recipients and no schedule.
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { db, id, audit, transaction } from '../db.js';
-import { seal, open } from '../crypto.js';
+import { seal, open, key } from '../crypto.js';
 import { mailbox } from '../alerts/smtp.js';
 import { INCLUDE_DEFAULTS, includeOf, ACCENTS } from './client.js';
 import { nextDueAt, validZone } from './period.js';
@@ -13,7 +13,9 @@ import { nextDueAt, validZone } from './period.js';
 export const MAX_RECIPIENTS = 3, MAX_CLIENTS = 200;
 const httpError = (status, message, code) => Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
 export const maskAddress = address => { const [local, domain] = String(address).split('@'); return `${local.slice(0, 1)}***@${domain}`; };
-const digest = address => createHash('sha256').update(String(address).toLowerCase()).digest('hex').slice(0, 16);
+// Audit digest: HMAC-SHA256 under a key derived from the master key (domain-separated), so a leaked audit log cannot be
+// checked against a list of guessed addresses without the master key.
+export const digest = address => createHmac('sha256', createHmac('sha256', key()).update('client-report-audit').digest()).update(String(address).toLowerCase()).digest('hex').slice(0, 16);
 // Normal form of a list the owner typed: valid, unique (case-insensitive), at most 3.
 export function cleanRecipients(list) {
   const seen = new Set(), clean = [];

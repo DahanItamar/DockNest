@@ -22,7 +22,8 @@ const period = await import('../src/reports/period.js');
 const { buildReport, reportPdf } = await import('../src/reports/client.js');
 const { buildMessage, smtpLimits, smtpIo, smtpPolicy, sendMail } = await import('../src/alerts/smtp.js');
 const send = await import('../src/reports/send.js');
-const { openRecipients } = await import('../src/reports/store.js');
+const { openRecipients, digest: auditDigest } = await import('../src/reports/store.js');
+const { createHash } = await import('node:crypto');
 
 const now = () => new Date().toISOString();
 const NOV = { from: '2026-11-01', to: '2026-11-30' };
@@ -256,9 +257,22 @@ test('schedule: a due client gets last month queued once; failures retry after 1
   } finally { Object.assign(smtpIo, original); smtpPolicy.allowLoopback = false; }
 });
 
+test('audit digest is keyed (HMAC under a master-key-derived key), stable and not a plain SHA-256', () => {
+  const a = auditDigest('Person@Example.com');
+  assert.match(a, /^[0-9a-f]{16}$/); assert.equal(a, auditDigest('person@example.com'));
+  assert.notEqual(a, createHash('sha256').update('person@example.com').digest('hex').slice(0, 16));
+});
+
+test('a queued scheduled report is not sent once the schedule is off', async () => {
+  const off = id(); db.prepare("INSERT INTO clients(id,name,include,schedule_enabled,timezone,connection_id,recipients,created_at,updated_at) VALUES(?,?,'{}',0,'UTC',?,?,?,?)").run(off, 'Off Client', emailConnection, JSON.stringify({ sealed: seal(JSON.stringify([RECIPIENT])) }), now(), now());
+  const rowId = id(); db.prepare("INSERT INTO client_reports(id,client_id,period_start,period_end,trigger,status,attempts,next_attempt_at,created_at) VALUES(?,?,?,?,'schedule','sending',1,?,?)").run(rowId, off, NOV.from, NOV.to, now(), '2026-12-01T00:00:00Z');
+  assert.equal(await send.attempt(db.prepare('SELECT * FROM client_reports WHERE id=?').get(rowId)), 'failed');
+  assert.equal(db.prepare('SELECT error FROM client_reports WHERE id=?').get(rowId).error, 'The schedule was turned off.');
+});
+
 test('schedule: no Connection or recipient fails at once with a fixed sentence; an oversize PDF is refused with the documented text', async () => {
   const bare = id();
-  db.prepare("INSERT INTO clients(id,name,include,schedule_enabled,timezone,created_at,updated_at) VALUES(?,?,'{}',0,'UTC',?,?)").run(bare, 'Bare Client', now(), now());
+  db.prepare("INSERT INTO clients(id,name,include,schedule_enabled,timezone,created_at,updated_at) VALUES(?,?,'{}',1,'UTC',?,?)").run(bare, 'Bare Client', now(), now());
   const rowId = id();
   db.prepare("INSERT INTO client_reports(id,client_id,period_start,period_end,trigger,status,attempts,next_attempt_at,created_at) VALUES(?,?,?,?,'schedule','sending',0,?,?)").run(rowId, bare, NOV.from, NOV.to, now(), '2026-12-01T00:00:00Z');
   assert.equal(await send.attempt(db.prepare('SELECT * FROM client_reports WHERE id=?').get(rowId)), 'failed');
