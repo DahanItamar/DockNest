@@ -26,9 +26,9 @@
 .lg-formside{flex:1;padding:var(--edge) var(--edge) 48px}
 .lg-col{width:100%;max-width:384px}
 .lg-brandpanel{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:40px;background:var(--dn-brand-2);border-right:1px solid var(--dn-brand-4)}
-.lg-bp-top{min-height:56px}
+.lg-bp-top{min-height:56px;display:flex;flex-direction:column;align-items:flex-start}
 /* paths: calm, compositor-only drift, faded out behind the logo and the text */
-.lg-paths{position:absolute;inset:0;z-index:-1;width:100%;height:100%;color:var(--dn-brand-8);-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 112px,var(--dn-black) 280px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px));mask-image:linear-gradient(to bottom,transparent 0,transparent 112px,var(--dn-black) 280px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px))}
+.lg-paths{position:absolute;inset:0;z-index:-1;width:100%;height:100%;color:var(--dn-brand-8);-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 220px,var(--dn-black) 380px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px));mask-image:linear-gradient(to bottom,transparent 0,transparent 220px,var(--dn-black) 380px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px))}
 .lg-path{fill:none;stroke:currentColor;stroke-linecap:round;stroke-dasharray:100;animation:none}
 .lg-pg{transform-origin:50% 50%}.lg-pg1{color:var(--dn-brand-7)}.lg-pg2{color:var(--dn-brand-9)}
 
@@ -36,12 +36,18 @@
 
 
 /* product line */
-.lg-bp-line{margin:0 0 8px;max-width:480px;font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--dn-brand-text)}
+.lg-bp-line{margin:28px 0 8px;max-width:480px;font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--dn-brand-text)}
 .lg-s{display:block}
 
 
 
-.lg-bp-cap{margin:0;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-secondary)}
+.lg-bp-cap{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--dn-brand-text-soft)}
+/* rotating highlights: fixed height (no layout shift), one line visible at a time, 4 s each, 24 s for the six lines */
+.lg-rotator{position:relative;max-width:480px;height:calc(var(--lh-section)*2)}
+.lg-rot-line{position:absolute;top:0;left:0;right:0;margin:0;opacity:0;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--dn-brand-text-soft);animation:lg-rot 24s linear infinite;animation-delay:calc(var(--i)*4s)}
+@keyframes lg-rot{0%{opacity:0}2.5%{opacity:1}14.17%{opacity:1}16.67%{opacity:0}100%{opacity:0}}
+.lg-brandpanel:hover .lg-rot-line,.auth-page:has(:focus-visible) .lg-rot-line{animation-play-state:paused}
+@media(prefers-reduced-motion:reduce){.lg-rot-line{animation:none}.lg-rot-line:first-child{opacity:1}}
 /* logos */
 @media(max-width:1023px){.lg-brandpanel{display:none}.lg-split{grid-template-columns:1fr;min-height:100dvh}}
 @media(max-width:480px){.lg-formside{padding:16px 16px 32px}.lg-head{padding:16px}}
@@ -115,7 +121,7 @@
 /* Header row: wordmark (phone only) left, theme toggle right, same row and side padding as the form. */
 .lg-head{align-items:center}
 .auth-page .auth-card.lg-col>:first-child{margin-top:auto}
-@media(min-width:1024px){.lg-left .lg-head{padding:40px 40px 0}.lg-bp-top{display:flex;align-items:center;height:var(--control-height);min-height:0}}
+@media(min-width:1024px){.lg-left .lg-head{padding:40px 40px 0}}
 @media(max-width:1023px){.lg-head{padding:var(--spacing) var(--edge)}.lg-head>.lg-head-brand{display:block}.lg-head-brand .brand-image{width:150px}}
 .lg-head .theme-toggle{margin-left:auto}
 

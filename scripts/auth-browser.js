@@ -53,7 +53,9 @@ for(const theme of ['light','dark']){
  assert.equal(await page.locator(".lg-rise").evaluateAll(e=>e.every(x=>getComputedStyle(x).animationName==="none")),true,"v2: the form does not rise in");
  await noBox(page);await fit(page,'sign-in '+theme);
  assert.equal(await page.locator('.lg-head-brand').isVisible(),false,'top-bar wordmark hidden on desktop');
- {const [w,t]=await Promise.all([page.locator('.lg-bp-top .brand-image').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);assert.ok(Math.abs((w.y+w.height/2)-(t.y+t.height/2))<=1,'wordmark and theme toggle share one row on desktop');}
+ {const [logo,slogan]=await Promise.all([page.locator('.lg-bp-top .brand-image').boundingBox(),page.locator('.lg-bp-top .lg-bp-line').boundingBox()]);assert.ok(slogan.y>logo.y+logo.height,'the slogan sits directly under the logo block');}
+ assert.equal(await page.locator('.lg-rotator').getAttribute('aria-hidden'),'true','the rotating line is hidden from screen readers');
+ assert.equal(await page.locator('ul.sr-only li').count(),6,'screen readers get the six highlights once');
  const pw=page.getByLabel('Password',{exact:true});assert.equal(await pw.getAttribute('type'),'password');
  await page.getByRole('button',{name:'Show password'}).click();assert.equal(await pw.getAttribute('type'),'text');
  await page.getByRole('button',{name:'Hide password'}).click();assert.equal(await pw.getAttribute('type'),'password');

@@ -43,7 +43,7 @@
 :root{
  --dn-brand-1:#FAFEFD;--dn-brand-2:#F3FBF9;--dn-brand-3:#E0F8F3;--dn-brand-4:#CCF3EA;--dn-brand-5:#B8EAE0;--dn-brand-6:#A1DED2;--dn-brand-7:#83CDC1;--dn-brand-8:#53B9AB;--dn-brand-9:#12A594;--dn-brand-10:#0D9B8A;--dn-brand-11:#008573;--dn-brand-12:#0D3D38;
  --dn-chrome-1:#FAFEFD;--dn-chrome-2:#F3FBF9;--dn-chrome-3:#E0F8F3;--dn-chrome-4:#CCF3EA;--dn-chrome-5:#B8EAE0;--dn-chrome-6:#A1DED2;--dn-chrome-7:#83CDC1;--dn-chrome-8:#53B9AB;--dn-chrome-9:#12A594;--dn-chrome-10:#0D9B8A;--dn-chrome-11:#008573;--dn-chrome-12:#0D3D38;
- --dn-brand-text-step:#007061;--dn-chrome-text-step:#007061;
+ --dn-brand-text-step:#007061;--dn-chrome-text-step:#007061;--dn-brand-text-soft:#137B6D;
  --dn-brand-solid-step:#0D786C;--dn-brand-solid-hover-step:#0C6C61;--dn-chrome-solid-step:#0D786C;--dn-chrome-solid-hover-step:#0C6C61;
  --dn-brand-ui:#109687;--dn-chrome-ui:#109687;
  --dn-brand-logo:#109687;
@@ -53,7 +53,7 @@
 :root[data-theme=dark]{
  --dn-brand-1:#0D1514;--dn-brand-2:#111C1B;--dn-brand-3:#0D2D2A;--dn-brand-4:#023B37;--dn-brand-5:#084843;--dn-brand-6:#145750;--dn-brand-7:#1C6961;--dn-brand-8:#207E73;--dn-brand-9:#12A594;--dn-brand-10:#0EB39E;--dn-brand-11:#0BD8B6;--dn-brand-12:#ADF0DD;
  --dn-chrome-1:#0D1514;--dn-chrome-2:#111C1B;--dn-chrome-3:#0D2D2A;--dn-chrome-4:#023B37;--dn-chrome-5:#084843;--dn-chrome-6:#145750;--dn-chrome-7:#1C6961;--dn-chrome-8:#207E73;--dn-chrome-9:#12A594;--dn-chrome-10:#0EB39E;--dn-chrome-11:#0BD8B6;--dn-chrome-12:#ADF0DD;
- --dn-brand-text-step:#0BD8B6;--dn-chrome-text-step:#0BD8B6;
+ --dn-brand-text-step:#0BD8B6;--dn-chrome-text-step:#0BD8B6;--dn-brand-text-soft:#0DA38B;
  --dn-brand-solid-step:#0D786C;--dn-brand-solid-hover-step:#0C6C61;--dn-chrome-solid-step:#0D786C;--dn-chrome-solid-hover-step:#0C6C61;
  --dn-brand-ui:#0BD8B6;--dn-chrome-ui:#0BD8B6;
  --dn-brand-logo:#0EB39E;
@@ -63,7 +63,7 @@
 :root[data-accent=blue]{
  --dn-brand-1:#FBFDFF;--dn-brand-2:#F4FAFF;--dn-brand-3:#E6F4FE;--dn-brand-4:#D5EFFF;--dn-brand-5:#C2E5FF;--dn-brand-6:#ACD8FC;--dn-brand-7:#8EC8F6;--dn-brand-8:#5EB1EF;--dn-brand-9:#0090FF;--dn-brand-10:#0588F0;--dn-brand-11:#0D74CE;--dn-brand-12:#113264;
  --dn-chrome-1:#FBFDFF;--dn-chrome-2:#F4FAFF;--dn-chrome-3:#E6F4FE;--dn-chrome-4:#D5EFFF;--dn-chrome-5:#C2E5FF;--dn-chrome-6:#ACD8FC;--dn-chrome-7:#8EC8F6;--dn-chrome-8:#5EB1EF;--dn-chrome-9:#0090FF;--dn-chrome-10:#0588F0;--dn-chrome-11:#0D74CE;--dn-chrome-12:#113264;
- --dn-brand-text-step:#0B64B1;--dn-chrome-text-step:#0B64B1;
+ --dn-brand-text-step:#0B64B1;--dn-chrome-text-step:#0B64B1;--dn-brand-text-soft:#1E70B7;
  --dn-brand-solid-step:#006CBF;--dn-brand-solid-hover-step:#0061AC;--dn-chrome-solid-step:#006CBF;--dn-chrome-solid-hover-step:#0061AC;
  --dn-brand-ui:#0087F0;--dn-chrome-ui:#0087F0;
  --dn-brand-logo:#0087F0;
@@ -73,7 +73,7 @@
 :root[data-accent=blue][data-theme=dark]{
  --dn-brand-1:#0D1520;--dn-brand-2:#111927;--dn-brand-3:#0D2847;--dn-brand-4:#003362;--dn-brand-5:#004074;--dn-brand-6:#104D87;--dn-brand-7:#205D9E;--dn-brand-8:#2870BD;--dn-brand-9:#0090FF;--dn-brand-10:#3B9EFF;--dn-brand-11:#70B8FF;--dn-brand-12:#C2E6FF;
  --dn-chrome-1:#0D1520;--dn-chrome-2:#111927;--dn-chrome-3:#0D2847;--dn-chrome-4:#003362;--dn-chrome-5:#004074;--dn-chrome-6:#104D87;--dn-chrome-7:#205D9E;--dn-chrome-8:#2870BD;--dn-chrome-9:#0090FF;--dn-chrome-10:#3B9EFF;--dn-chrome-11:#70B8FF;--dn-chrome-12:#C2E6FF;
- --dn-brand-text-step:#70B8FF;--dn-chrome-text-step:#70B8FF;
+ --dn-brand-text-step:#70B8FF;--dn-chrome-text-step:#70B8FF;--dn-brand-text-soft:#5A93CD;
  --dn-brand-solid-step:#006CBF;--dn-brand-solid-hover-step:#0061AC;--dn-chrome-solid-step:#006CBF;--dn-chrome-solid-hover-step:#0061AC;
  --dn-brand-ui:#70B8FF;--dn-chrome-ui:#70B8FF;
  --dn-brand-logo:#3B9EFF;
@@ -83,7 +83,7 @@
 :root[data-accent=indigo]{
  --dn-brand-1:#FDFDFE;--dn-brand-2:#F7F9FF;--dn-brand-3:#EDF2FE;--dn-brand-4:#E1E9FF;--dn-brand-5:#D2DEFF;--dn-brand-6:#C1D0FF;--dn-brand-7:#ABBDF9;--dn-brand-8:#8DA4EF;--dn-brand-9:#3E63DD;--dn-brand-10:#3358D4;--dn-brand-11:#3A5BC7;--dn-brand-12:#1F2D5C;
  --dn-chrome-1:#FDFDFE;--dn-chrome-2:#F7F9FF;--dn-chrome-3:#EDF2FE;--dn-chrome-4:#E1E9FF;--dn-chrome-5:#D2DEFF;--dn-chrome-6:#C1D0FF;--dn-chrome-7:#ABBDF9;--dn-chrome-8:#8DA4EF;--dn-chrome-9:#3E63DD;--dn-chrome-10:#3358D4;--dn-chrome-11:#3A5BC7;--dn-chrome-12:#1F2D5C;
- --dn-brand-text-step:#395AC5;--dn-chrome-text-step:#395AC5;
+ --dn-brand-text-step:#395AC5;--dn-chrome-text-step:#395AC5;--dn-brand-text-soft:#4867CA;
  --dn-brand-solid-step:#3D61D9;--dn-brand-solid-hover-step:#3757C3;--dn-chrome-solid-step:#3D61D9;--dn-chrome-solid-hover-step:#3757C3;
  --dn-brand-ui:#3E63DD;--dn-chrome-ui:#3E63DD;
  --dn-brand-logo:#3E63DD;
@@ -93,7 +93,7 @@
 :root[data-accent=indigo][data-theme=dark]{
  --dn-brand-1:#11131F;--dn-brand-2:#141726;--dn-brand-3:#182449;--dn-brand-4:#1D2E62;--dn-brand-5:#253974;--dn-brand-6:#304384;--dn-brand-7:#3A4F97;--dn-brand-8:#435DB1;--dn-brand-9:#3E63DD;--dn-brand-10:#5472E4;--dn-brand-11:#9EB1FF;--dn-brand-12:#D6E1FF;
  --dn-chrome-1:#11131F;--dn-chrome-2:#141726;--dn-chrome-3:#182449;--dn-chrome-4:#1D2E62;--dn-chrome-5:#253974;--dn-chrome-6:#304384;--dn-chrome-7:#3A4F97;--dn-chrome-8:#435DB1;--dn-chrome-9:#3E63DD;--dn-chrome-10:#5472E4;--dn-chrome-11:#9EB1FF;--dn-chrome-12:#D6E1FF;
- --dn-brand-text-step:#9EB1FF;--dn-chrome-text-step:#9EB1FF;
+ --dn-brand-text-step:#9EB1FF;--dn-chrome-text-step:#9EB1FF;--dn-brand-text-soft:#7D8CCB;
  --dn-brand-solid-step:#3D61D9;--dn-brand-solid-hover-step:#3757C3;--dn-chrome-solid-step:#3D61D9;--dn-chrome-solid-hover-step:#3757C3;
  --dn-brand-ui:#9EB1FF;--dn-chrome-ui:#9EB1FF;
  --dn-brand-logo:#5472E4;
@@ -103,7 +103,7 @@
 :root[data-accent=orange]{
  --dn-brand-1:#FEFCFB;--dn-brand-2:#FFF7ED;--dn-brand-3:#FFEFD6;--dn-brand-4:#FFDFB5;--dn-brand-5:#FFD19A;--dn-brand-6:#FFC182;--dn-brand-7:#F5AE73;--dn-brand-8:#EC9455;--dn-brand-9:#F76B15;--dn-brand-10:#EF5F00;--dn-brand-11:#CC4E00;--dn-brand-12:#582D1D;
  --dn-chrome-1:#FEFCFB;--dn-chrome-2:#FFF7ED;--dn-chrome-3:#FFEFD6;--dn-chrome-4:#FFDFB5;--dn-chrome-5:#FFD19A;--dn-chrome-6:#FFC182;--dn-chrome-7:#F5AE73;--dn-chrome-8:#EC9455;--dn-chrome-9:#F76B15;--dn-chrome-10:#EF5F00;--dn-chrome-11:#CC4E00;--dn-chrome-12:#582D1D;
- --dn-brand-text-step:#A33E00;--dn-chrome-text-step:#A33E00;
+ --dn-brand-text-step:#A33E00;--dn-chrome-text-step:#A33E00;--dn-brand-text-soft:#AD521A;
  --dn-brand-solid-step:#B24D0F;--dn-brand-solid-hover-step:#A0450E;--dn-chrome-solid-step:#B24D0F;--dn-chrome-solid-hover-step:#A0450E;
  --dn-brand-ui:#DE6013;--dn-chrome-ui:#DE6013;
  --dn-brand-logo:#DE6013;
@@ -113,7 +113,7 @@
 :root[data-accent=orange][data-theme=dark]{
  --dn-brand-1:#17120E;--dn-brand-2:#1E160F;--dn-brand-3:#331E0B;--dn-brand-4:#462100;--dn-brand-5:#562800;--dn-brand-6:#66350C;--dn-brand-7:#7E451D;--dn-brand-8:#A35829;--dn-brand-9:#F76B15;--dn-brand-10:#FF801F;--dn-brand-11:#FFA057;--dn-brand-12:#FFE0C2;
  --dn-chrome-1:#17120E;--dn-chrome-2:#1E160F;--dn-chrome-3:#331E0B;--dn-chrome-4:#462100;--dn-chrome-5:#562800;--dn-chrome-6:#66350C;--dn-chrome-7:#7E451D;--dn-chrome-8:#A35829;--dn-chrome-9:#F76B15;--dn-chrome-10:#FF801F;--dn-chrome-11:#FFA057;--dn-chrome-12:#FFE0C2;
- --dn-brand-text-step:#FFA057;--dn-chrome-text-step:#FFA057;
+ --dn-brand-text-step:#FFA057;--dn-chrome-text-step:#FFA057;--dn-brand-text-soft:#C27B44;
  --dn-brand-solid-step:#B24D0F;--dn-brand-solid-hover-step:#A0450E;--dn-chrome-solid-step:#B24D0F;--dn-chrome-solid-hover-step:#A0450E;
  --dn-brand-ui:#FFA057;--dn-chrome-ui:#FFA057;
  --dn-brand-logo:#FF801F;

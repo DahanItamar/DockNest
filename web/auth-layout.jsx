@@ -18,6 +18,13 @@ function FloatingPaths(){
  return <svg className="lg-paths" viewBox="-380 -190 1076 1060" preserveAspectRatio="xMidYMid slice" fill="none" aria-hidden="true">{sets.map((set,s)=><g key={s} className={`lg-pg lg-pg${s+1}`}>{set.map((p,i)=><path key={i} className="lg-path" d={p.d} pathLength="100" style={{strokeWidth:p.width,strokeOpacity:p.opacity}}/>)}</g>)}</svg>;
 }
 
+// Feature highlights for the brand panel. Pure CSS rotation (no timer): one line at a time cross-fades every 4 s; hover or
+// keyboard focus pauses it, reduced motion shows the first line still. Screen readers get the whole list once.
+export const HIGHLIGHTS=Object.freeze(['Restore tests run on their own, so you know backups work.','Measured recovery time for every app.','Back up to Google Drive, OneDrive, Dropbox or WebDAV.','Docker, Podman and rootless engines.','Client reports as a PDF, ready to send.','TrueNAS SCALE support built in.']);
+function Highlights(){
+ return <div className="lg-bp-bottom"><ul className="sr-only" aria-label="Highlights">{HIGHLIGHTS.map(line=><li key={line}>{line}</li>)}</ul><div className="lg-rotator" aria-hidden="true">{HIGHLIGHTS.map((line,i)=><p key={line} className="lg-rot-line" style={{'--i':i}}>{line}</p>)}</div></div>;
+}
+
 export function AuthLayout({children,back}){
  useEffect(()=>{
   const root=document.documentElement,sync=()=>root.classList.toggle('lg-paused',document.hidden);
@@ -26,8 +33,8 @@ export function AuthLayout({children,back}){
  },[]);
  return <div className="auth-shell auth-page lg-t2"><div className="lg-split">
   <aside className="lg-brandpanel" aria-label="DockNest"><FloatingPaths/>
-   <div className="lg-bp-top"><Brand/></div>
-   <div className="lg-bp-bottom"><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p><p className="lg-bp-cap">Backups that test themselves.</p></div>
+   <div className="lg-bp-top"><Brand/><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p><p className="lg-bp-cap">Backups that test themselves.</p></div>
+   <Highlights/>
   </aside>
   <div className="lg-left"><header className="auth-header lg-head"><span className="lg-head-brand"><Brand/></span><ThemeToggle/></header>
    <main className="auth-main lg-formside"><div className="lg-col auth-card">{back}{children}</div></main>

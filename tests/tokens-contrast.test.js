@@ -73,6 +73,7 @@ add(['--dn-text-on-solid'], ['--dn-chrome-solid', '--dn-chrome-solid-hover'], T,
 // Chrome (blue) roles: nav current item, header accents, icon chips
 add(['--dn-chrome-text'], [...neutralBgs, '--dn-chrome-surface', '--dn-chrome-chip'], T, 'chrome-text');
 add(['--dn-brand-text'], ['--dn-brand-chip'], T, 'chrome-text');
+add(['--dn-brand-text-soft'], ['--dn-bg-selected', '--dn-brand-surface'], T, 'text');
 add(['--dn-text-primary'], ['--dn-chrome-surface'], T, 'chrome-text');
 add(['--dn-chrome-indicator'], ['--dn-bg-surface', '--dn-chrome-surface'], U, 'ui-state');
 for (const s of ['success', 'warning', 'danger', 'info'])
@@ -120,7 +121,7 @@ test('every v2 token pair meets its WCAG threshold in light and dark, for every 
 });
 
 test('the accent sets are complete: every accent defines the same tokens in light and dark', () => {
-  const names = vars => Object.keys(vars).filter(k => /^--dn-(brand|chrome)-\d+$|-step$|-ui$|^--dn-brand-logo$|^--dn-viz-[1-4]$|^--dn-viz-area$|^--dn-map-domain-fill$/.test(k)).sort();
+  const names = vars => Object.keys(vars).filter(k => /^--dn-(brand|chrome)-\d+$|-step$|-ui$|text-soft$|^--dn-brand-logo$|^--dn-viz-[1-4]$|^--dn-viz-area$|^--dn-map-domain-fill$/.test(k)).sort();
   const base = names({ ...light });
   assert.ok(base.length >= 24 + 6, 'teal defaults');
   for (const accent of ACCENTS.filter(x => x !== 'teal')) {
