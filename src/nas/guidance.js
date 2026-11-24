@@ -1,3 +1,4 @@
+import { GATED_KINDS } from './gate.js';
 // Connect-wizard text for NAS systems (ADR section 5). Plain strings only: the screens come in a later change.
 export const SYNOLOGY_RESET_HINT = 'Synology may have reset SSH after an update. Open Control Panel > Terminal & SNMP, make sure the SSH service is on, and check that your key is still in the user\'s authorized keys.';
 export const NAS_WIZARD = Object.freeze({
@@ -29,8 +30,8 @@ grep -qxF '${publicKey}' /root/.ssh/authorized_keys || printf '%s
 chmod 700 /root/.ssh
 chmod 600 /root/.ssh/authorized_keys`;
 }
-// The wizard text without Synology, which is shown only after an administrator opts in (src/nas/synology-gate.js).
-export const nasWizard = synology => (synology ? NAS_WIZARD : Object.freeze(Object.fromEntries(Object.entries(NAS_WIZARD).filter(([kind]) => kind !== 'synology'))));
+// The wizard text without a gated system, which is shown only after an administrator opts in (src/nas/gate.js).
+export const nasWizard = (gates = {}) => Object.freeze(Object.fromEntries(Object.entries(NAS_WIZARD).filter(([kind]) => !GATED_KINDS.includes(kind) || gates[kind])));
 // Only a Synology login failure gets the reset hint: it is a known cause there, not a guess for other systems.
 export function loginHint(server, error, { synology = false } = {}) {
   let kind = null;

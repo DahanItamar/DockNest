@@ -77,8 +77,8 @@ export const JOB_ENDINGS = ['worker-interrupted', 'helper-stopped'];
 export const SITE_KINDS = ['docker', 'static'];
 export const STORAGE_TYPES = ['local', 'sftp', 's3'];
 export const CONTAINER_BUCKETS = ['1', '2-5', '6-10', '>10'];
-// A non-identifying system tag: only 'synology' exists, so reports from Synology servers can be spotted.
-export const NAS_TAGS = ['synology'];
+// A non-identifying system tag: only the two early-access systems have one, so their reports can be spotted.
+export const NAS_TAGS = ['synology', 'unraid'];
 export const HELPER_OUTCOMES = ['timeout', 'failure', 'exit'];
 export const containerBucket = n => (Number.isInteger(n) && n >= 1 ? (n === 1 ? '1' : n <= 5 ? '2-5' : n <= 10 ? '6-10' : '>10') : null);
 const JOB_NAME = { backup: 'Backup', restore: 'Restore', scrub: 'Integrity check' };

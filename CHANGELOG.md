@@ -8,7 +8,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Added
 
-- Synology support is hidden until it can be tested on real hardware: a Synology server connects as a normal Linux server with Docker, with one plain info line. 3.0.0 NAS support is TrueNAS SCALE and Unraid. An early-access "Synology support" switch (off by default) is under Settings; problem reports from Synology servers carry a "synology" tag.
+- Unraid and Synology support are hidden until they can be tested on real hardware: such a server connects as a normal Linux server with Docker, with one plain info line. 3.0.0 NAS support is TrueNAS SCALE. Early-access "Unraid support" and "Synology support" switches (off by default, with a Beta tag) are under Settings; problem reports from those servers carry a "unraid" or "synology" tag.
 
 **Recovery**
 - Recovery time: DockNest now measures how long each app takes to come back, from its newest passed restore test (get the backup, restore data, start and check). Existing restore tests already count, so there is a number on day one. It shows under the last test on the dashboard ("Back in about 12 min, proven 3 days ago"), on the app panel in the Map with its three parts, and at the top of Restore tests with the recent tests. An old test is greyed and says "not recent"; after the backups grow a note says the number may be low.

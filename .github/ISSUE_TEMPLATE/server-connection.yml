@@ -30,8 +30,8 @@ body:
     id: nas
     attributes:
       label: System
-      description: "synology when the server is a Synology NAS. Filled in by DockNest."
-      placeholder: "synology"
+      description: "synology or unraid when the server is that NAS. Filled in by DockNest."
+      placeholder: "unraid"
     validations:
       required: false
   - type: input

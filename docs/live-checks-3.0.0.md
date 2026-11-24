@@ -18,7 +18,7 @@ called validated. A real backup or restore is not marked validated without a Lin
 
 - [ ] The runtime image is built for amd64 and loaded over SSH (`docker load`) on a NAS with no Python.
 - [x] TrueNAS SCALE 25.x lab: connect, discover apps, back up, restore test (see the 2026-11-24 results); 24.04 is refused with the Kubernetes message (unit tests only).
-- [ ] Unraid (needs a USB-stick test machine): connect, key persistence after reboot, template apps discovered, backup and restore.
+- [ ] Unraid (hidden in 3.0.0, early access under Settings; not tested): connect, key persistence after reboot, template apps discovered, backup and restore.
 - [ ] Unraid Compose Manager stacks are reported as unsupported, not half-backed-up.
 - [ ] Synology DSM (hidden in 3.0.0, early access under Settings): not tested; a Synology server connects as a normal Linux server with the plain info line.
 - [ ] A NAS user without passwordless sudo gets the one-line fix.
@@ -63,7 +63,7 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
 | WebDAV through rclone | skipped | The pinned rclone is linux/amd64 and only inside the image; this PC has no Docker daemon and no rclone, and downloading one was not done. |
 | Rootless Podman and rootless Docker | skipped: no VM | The only lab VM is the rootful TrueNAS one. Creating a Linux VM needs the owner's OK. |
 | Helper runtime image over `docker load` | skipped | The VM has Docker, but this PC cannot build the pinned amd64 image tar (no Docker), and TrueNAS has Python so it uses the host runtime. The Linux integration job covers the load path. |
-| Cloud drives, Unraid, Synology (hidden in 3.0.0), SMTP and PDF checks | not in scope | They need an account, a USB-stick machine or hardware. |
+| Cloud drives, Unraid and Synology (early access in 3.0.0), SMTP and PDF checks | not in scope | They need an account, a USB-stick machine or hardware. |
 
 ### Bugs found
 

@@ -1,6 +1,6 @@
 # NAS servers: helper runtime and sudo mode (backend)
 
-Backend building blocks for TrueNAS SCALE and Unraid. Synology DSM is built but hidden in 3.0.0 (see below). Nothing here changes a server that is not detected
+Backend building blocks for TrueNAS SCALE, Unraid and Synology DSM. In 3.0.0 NAS support is TrueNAS SCALE; Unraid and Synology are early access, off by default (see the last section). Nothing here changes a server that is not detected
 as a NAS: those keep the exact command and root identity DockNest has always used. The screens, discovery of NAS app
 managers and the connect wizard come in later changes.
 
@@ -71,12 +71,13 @@ Replacement restores (`replace` mode) are refused on every server, NAS included,
 
 Pool-aware staging for every helper operation through the container runtime, the Synology Docker path, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
 
-## Synology (hidden in 3.0.0)
+## Unraid and Synology (early access in 3.0.0)
 
-Synology DSM support is written but has never run on real hardware, so DockNest does not offer it. `SYNOLOGY_ENABLED` in `src/nas/synology-gate.js` is the default (false). While it is off:
+Unraid and Synology DSM support is written but has never run on real hardware, so DockNest does not offer it until an administrator turns it on. `NAS_DEFAULTS` in `src/nas/gate.js` holds the defaults (both false). While one is off:
 
-- A Synology server is not detected as a NAS. If it connects as root it is a normal Linux server with Docker. Readiness shows one line: "Synology support is coming in a later update. You can still connect it as a normal Linux server with Docker."
-- A non-root Synology user is refused with that line. Container Manager projects are never listed or backed up as projects.
-- The connect wizard, Map and Discover show no Synology option, label or text.
+- That system is not detected as a NAS. If it connects as root it is a normal Linux server with Docker. Readiness shows one line: "Unraid support is coming in a later update. You can still connect it as a normal Linux server with Docker." (same wording for Synology).
+- A non-root user on it is refused with that line. Templates, Compose Manager projects and Container Manager projects are never listed or backed up as such.
+- A server saved while the system was on goes back to the normal root identity at once: the setting is read live on every call, in the server and in the worker, so no restart is needed.
+- The connect wizard, Map and Discover show no option, label or text for it.
 
-An administrator can opt in under Settings > NAS servers > "Synology support" (Beta, off by default). The choice is stored as the `synology_enabled` setting (no row means off, so older installs need no migration). Problem reports from Synology servers carry the non-identifying `nas=synology` field. The unit tests force the gate on where they test Synology itself (`tests/nas-synology-gate.test.js` covers the gate-off path).
+An administrator turns each on under Settings > NAS servers: "Unraid support" or "Synology support" (each with a Beta tag, off by default). They are stored as the `unraid_enabled` and `synology_enabled` settings (no row means off, so older installs need no migration). Problem reports from these servers carry the non-identifying `nas=unraid` or `nas=synology` field. TrueNAS SCALE is not gated. `tests/nas-gates.test.js` covers the gate-off path; other Unraid and Synology tests force the gate on.
