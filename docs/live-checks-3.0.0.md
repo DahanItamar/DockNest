@@ -59,7 +59,7 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
 | TrueNAS lab: restore test | fail (could not run) | Bug 1. The step "Copy backup" failed; nothing was started on the lab NAS. |
 | TrueNAS lab: recovery time | not measured | No restore test passed, so the Recovery Guide has no measured time. Repeat after bug 1 is fixed. |
 | TrueNAS 24.04 refused with the Kubernetes message | skipped | Needs a 24.04 VM; covered by unit tests only. |
-| Local folder destination | pass for connect, backup, scrub; restore blocked by bug 1 | The same-disk warning (409, then accepted on request) and the folder-outside-`DOCKNEST_LOCAL_STORAGE` rule behaved as documented. The encrypted backup landed in the folder and verified. The restore planned from that folder as the main copy, but could not run because of bug 1. |
+| Local folder destination | pass for connect, backup, scrub; restore blocked by bug 1 | The same-disk warning (409, then accepted on request) behaved as documented. The encrypted backup landed in the folder and verified. The restore planned from that folder as the main copy, but could not run because of bug 1. |
 | WebDAV through rclone | skipped | The pinned rclone is linux/amd64 and only inside the image; this PC has no Docker daemon and no rclone, and downloading one was not done. |
 | Rootless Podman and rootless Docker | skipped: no VM | The only lab VM is the rootful TrueNAS one. Creating a Linux VM needs the owner's OK. |
 | Helper runtime image over `docker load` | skipped | The VM has Docker, but this PC cannot build the pinned amd64 image tar (no Docker), and TrueNAS has Python so it uses the host runtime. The Linux integration job covers the load path. |
@@ -83,5 +83,5 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
 
 ### Notes for the next run
 
-- Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema); a longer one answers 400.
+- Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema).
 - The lab fixture app must exit with code 0 on SIGTERM, or the clean shutdown check fails by design ("running, nonzero exit or OOM").
