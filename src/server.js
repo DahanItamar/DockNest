@@ -2,6 +2,7 @@ import {maintenanceDefaults,normalizeMaintenance} from '../shared/maintenance-de
 import express from 'express';
 import helmet from 'helmet';
 import { z, ZodError } from 'zod';
+import { runtimeSchema, runtimeRefusal, isRootfulDocker } from './runtime.js';
 import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -142,6 +143,8 @@ const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
     kind:z.enum(['docker','static']).default('docker'),
+    // Container engine of the app; missing means rootful Docker (docs/podman-rootless.md).
+    runtime: runtimeSchema.optional(),
     documentRoot:linuxPath.optional(),
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
     stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').refine(value => outsideSystemFolders(value.replace(/\/+$/, '')), 'Use a staging directory outside system folders such as /etc, /root or /usr/bin, for example /var/lib/docknest.').default('/var/lib/docknest'),
@@ -325,8 +328,16 @@ export function sqliteListProblem(next, saved) {
   }
   return '';
 }
+// A runtime is saved only when that server reported the engine; an app's engine is never changed or dropped by an edit.
+const serverCapabilities = server => { try { return JSON.parse(server.capabilities || '{}') || {}; } catch { return {}; } };
+const runtimeProblem = (runtime, server, saved) => {
+  if (!saved) return runtimeRefusal(runtime, serverCapabilities(server));
+  if (runtime === undefined || (isRootfulDocker(runtime) && isRootfulDocker(saved.runtime)) || JSON.stringify(runtime) === JSON.stringify(saved.runtime)) return '';
+  return 'An app keeps its container engine. Make a new app to use another engine.';
+};
 app.post('/api/sites', async (req, res) => {
-  const data = siteSchema.parse(req.body); getServer(data.serverId);
+  const data = siteSchema.parse(req.body), server = getServer(data.serverId);
+  { const problem = runtimeProblem(data.config.runtime, server); if (problem) return res.status(400).json({ error: problem }); }
   { const problem = sqliteListProblem(data.config.services, []); if (problem) return res.status(400).json({ error: problem }); } const siteId = id();
   const settings = normalizedSite(data, siteId);
   const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
@@ -340,8 +351,11 @@ app.post('/api/sites', async (req, res) => {
 // The current saved site: the failed-backup fix view reads it right before it changes a SQLite list.
 app.get('/api/sites/:id', (req, res) => res.json(getSite(req.params.id)));
 app.patch('/api/sites/:id', async (req, res) => {
-  const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
+  const site = getSite(req.params.id), data = siteSchema.parse(req.body), server = getServer(data.serverId);
   requireNotMoving(site.id);
+  { const savedConfig = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, problem = runtimeProblem(data.config.runtime, server, savedConfig || {});
+    if (problem) return res.status(400).json({ error: problem });
+    if (data.config.runtime === undefined && savedConfig?.runtime) data.config.runtime = savedConfig.runtime; }
   // The site form does not edit the SQLite check mode; keep the saved choice.
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;

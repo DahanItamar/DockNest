@@ -124,3 +124,8 @@ test('runtime: rootful Docker argv unchanged, rootless argv fixed, unknown ID ma
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for runtime verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('engine discovery: subuid users, real storage folders, owned sockets, tagged containers, and Podman or rootless apps refused by running operations',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_engines.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for engine verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

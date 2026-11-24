@@ -34,7 +34,8 @@ const now=()=>new Date().toISOString();
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
 // facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
 // other roles only read.
-export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
+// The engines a server reports are checked again here (rootless users control part of that answer): anything off-shape is dropped.
+export const testServer=async server=>{const result=takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));return {...result,engines:cleanEngines(result?.engines)};};
 // App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
 // configuration files of the apps on that server. The scans are recorded here and never returned.
 const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);}catch(error){console.error(`Key scan of an app could not be recorded: ${error.code??error.name}`);}};
@@ -42,6 +43,7 @@ const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);
 // its own work never reads as a change made outside DockNest.
 export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
 const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
+import { cleanEngines } from './runtime.js';
 export const discover=async(server,{record=false,scanKeys=false}={})=>{
   const apps=scanKeys?keyApps(server.id):[];
   // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
