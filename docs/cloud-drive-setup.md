@@ -45,6 +45,8 @@ about five minutes.
 
 DockNest only sees the files and folders it creates in your Drive, not the rest of it.
 
+Set up your own Google app before the first backup. Changing it later hides earlier backups from DockNest.
+
 ## OneDrive
 
 - Works with a personal Microsoft account and with a work or school account.

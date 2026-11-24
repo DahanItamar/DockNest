@@ -5,11 +5,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import net from 'node:net';
+import http from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 // The rclone binary is a fake (tests/fake-rclone.js): no network and no accounts.
 process.env.DOCKNEST_TEST_AUTH_PORT = String(await new Promise(resolvePort => { const probe = net.createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolvePort(port)); }); }));
+// A fake Google, Microsoft Graph and Dropbox API on one local port: no network, no accounts. `provider.account` is what they
+// report; null makes them answer 500.
+const provider = { account: 'fixture.user@example.invalid', calls: [] };
+const providerServer = http.createServer((request, response) => {
+  provider.calls.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+  if (!provider.account) { response.writeHead(500); return response.end('{}'); }
+  const answer = request.url.startsWith('/drive/v3/about') ? { user: { emailAddress: provider.account, displayName: 'Fixture User' } }
+    : request.url.startsWith('/v1.0/me/drive') ? { owner: { user: { email: provider.account, displayName: 'Fixture User' } } }
+      : request.url.startsWith('/2/users/get_current_account') ? { email: provider.account, name: { display_name: 'Fixture User' } }
+        : request.url.startsWith('/drive/v3/files/root') ? { id: '0AFixtureRootFolderId_123' } : null;
+  response.writeHead(answer ? 200 : 404, { 'content-type': 'application/json' });
+  response.end(JSON.stringify(answer ?? {}));
+});
+await new Promise(resolveListen => providerServer.listen(0, '127.0.0.1', resolveListen));
+after(() => providerServer.close());
+const providerUrl = 'http://127.0.0.1:' + providerServer.address().port;
+Object.assign(process.env, { DOCKNEST_TEST_GOOGLE_URL: providerUrl, DOCKNEST_TEST_GRAPH_URL: providerUrl, DOCKNEST_TEST_DROPBOX_URL: providerUrl });
 const root = await mkdtemp(join(tmpdir(), 'docknest-rclone-')), fakeDir = join(root, 'fake');
 await (await import('node:fs/promises')).mkdir(fakeDir);
 await copyFile(new URL('./fake-rclone.js', import.meta.url), join(fakeDir, 'rclone.js'));
@@ -469,8 +487,23 @@ test('Google sign-in asks rclone for drive.file only, and other providers set no
   assert.ok(!authorize.some(item => item.args.some(arg => /scope/i.test(arg))), 'no scope on the command line');
   await control({});
 });
-test('the account is read from rclone whatever the case of its keys, and shown masked after Reconnect and on the paste answer', async () => {
-  await control({ userinfo: { Email: 'Cap.User@example.invalid', Name: 'Cap User' } });
+test('the account comes from the provider with the stored token, masked on every answer, and a failure leaves it empty', async () => {
+  provider.account = 'Cap.User@example.invalid'; provider.calls.length = 0;
+  for (const backend of ['drive', 'onedrive', 'dropbox']) {
+    const found = await rclone.account({ ...options(backend), secrets: { token: TOKEN } });
+    assert.equal(found, 'Cap.User@example.invalid', backend);
+    assert.equal(maskAccount(found), 'C***@e***.invalid');
+  }
+  assert.deepEqual(provider.calls.map(item => item.method), ['GET', 'GET', 'POST']);
+  assert.ok(provider.calls.every(item => item.authorization === 'Bearer ' + TOKEN.access_token));
+  assert.equal(await rclone.account({ ...options('webdav'), secrets: {} }), null, 'only token providers ask');
+  provider.account = null;
+  assert.equal(await rclone.account({ ...options('drive'), secrets: { token: TOKEN } }), null, 'a provider error is a null, never a failure');
+  assert.equal(await rclone.account({ ...options('drive'), secrets: {} }), null, 'no token, no request');
+  provider.account = 'fixture.user@example.invalid';
+});
+test('the account is shown masked on the paste answer and after Reconnect', async () => {
+  provider.account = 'Cap.User@example.invalid';
   const targetId = seedDrive({ settings: { account: undefined } });
   db.prepare("UPDATE storage_targets SET status='needs_reconnect' WHERE id=?").run(targetId);
   const started = await (await post('/storage-targets/rclone/authorize', { backend: 'drive', flow: 'token' })).json();
@@ -481,10 +514,64 @@ test('the account is read from rclone whatever the case of its keys, and shown m
   const view = await (await post('/storage-targets/' + targetId + '/reconnect', { sessionId: started.sessionId })).json();
   assert.equal(view.account, 'C***@e***.invalid');
   assert.equal(JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(targetId).settings).account, 'Cap.User@example.invalid');
-  // Other key spellings rclone uses.
-  for (const [info, expected] of [[{ user: 'plainname' }, 'pl***'], [{ display_name: 'Pat Doe' }, 'Pa***'], [{ Name: 'Dropbox Person' }, 'Dr***']]) {
-    await control({ userinfo: info });
-    assert.equal(maskAccount(await rclone.account(options('dropbox'))), expected, JSON.stringify(info));
-  }
+  provider.account = 'fixture.user@example.invalid';
+});
+test('an existing destination without an account learns it after a passing Test and after its first operation', async () => {
+  provider.account = 'Late.User@example.invalid';
+  const settingsOfTarget = id => JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(id).settings);
+  const viaTest = seedDrive({ settings: { account: undefined } });
+  assert.equal((await post('/storage-targets/' + viaTest + '/test', {})).status, 200);
+  for (let attempt = 0; attempt < 50 && !settingsOfTarget(viaTest).account; attempt++) await new Promise(resolveWait => setTimeout(resolveWait, 50));
+  assert.equal(settingsOfTarget(viaTest).account, 'Late.User@example.invalid');
+  const viaOperation = seedDrive({ settings: { account: undefined } });
+  await rclone.statFile(storage.targetOptions(viaOperation), '/docknest').catch(() => {});
+  for (let attempt = 0; attempt < 50 && !settingsOfTarget(viaOperation).account; attempt++) await new Promise(resolveWait => setTimeout(resolveWait, 50));
+  assert.equal(settingsOfTarget(viaOperation).account, 'Late.User@example.invalid');
+  // A failing provider never fails the Test.
+  provider.account = null;
+  const quiet = seedDrive({ settings: { account: undefined } });
+  assert.equal((await post('/storage-targets/' + quiet + '/test', {})).status, 200);
+  provider.account = 'fixture.user@example.invalid';
+});
+test('changing the Google app on a destination with backups needs a confirmation and keeps the sign-in open', async () => {
+  db.prepare('DELETE FROM rate_limits').run(); // this file makes many sign-in and connect calls from one address
+  const signIn = async (clientId) => {
+    const started = await (await post('/storage-targets/rclone/authorize', { backend: 'drive', flow: 'token', ...(clientId ? { clientId, clientSecret: 'new-client-secret-9' } : {}) })).json();
+    await post('/storage-targets/rclone/authorize/' + started.sessionId, { pasted: JSON.stringify(TOKEN) });
+    return started.sessionId;
+  };
+  const make = () => { const id = seedDrive({ secrets: { token: TOKEN, clientId: 'old-client-id-1234', clientSecret: 'old-client-secret' } }); db.prepare("UPDATE storage_targets SET status='needs_reconnect' WHERE id=?").run(id); return id; };
+  // Backups on it: the answer is a 409 that names the consequence, and the same sign-in works for the retry.
+  const kept = make();
+  db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES('fixture-backup',?,?,'verified',0,?,?)").run(kept, 'rclone:' + kept + ':/docknest/x.enc', at, at);
+  const sessionId = await signIn('new-client-id-5678');
+  const refused = await post('/storage-targets/' + kept + '/reconnect', { sessionId });
+  assert.equal(refused.status, 409);
+  const body = await refused.json();
+  assert.equal(body.code, 'client_changed');
+  assert.equal(body.error, 'Earlier backups on this destination will no longer be visible to DockNest.');
+  assert.equal(db.prepare('SELECT status FROM storage_targets WHERE id=?').get(kept).status, 'needs_reconnect', 'nothing changed');
+  assert.equal((await post('/storage-targets/' + kept + '/reconnect', { sessionId, confirmHidden: true })).status, 200);
+  // The same Google app again (or none changed) needs no confirmation.
+  const same = make();
+  db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES('fixture-backup-2',?,?,'verified',0,?,?)").run(same, 'rclone:' + same + ':/docknest/y.enc', at, at);
+  const again = await (await post('/storage-targets/rclone/authorize', { backend: 'drive', flow: 'token', clientId: 'old-client-id-1234', clientSecret: 'old-client-secret' })).json();
+  await post('/storage-targets/rclone/authorize/' + again.sessionId, { pasted: JSON.stringify(TOKEN) });
+  assert.equal((await post('/storage-targets/' + same + '/reconnect', { sessionId: again.sessionId })).status, 200);
+});
+test('a Google Drive file that is not found is not damage: the scrub says it was uploaded by another app', async () => {
+  const { classify, notVisibleOnProvider, NOT_VISIBLE_MESSAGE } = await import('../src/storage/rclone-errors.js');
+  const info = classify('error: object not found', 3, 'drive');
+  assert.equal(info.reason, 'not_found');
+  assert.match(info.message, /different Google app or access level/);
+  assert.equal(NOT_VISIBLE_MESSAGE, "This backup was uploaded by a different Google app or access level, so DockNest can't see it.");
+  assert.doesNotMatch(NOT_VISIBLE_MESSAGE + info.message, /integrity|corrupt|damaged/i);
+  await control({ fail: [{ cmd: 'cat', stderr: 'error: object not found', code: 3 }, { cmd: 'lsjson', stderr: 'error: object not found', code: 3 }] });
+  const targetId = seedDrive();
+  const error = await rclone.statFile(storage.targetOptions(targetId), '/docknest/missing.enc').catch(failure => failure);
+  assert.equal(error.reason, 'not_found'); assert.equal(error.backend, 'drive');
+  assert.equal(notVisibleOnProvider(error), true);
+  assert.equal(notVisibleOnProvider({ reason: 'not_found', backend: 'webdav' }), false, 'only Google Drive hides files this way');
+  assert.equal(notVisibleOnProvider(Object.assign(new Error('x'), { code: 'ENOENT' })), false, 'a local missing file is still a problem');
   await control({});
 });

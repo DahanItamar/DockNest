@@ -9,6 +9,7 @@ import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } fr
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
 import { fetchRootFolderId } from './storage/drive-root.js';
+import { fetchAccount } from './storage/account-info.js';
 import { loadSecrets, saveSettings, settingsOf } from './storage/rclone-state.js';
 import { rcloneRoutes, rcloneView, folderView } from './storage-rclone-routes.js';
 
@@ -198,8 +199,13 @@ function startProbe(targetId,actor){
 // A Google Drive destination made before the root folder was kept asks once, after its first passing test.
 async function rememberRoot(targetId){
  try{
-  const settings=settingsOf(targetId);if(settings?.backend!=='drive'||settings.rootFolderId)return;
-  const id=await fetchRootFolderId(loadSecrets(targetId)?.token?.access_token);
+  const settings=settingsOf(targetId);if(!settings)return;
+  // The account name is asked again after every passing test, so a destination made before it was kept (or after the
+  // owner changed accounts) shows the right one.
+  const secrets=loadSecrets(targetId),found=await fetchAccount(settings.backend,secrets?.token?.access_token);
+  if(found&&found!==settings.account)saveSettings(targetId,{account:found});
+  if(settings.backend!=='drive'||settings.rootFolderId)return;
+  const id=await fetchRootFolderId(secrets?.token?.access_token);
   if(id)saveSettings(targetId,{rootFolderId:id});
  }catch{/* best effort: rclone still works without it */}
 }
