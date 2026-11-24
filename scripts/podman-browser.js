@@ -72,12 +72,14 @@ async function discover(scheme,width){
  await shop.getByText('One app, one engine').waitFor();
  await shop.getByText("shop's containers run in two engines. Make two apps.").waitFor();
  assert.equal(await shop.getByRole('button',{name:'Select app shop'}).isDisabled(),true);
+ await shot(page,`P1-engines-discover-${width}-${scheme}`);
+ await d.getByRole('textbox',{name:/Find an app/}).fill('queue');
  // Another engine is named on its card; selecting it keeps its engine for the saved app.
  const queue=d.getByRole('region',{name:'queue'});
  await queue.getByText('Podman rootless, user svc').first().waitFor();
  await queue.getByRole('button',{name:'Select app queue'}).click();
  await d.getByText('2 services included: queue-svc, queue-db').waitFor();
- await shot(page,`P1-engines-discover-${width}-${scheme}`);
+ await shot(page,`P1b-engine-selected-${width}-${scheme}`);
  await noOverflow(page,'discover '+width);await noEmoji(page,'discover');
  assert.deepEqual(offOrigin,[]);
  await context.close();
@@ -127,7 +129,7 @@ async function podmanOnly(scheme,width){
  await context.close();
 }
 
-browser=await chromium.launch();
+browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{});
 try{
  for(const scheme of ['light','dark'])for(const width of [1280,390]){await discover(scheme,width);await apps(scheme,width);await refusal(scheme,width);await podmanOnly(scheme,width);}
 }finally{await browser.close();}
