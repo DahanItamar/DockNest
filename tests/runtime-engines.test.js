@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker, cleanDiscovered, hasForeignRuntime, manifestRuntime, restoreRuntimeProblem } from '../src/runtime.js';
+import { runtimeSchema, cleanEngines, runtimeRefusal, appRuntime, isRootfulDocker, cleanDiscovered, cleanEngineErrors, hasForeignRuntime, manifestRuntime, restoreRuntimeProblem } from '../src/runtime.js';
 // The container engine of an app (docs/podman-rootless.md): saved only when the server reported it, never changed by an edit.
 const alice = { engine: 'podman', rootless: true, user: 'alice', uid: 1001 };
 const reported = [{ engine: 'docker', rootless: false, version: '28.0.1', cgroupDelegated: true }, { ...alice, version: '5.2.1', cgroupDelegated: false }];
@@ -180,6 +180,15 @@ test('move preflight: engine kinds, reported target engine, privileged ports, li
 test('server cleanup knows the Podman and rootless kinds', async () => {
   const { CLEANUP_KINDS } = await import('../src/server-cleanup.js');
   for (const kind of ['containers', 'images', 'volumes', 'buildCache', 'runtimeData', 'runtimeContainers']) assert.ok(CLEANUP_KINDS.includes(kind), kind);
+});
+
+test('engines whose container list failed are reported with a fixed reason, only for reported engines', () => {
+  const caps = { engines: reported };
+  assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'failed' }]);
+  for (const bad of [{ runtime: alice, reason: 'the engine said secret things' }, { runtime: { ...alice, uid: 1003 }, reason: 'failed' }, { runtime: { engine: 'docker', rootless: false }, reason: 'failed' }, { runtime: 'x', reason: 'failed' }, null, 5])
+    assert.deepEqual(cleanEngineErrors([bad], caps), [], JSON.stringify(bad));
+  assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'timeout' }, { runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'timeout' }], 'one entry per engine');
+  assert.deepEqual(cleanEngineErrors('x', caps), []); assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], {}), []);
 });
 
 test.after(() => http.close());

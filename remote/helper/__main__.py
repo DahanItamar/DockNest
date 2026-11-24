@@ -153,8 +153,9 @@ def main(req):
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs);managers=stack_managers(cs)
         engines=engine_probe();homes=engine_homes()
-        foreign=other_engine_containers(engines,homes)
-        emit(result=attach_nas({**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)},cs))
+        engine_errors=[]
+        foreign=other_engine_containers(engines,homes,engine_errors)
+        emit(result=attach_nas({**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'engineErrors':engine_errors,'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)},cs))
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='nas-template-restore':nas_template_restore(req)
     elif op=='stage-read':stage_read(req)
