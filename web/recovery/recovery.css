@@ -14,7 +14,7 @@
 .rec-note svg{flex:none;margin-top:2px}.rec-note p{margin:2px 0 0}
 .rec-card{display:grid;gap:var(--edge)}
 .rec-headline{display:flex;align-items:center;gap:var(--spacing);margin:0;font-size:var(--dn-text-xl);font-weight:var(--dn-weight-medium)}
-.rec-headline svg{color:var(--link)}
+.rec-headline{color:var(--dn-text-primary)}.rec-headline svg{color:var(--link)}
 .rec-from{margin:0}
 .rec-recent{width:100%;border:1px solid var(--border-subtle);border-radius:var(--dn-radius-md);border-collapse:separate;border-spacing:0;overflow:hidden}
 .rec-recent th{font-weight:400;font-size:var(--dn-text-sm);color:var(--text-muted);text-align:left;padding:var(--spacing) var(--edge);background:var(--surface-muted)}

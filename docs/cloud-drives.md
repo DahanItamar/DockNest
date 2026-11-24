@@ -4,7 +4,11 @@ DockNest 3.0.0 can keep backups on Google Drive, OneDrive, Dropbox, a WebDAV ser
 SMB share. The transport is a bundled [rclone](https://rclone.org). DockNest encrypts every package before it reaches
 rclone, so rclone only ever moves ciphertext; rclone's own `crypt`, daemon and mount are not used.
 
-This page covers the backend. The screens follow in a later change.
+This page covers the backend and the screens.
+
+## The screens
+
+Storage, **Add storage destination**: the provider list has the groups Cloud drives (Google Drive, OneDrive, Dropbox) and Network and local (WebDAV, SMB share, Local folder) after SFTP and S3, with each provider's own Tabler mark where one exists. For a cloud drive the dialog shows the two steps: open the sign-in link, then paste the address that failed to load. Two quiet links switch to a token pasted from rclone, or to your own app ID. OneDrive asks which drive when the account has more than one. The card shows the masked account, the folder, "Append-only: Not available on Google Drive", the trash note and the space DockNest uses. When the token stops working the card says **Needs sign-in**, a red panel says backups are paused, and **Reconnect** is the card's main button; it replaces only the token. The Map shows the same icon on the storage node. A local folder shows the compose lines to copy and stays off until a folder path is entered.
 
 ## How it works
 
