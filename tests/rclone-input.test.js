@@ -8,11 +8,32 @@ import { RCLONE_VERSION } from '../src/storage/rclone-pin.js';
 const STATE = 'AbCdEf12_-xyz789', CODE = '4/0AfakeCodeForTests-1234567890';
 const address = (query, base = 'http://127.0.0.1:53682/') => base + '?' + query;
 
-test('the pasted address is accepted only for 127.0.0.1:53682 with the issued state', () => {
+// Synthetic codes shaped like a personal Microsoft account's: long, with ! * $ in them (not real codes).
+const MSA_CODE = 'M.C543_BAY.2.U.' + 'a1B2c3D4-e5F6!g7H8*i9J0$k1L2'.repeat(24) + '!*$';
+test('localhost is accepted next to 127.0.0.1, with the same port and path', () => {
+  for (const base of ['http://localhost:53682/', 'http://localhost:53682', 'http://LOCALHOST:53682/', 'http://127.0.0.1:53682/']) {
+    assert.deepEqual(parsePastedAddress(address('state=' + STATE + '&code=' + CODE, base), STATE), { code: CODE, state: STATE }, base);
+  }
+});
+test('a personal Microsoft account code with ! * $ and a long body is accepted, a hostile one is not', () => {
+  assert.ok(MSA_CODE.length > 600 && MSA_CODE.length < 2048);
+  const encoded = encodeURIComponent(MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=' + MSA_CODE + '&state=' + STATE, 'http://localhost:53682/'), STATE).code, MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=' + encoded + '&state=' + STATE), STATE).code, MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=Mabc!*$def12&state=' + STATE), STATE).code, 'Mabc!*$def12');
+  for (const hostile of ['abcd efgh', 'abcd\nefgh', 'abcdefgh<script>', 'abcdefgh"x', "abcdefgh'x", 'abcdefgh(x)', 'abcdefgh;x', 'abc', 'a'.repeat(2049)]) {
+    assert.throws(() => parsePastedAddress(address('code=' + encodeURIComponent(hostile) + '&state=' + STATE), STATE), /sign-in code/, hostile.slice(0, 20));
+  }
+});
+test('the pasted address is accepted only for 127.0.0.1:53682 (or localhost) with the issued state', () => {
   assert.deepEqual(parsePastedAddress(address(`state=${STATE}&code=${CODE}`), STATE), { code: CODE, state: STATE });
   assert.deepEqual(parsePastedAddress(`  ${address(`state=${STATE}&code=${CODE}&scope=email%20profile&authuser=0`)}  `, STATE).state, STATE);
   const bad = {
-    'wrong host': address(`state=${STATE}&code=${CODE}`, 'http://localhost:53682/'),
+    'localhost on another port': address(`state=${STATE}&code=${CODE}`, 'http://localhost:8080/'),
+    'localhost lookalike': address(`state=${STATE}&code=${CODE}`, 'http://localhost.evil.example.invalid:53682/'),
+    'localhost over https': address(`state=${STATE}&code=${CODE}`, 'https://localhost:53682/'),
+    'localhost other path': address(`state=${STATE}&code=${CODE}`, 'http://localhost:53682/auth'),
+    'other loopback name': address(`state=${STATE}&code=${CODE}`, 'http://[::1]:53682/'),
     'other host': address(`state=${STATE}&code=${CODE}`, 'http://evil.example.invalid:53682/'),
     'dns lookalike': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1.evil.example.invalid:53682/'),
     'wrong port': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1:8080/'),

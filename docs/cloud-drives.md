@@ -40,10 +40,10 @@ Storage, **Add storage destination**: the provider list has the groups Cloud dri
    container and returns the provider's sign-in address. Only one address sign-in can be open; it ends after 10 minutes.
 2. The owner signs in in their own browser. The provider redirects to `http://127.0.0.1:53682/...`, which does not open on
    their computer. They copy that address and paste it:
-   `POST /api/storage-targets/rclone/authorize/:sessionId { pasted }`. DockNest accepts only host `127.0.0.1`, port `53682`,
+   `POST /api/storage-targets/rclone/authorize/:sessionId { pasted }`. DockNest accepts only host `127.0.0.1` or `localhost` (Microsoft and Dropbox use the second), port `53682`,
    path `/`, no credentials or fragment, the issued `state`, and `code` and `state` once each (a provider's `scope`,
    `authuser` and `prompt` are read and ignored). It builds the request itself from `code` and `state`, sends it to the
-   local listener and keeps the resulting token, sealed, in memory for the session.
+   local listener (always at `127.0.0.1`, whichever name was pasted) and keeps the resulting token, sealed, in memory for the session.
 3. Alternatively `flow: "token"`: paste the JSON that `rclone authorize "drive"` printed on the owner's computer. Only
    `access_token`, `token_type`, `refresh_token`, `expiry` (and a numeric `expires_in`) are accepted.
 4. The owner's own app (client ID and secret, strongly recommended for Google Drive: the shared sign-in app has one request limit for everyone, so Google answers `rateLimitExceeded` and a test can take minutes; DockNest then says "Google is limiting the shared sign-in app. Use your own Google app ID for steady speed.") goes to the helper through its environment.

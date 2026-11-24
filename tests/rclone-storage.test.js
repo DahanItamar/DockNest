@@ -22,6 +22,7 @@ const { app } = await import('../src/server.js');
 const { db, id } = await import('../src/db.js');
 const { seal, open, digest } = await import('../src/crypto.js');
 const rclone = await import('../src/storage/rclone.js');
+const { maskAccount } = await import('../src/storage-rclone-routes.js');
 const oauth = await import('../src/storage/rclone-oauth.js');
 const storage = await import('../src/storage.js');
 const { messageFor, templateFor } = await import('../src/alerts/events.js');
@@ -449,4 +450,41 @@ test('the Google root folder ID reaches the temporary config only when it has th
   const other = seedDrive({ settings: { rootFolderId: 'bad id with spaces' } });
   assert.equal((await post(`/storage-targets/${other}/test`, {})).status, 200);
   assert.ok((await calls()).every(item => item.confRoot === null), 'a malformed ID is never written');
+});
+
+test('Google sign-in asks rclone for drive.file only, and other providers set no Google scope', async () => {
+  await control({});
+  await resetCalls();
+  for (const backend of ['drive', 'onedrive']) {
+    await control(backend === 'onedrive' ? { authLocation: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=x' } : {});
+    const started = await post('/storage-targets/rclone/authorize', { backend });
+    assert.equal(started.status, 201, backend);
+    await call('DELETE', '/storage-targets/rclone/authorize/' + (await started.json()).sessionId);
+    await new Promise(resolveWait => setTimeout(resolveWait, 400)); // the stopped helper lets go of its port
+  }
+  const authorize = (await calls()).filter(item => item.command === 'authorize');
+  assert.equal(authorize.length, 2);
+  assert.equal(authorize[0].envValues.RCLONE_DRIVE_SCOPE, 'drive.file');
+  assert.ok(!('RCLONE_DRIVE_SCOPE' in authorize[1].envValues));
+  assert.ok(!authorize.some(item => item.args.some(arg => /scope/i.test(arg))), 'no scope on the command line');
+  await control({});
+});
+test('the account is read from rclone whatever the case of its keys, and shown masked after Reconnect and on the paste answer', async () => {
+  await control({ userinfo: { Email: 'Cap.User@example.invalid', Name: 'Cap User' } });
+  const targetId = seedDrive({ settings: { account: undefined } });
+  db.prepare("UPDATE storage_targets SET status='needs_reconnect' WHERE id=?").run(targetId);
+  const started = await (await post('/storage-targets/rclone/authorize', { backend: 'drive', flow: 'token' })).json();
+  const pasted = await post('/storage-targets/rclone/authorize/' + started.sessionId, { pasted: JSON.stringify(TOKEN) });
+  const body = await pasted.text();
+  assert.equal(JSON.parse(body).account, 'C***@e***.invalid');
+  assert.ok(!body.includes('Cap.User'));
+  const view = await (await post('/storage-targets/' + targetId + '/reconnect', { sessionId: started.sessionId })).json();
+  assert.equal(view.account, 'C***@e***.invalid');
+  assert.equal(JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(targetId).settings).account, 'Cap.User@example.invalid');
+  // Other key spellings rclone uses.
+  for (const [info, expected] of [[{ user: 'plainname' }, 'pl***'], [{ display_name: 'Pat Doe' }, 'Pa***'], [{ Name: 'Dropbox Person' }, 'Dr***']]) {
+    await control({ userinfo: info });
+    assert.equal(maskAccount(await rclone.account(options('dropbox'))), expected, JSON.stringify(info));
+  }
+  await control({});
 });

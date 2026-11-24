@@ -4,11 +4,14 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const AUTH_HOST = '127.0.0.1';
 export const AUTH_PORT = '53682';
+// Microsoft and Dropbox redirect to `localhost`; the same port. DockNest rebuilds the request itself and sends it to AUTH_HOST only.
+const ADDRESS_HOSTS = new Set([AUTH_HOST, 'localhost']);
 const fail = message => Object.assign(new Error(message), { status: 400, expose: true, publicCode: 'invalid_paste' });
 
 // Parameters a provider may add to the redirect next to `code` and `state`. They are read and ignored, never forwarded.
 const IGNORED_PARAMS = new Set(['scope', 'authuser', 'prompt', 'hd', 'session_state', 'iss']);
-const CODE = /^[A-Za-z0-9._~+/=%-]{8,2048}$/;
+// Personal Microsoft account codes also hold ! * $ and run to about 700 characters; the whole paste stays under 4096.
+const CODE = /^[A-Za-z0-9._~+/=%!*$-]{8,2048}$/;
 const STATE = /^[A-Za-z0-9_-]{8,128}$/;
 export const issuedState = value => typeof value === 'string' && STATE.test(value);
 
@@ -19,8 +22,8 @@ export function parsePastedAddress(text, expectedState) {
   if (!raw || raw.length > 4096 || /[\s\u0000-\u001f\u007f]/.test(raw)) throw fail('Paste the whole address from your browser bar, on one line.');
   let url;
   try { url = new URL(raw); } catch { throw fail('That is not an address. Paste the whole address from your browser bar.'); }
-  if (url.protocol !== 'http:' || url.hostname !== AUTH_HOST || url.port !== AUTH_PORT || url.username || url.password || url.hash || raw.includes('#') || !['', '/'].includes(url.pathname)) {
-    throw fail('That address is not the one the sign-in ended on. It must start with http://127.0.0.1:53682/');
+  if (url.protocol !== 'http:' || !ADDRESS_HOSTS.has(url.hostname) || url.port !== AUTH_PORT || url.username || url.password || url.hash || raw.includes('#') || !['', '/'].includes(url.pathname)) {
+    throw fail('That address is not the one the sign-in ended on. It must start with http://127.0.0.1:53682/ or http://localhost:53682/');
   }
   const seen = new Map();
   for (const [name, value] of url.searchParams) {

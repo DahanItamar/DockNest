@@ -85,6 +85,8 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
       await writeFile(empty, '', { mode: 0o600 });
       const env = childEnvironment(session.folder);
       if (LISTEN_PORT !== AUTH_PORT) env.DOCKNEST_TEST_AUTH_PORT = LISTEN_PORT;
+      // DockNest only touches files it created: Google Drive is asked for `drive.file`, never the full `drive` scope.
+      if (backend === 'drive') env.RCLONE_DRIVE_SCOPE = 'drive.file';
       if (session.client) { env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_ID`] = client.clientId; env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_SECRET`] = client.clientSecret; }
       const { cmd, args } = command(['authorize', backend, '--auth-no-open-browser', '--config', empty, '--ask-password=false', '--log-level', 'NOTICE']);
       session.child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true });

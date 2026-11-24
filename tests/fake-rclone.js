@@ -84,7 +84,7 @@ switch (command) {
   case 'mkdir': fs.mkdirSync(remoteFile(positional[1]), { recursive: true }); break;
   case 'rmdir': { const target = remoteFile(positional[1]); if (!fs.existsSync(target)) fail('error: directory not found', 3); fs.rmdirSync(target); break; }
   case 'about': if (!control().about) fail('about not supported by this backend', 1); process.stdout.write(JSON.stringify(control().about)); break;
-  case 'config userinfo': process.stdout.write(JSON.stringify({ email: 'fake.user@example.invalid' })); break;
+  case 'config userinfo': process.stdout.write(JSON.stringify(control().userinfo ?? { email: 'fake.user@example.invalid' })); break;
   case 'backend drives': process.stdout.write(JSON.stringify([{ id: 'drive-fixture-1', name: 'Fixture drive', driveType: 'personal' }])); break;
   case 'authorize': {
     const state = randomBytes(12).toString('base64url');

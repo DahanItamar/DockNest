@@ -345,7 +345,9 @@ export async function capacity(options, { maxAgeMs = 0, managedBytes = 0 } = {})
 export async function account(options) {
   try {
     const data = JSON.parse(await run(options, ['config', 'userinfo', '--json', REMOTE + ':']));
-    const value = data.email ?? data.user ?? data.name ?? data.display_name ?? null;
+    // rclone prints capitalised keys for some providers (Email, Name, User): match them without regard to case.
+    const lower = Object.fromEntries(Object.entries(data && typeof data === 'object' ? data : {}).map(([key, item]) => [key.toLowerCase().replace(/[^a-z]/g, ''), item]));
+    const value = lower.email ?? lower.user ?? lower.name ?? lower.displayname ?? null;
     return typeof value === 'string' && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
   } catch { return null; }
 }
