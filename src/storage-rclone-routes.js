@@ -78,7 +78,7 @@ rcloneRoutes.post('/rclone/authorize/:sessionId', requireRecentAuth, rateLimit('
   const taken = oauth.take({ sessionId: req.params.sessionId, userId: req.user.id });
   const secrets = { token: taken.token, ...(taken.client ?? {}) };
   const account = await rclone.account({ id: 'session-' + req.params.sessionId.slice(0, 8), mode: 'rclone', backend: taken.backend, settings: {}, persist: false, secrets });
-  res.json({ backend: done.backend, account, tokenExpiresAt: done.tokenExpiresAt });
+  res.json({ backend: done.backend, account: maskAccount(account), tokenExpiresAt: done.tokenExpiresAt });
 });
 rcloneRoutes.get('/rclone/authorize/:sessionId/drives', rateLimit('rclone-paste', 40), async (req, res) => {
   const taken = oauth.take({ sessionId: req.params.sessionId, userId: req.user.id, backend: 'onedrive' });

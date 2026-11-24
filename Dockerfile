@@ -21,7 +21,7 @@ FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054f
 LABEL io.github.dahanitamar.docknest=app
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data NODE_OPTIONS=--no-addons
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/* && mkdir -p /data && chown node:node /data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/* && mkdir -p /data && chown node:node /data
 COPY --from=rclone /out/ /usr/local/bin/
 COPY --from=build --chown=node:node /app/package*.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

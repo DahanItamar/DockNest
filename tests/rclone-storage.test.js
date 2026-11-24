@@ -254,6 +254,8 @@ test('sign-in A: the pasted address is checked, rebuilt from code and state and 
   const body = await done.text();
   assert.deepEqual(Object.keys(JSON.parse(body)).sort(), ['account', 'backend', 'tokenExpiresAt']);
   assert.ok(!body.includes('issued-access') && !body.includes('issued-refresh'));
+  assert.equal(JSON.parse(body).account, 'f***@e***.invalid', 'the account is masked on the sign-in answer too');
+  assert.ok(!body.includes('fake.user'));
   const forwarded = (await readFile(join(fakeDir, 'auth-requests.jsonl'), 'utf8')).trim().split('\n');
   assert.deepEqual(forwarded, ['/?state=' + state + '&code=fixture-code-12345'], 'only code and state are forwarded');
   assert.equal(oauth.sessionCount(), 1);

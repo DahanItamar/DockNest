@@ -96,7 +96,9 @@ switch (command) {
       process.stdout.write('Paste the following into your remote machine --->\n' + JSON.stringify({ access_token: 'issued-access-' + randomBytes(4).toString('hex'), token_type: 'Bearer', refresh_token: 'issued-refresh-' + randomBytes(4).toString('hex'), expiry: '2031-01-01T00:00:00Z' }) + '\n<---End paste\n');
       server.close(); setTimeout(() => process.exit(0), 50);
     });
-    server.listen(53682, '127.0.0.1', () => process.stderr.write(`NOTICE: Make sure your Redirect URL is set to "http://127.0.0.1:53682/" in your custom config.\nIf your browser doesn't open automatically go to the following link: http://127.0.0.1:53682/auth?state=${state}\nLog in and authorize rclone for access\nWaiting for code...\n`));
+    // Like the real rclone, the link is a NOTICE line: it is hidden when the log level is ERROR or CRITICAL.
+    const quiet = ['ERROR', 'CRITICAL'].includes(String(flags['--log-level'] ?? 'NOTICE').toUpperCase());
+    server.listen(53682, '127.0.0.1', () => !quiet && process.stderr.write(`NOTICE: Make sure your Redirect URL is set to "http://127.0.0.1:53682/" in your custom config.\nIf your browser doesn't open automatically go to the following link: http://127.0.0.1:53682/auth?state=${state}\nLog in and authorize rclone for access\nWaiting for code...\n`));
     await new Promise(() => {});
     break;
   }

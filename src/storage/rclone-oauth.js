@@ -6,6 +6,7 @@
 //     `state` only, and sends it to the loopback listener. The listener lives at most 10 minutes.
 //  B. Token: the JSON `rclone authorize` printed on the owner's own computer, parsed strictly.
 //  C. The owner's own client ID and secret, passed to the authorize process through its environment, never its arguments.
+// The sign-in link is printed at NOTICE level, so the helper must not run quieter; its output is only matched, never logged.
 // Pending tokens stay in memory, sealed with the master key, for the session only.
 import http from 'node:http';
 import path from 'node:path';
@@ -81,7 +82,7 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
       await writeFile(empty, '', { mode: 0o600 });
       const env = childEnvironment(session.folder);
       if (session.client) { env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_ID`] = client.clientId; env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_SECRET`] = client.clientSecret; }
-      const { cmd, args } = command(['authorize', backend, '--auth-no-open-browser', '--config', empty, '--ask-password=false', '--log-level', 'ERROR']);
+      const { cmd, args } = command(['authorize', backend, '--auth-no-open-browser', '--config', empty, '--ask-password=false', '--log-level', 'NOTICE']);
       session.child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true });
       const collect = chunk => { if (session.output.length < 65536) session.output += chunk.toString('utf8'); };
       session.stdout = '';
