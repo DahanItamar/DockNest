@@ -42,7 +42,8 @@ async function containerNames(run, lead, request) {
 }
 
 // The deny-list is checked on the path as written and again on where it really points: a link from an app folder to /etc is
-// refused. realpath -e runs on the server with a fixed argv. DockNest's own staging folder may not exist yet: it is created
+// refused. The folder is then mounted from the resolved path (src) at the path the helper uses (dst), so a link swapped in
+// after this check cannot change what is mounted. realpath -e runs on the server with a fixed argv. DockNest's own staging folder may not exist yet: it is created
 // (mkdir -p, owner only) and resolved again; any other folder that does not exist is refused.
 async function resolvedMount(run, lead, path, { nasKind, create }) {
   let out = await run([...lead, 'realpath', '-e', '--', path]).catch(() => ({ code: 1, stdout: '' }));
@@ -51,8 +52,8 @@ async function resolvedMount(run, lead, path, { nasKind, create }) {
     out = await run([...lead, 'realpath', '-e', '--', path]).catch(() => ({ code: 1, stdout: '' }));
   }
   if (out.code !== 0) throw new MountRefused('A folder the helper runtime needs does not exist on the server.');
-  checkMountPath(String(out.stdout).trim(), { nasKind });
-  return path;
+  const resolved = checkMountPath(String(out.stdout).trim(), { nasKind });
+  return resolved === path ? path : { src: resolved, dst: path };
 }
 export async function computeRuntimeMounts({ server, request, run, identity, nasKind }) {
   const lead = identity === 'sudo' ? sudoPrefix() : [];

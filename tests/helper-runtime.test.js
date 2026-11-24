@@ -226,3 +226,20 @@ test('server edits make the next call check the image again', async () => {
   const { forgetRuntime } = await import('../src/nas/runtime-prepare.js');
   assert.equal(forgetRuntime('s1'), false, 'forgetting an unknown server is harmless');
 });
+
+test('a folder reached through a link is mounted from where it points, at the path the helper uses', async () => {
+  const request = { operation: 'capture', config: { containers: ['app-1'], stagingRoot: '/mnt/tank/.docknest' } };
+  const run = pathRunner({ '/mnt/tank/apps/app': '/mnt/tank/real/app' }, ['/mnt/tank/apps/app']).run;
+  const mounts = await computeRuntimeMounts({ server: nasServer, request, run, identity: 'sudo', nasKind: 'truenas' });
+  assert.deepEqual(mounts, ['/mnt/tank/.docknest', { src: '/mnt/tank/real/app', dst: '/mnt/tank/apps/app' }]);
+  const argv = helperArgv({ runtime: 'container', operation: 'capture', mounts, imageId: runId, allowedIds: [runId] });
+  assert.ok(argv.includes('type=bind,src=/mnt/tank/real/app,dst=/mnt/tank/apps/app,bind-propagation=rslave'), 'src is the resolved path, dst the original');
+  assert.ok(argv.includes('type=bind,src=/mnt/tank/.docknest,dst=/mnt/tank/.docknest,bind-propagation=rslave'));
+  // A nested folder is dropped only when it is the same place inside its parent's source.
+  const { computeMounts } = await import('../src/nas/mounts.js');
+  assert.deepEqual(computeMounts([{ src: '/a/real', dst: '/a/link' }, { src: '/a/real/sub', dst: '/a/link/sub' }]), [{ src: '/a/real', dst: '/a/link' }]);
+  assert.equal(computeMounts([{ src: '/a/real', dst: '/a/link' }, { src: '/b/other', dst: '/a/link/sub' }]).length, 2);
+  // Both halves go through the deny-list.
+  assert.throws(() => computeMounts([{ src: '/etc/ssh', dst: '/mnt/tank/x' }]), MountRefused);
+  assert.throws(() => computeMounts([{ src: '/mnt/tank/x', dst: '/etc/ssh' }]), MountRefused);
+});
