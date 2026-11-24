@@ -9,17 +9,24 @@ const sha = 'a'.repeat(40);
 
 test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate validation of the same commit', async () => {
   const text = await workflow('release.yml');
-  const jobs = text.slice(text.indexOf('\njobs:\n')), gateAt = jobs.indexOf('\n  gate:\n'), publishAt = jobs.indexOf('\n  publish:\n');
-  assert.ok(gateAt >= 0 && publishAt > gateAt, 'a gate job comes before the publish job');
-  assert.equal([...jobs.matchAll(/^ {2}[\w-]+:$/gm)].length, 2, 'exactly two jobs');
-  const gate = jobs.slice(gateAt, publishAt), publish = jobs.slice(publishAt);
+  const jobs = text.slice(text.indexOf('\njobs:\n')), gateAt = jobs.indexOf('\n  gate:\n'), runtimeAt = jobs.indexOf('\n  helper-runtime:\n'), publishAt = jobs.indexOf('\n  publish:\n');
+  assert.ok(gateAt >= 0 && runtimeAt > gateAt && publishAt > runtimeAt, 'the gate comes first, then the helper runtime build, then the publish job');
+  assert.equal([...jobs.matchAll(/^ {2}[\w-]+:$/gm)].length, 3, 'exactly three jobs');
+  const gate = jobs.slice(gateAt, runtimeAt), runtime = jobs.slice(runtimeAt, publishAt), publish = jobs.slice(publishAt);
+  // The helper runtime image is built by a job that can only read the repository and has no secret, and the publish job needs it.
+  assert.match(runtime, /\n {4}needs: gate\n/);
+  assert.match(runtime, /\n {4}permissions:\n {6}contents: read[^\n]*\n {4}outputs:/);
+  assert.doesNotMatch(runtime, /: write|secrets\.|id-token|packages|docker\/login-action|cosign/);
+  assert.match(runtime, /scripts\/build-helper-runtime\.sh/);
+  assert.doesNotMatch(runtime, /--pin/, 'the build job never pins; the publish job verifies and pins');
 
   // The gate is read-only; only the publish job can write, and it runs only after the gate succeeded.
   assert.match(gate, /\n {4}permissions:\n {6}contents: read[^\n]*\n {6}actions: read[^\n]*\n {4}steps:/);
   assert.doesNotMatch(gate, /: write/);
-  assert.match(publish, /\n {4}needs: gate\n/);
+  assert.match(publish, /\n {4}needs: \[gate, helper-runtime\]\n/);
+  assert.match(publish, /--manifest-digest-from-tar helper-runtime\.tar\)" = "\$MANIFEST"/, 'the publish job checks the artifact against the build job outputs before pinning');
   assert.match(publish, /\n {4}permissions:\n {6}contents: write[^\n]*\n {6}packages: write[^\n]*\n {6}id-token: write[^\n]*\n {4}steps:/);
-  for (const job of [gate, publish]) {
+  for (const job of [gate, runtime, publish]) {
     const checkouts = job.split('uses: actions/checkout@').slice(1);
     assert.equal(checkouts.length, 1);
     assert.match(checkouts[0].split('\n      - ')[0], /persist-credentials: false/, 'checkouts keep no git credentials');
@@ -61,7 +68,7 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   assert.match(ci, /\n {2}linux-integration:\n {4}if: github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event\.pull_request\.draft == false\n/);
   // The gate runs even when a need failed (a skipped required check would count as passing) and then fails itself
   // unless every need succeeded; it stays skipped on drafts and manual runs, like the integration chain.
-  assert.match(ci, /\n {2}controlled-beta-gate:\n {4}if: always\(\) && github\.event_name != 'workflow_dispatch' && \(github\.event_name == 'push' \|\| github\.event\.pull_request\.draft == false\)\n {4}needs: \[privacy, check, browser, linux-integration, mongo-integration\]\n {4}runs-on: [^\n]+\n {4}steps:\n {6}- name: Every needed job passed\n {8}env:\n {10}NEEDS: \$\{\{ toJSON\(needs\) \}\}\n[^]*?job\.result!=='success'[^]*?process\.exit\(1\)/);
+  assert.match(ci, /\n {2}controlled-beta-gate:\n {4}if: always\(\) && github\.event_name != 'workflow_dispatch' && \(github\.event_name == 'push' \|\| github\.event\.pull_request\.draft == false\)\n {4}needs: \[privacy, check, helper-runtime, browser, linux-integration, mongo-integration\]\n {4}runs-on: [^\n]+\n {4}steps:\n {6}- name: Every needed job passed\n {8}env:\n {10}NEEDS: \$\{\{ toJSON\(needs\) \}\}\n[^]*?job\.result!=='success'[^]*?process\.exit\(1\)/);
   for (const job of ['privacy', 'check', 'browser', 'upgrade', 's3-integration']) assert.match(ci, new RegExp(`\n {2}${job}:\n {4}if: github\.event_name != 'workflow_dispatch'\n`), `${job} is skipped on a manual run`);
   assert.match(ci, /INTEGRATION_ONLY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.only \|\| '' \}\}/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);

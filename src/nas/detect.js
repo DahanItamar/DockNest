@@ -19,11 +19,13 @@ export function parseSynologyVersion(text) {
   const match = /^\s*productversion\s*=\s*"?([^"\r\n]*)"?\s*$/m.exec(String(text ?? ''));
   return versionOf(match?.[1]);
 }
+// Same formats as the helper (remote/helper/nas.py): 'TrueNAS-SCALE-24.10.2', 'TrueNAS-SCALE 25.04', 'TrueNAS-25.10.0' or a bare '25.04.1'.
+// A TrueNAS file whose version cannot be read gives 'unknown', which is refused (fail closed).
 export function parseTrueNasVersion(text) {
-  const value = String(text ?? '');
-  if (!/TrueNAS/i.test(value)) return null;
-  const match = /(\d{2})\.(\d{1,2})(?:\.\d+)*/.exec(value);
-  return match ? match[0] : 'unknown';
+  const value = String(text ?? '').slice(0, 256);
+  if (!/^\s*(?:TrueNAS|\d{2}\.\d{2})/i.test(value)) return null;
+  const match = /(?<![0-9.])(\d{2}\.\d{2}(?:\.\d{1,3}){0,2})(?!\d)/.exec(value);
+  return match ? match[1] : 'unknown';
 }
 export function trueNasSupported(version) {
   const match = /^(\d+)\.(\d+)/.exec(String(version ?? ''));

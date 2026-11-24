@@ -129,6 +129,11 @@ test('NAS staging base: free space comes from the persistent working folder, nev
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for NAS staging verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('NAS apps: Unraid templates, Synology projects and TrueNAS apps are read-only facts from capped, validated files',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_nas_apps.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for NAS app verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('engine discovery: subuid users, real storage folders, owned sockets, tagged containers, and Podman or rootless apps refused by running operations',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_engines.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for engine verification');

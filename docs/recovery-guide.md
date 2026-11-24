@@ -118,3 +118,7 @@ Selected upstream references: [Technical Writer](https://github.com/msitarzewski
 for the plain steps, [Security Architect](https://github.com/msitarzewski/agency-agents/blob/main/security/security-architect.md)
 for redaction and the login option, and [Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md)
 for "Verified" only with evidence.
+
+## Expected time to recover
+
+The Apps table lists how long each app took to come back in its newest passed restore test (get the backup, restore data, start and check), for example "About 12 min (proven on 20 Nov 2026)". An app with no passed test shows "Not measured yet. Run a restore test to measure it." An old test or an app that has grown since is marked. A change of the minutes or the test day makes the guide out of date.
