@@ -21,6 +21,7 @@ import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
 import {KeysSection,Padlock,keyState} from '../keys/keys.jsx';
 import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './LaunchFlow.jsx';
+import {RecoveryLine,RecoveryBar,MayBeLow} from '../recovery/parts.jsx';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
@@ -464,6 +465,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} icon={<SiteIcon site={s} size={20}/>} sub={<StatusLabel state={failed?'failed':lb?'success':'queued'}>{failed?'Last backup failed':lb?'Backed up '+when(lb.capturedAt):'Not backed up yet'}</StatusLabel>} onClose={close} footer={<>{((canMove&&home)||(canMove&&onSafeEdit&&s.config?.kind!=='static'))&&<span className="link-row">{canMove&&home&&<button type="button" className="link-action" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" className="link-action" onClick={()=>onSafeEdit(s)}>Edit</button>}</span>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
+    {s.recovery&&<section className="map-sec"><h3 className="map-group-title">Recovery</h3><RecoveryLine recovery={s.recovery}/><RecoveryBar phases={s.recovery.phases}/>{s.recovery.mayBeLow&&<MayBeLow/>}</section>}
     <section className="map-sec"><h3 className="map-group-title">Details</h3><Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length>0&&!appRows.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/></section>
     <AppDomains list={appRows} statusOf={statusOf} onOpen={(r,el)=>openPanel({kind:'domain',id:r.domain},el)}/>
     <LinkedSection site={s} servers={servers} nameOf={nameOf} onOpen={(id,el)=>openPanel({kind:'site',id},el)}/>

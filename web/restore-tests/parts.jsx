@@ -1,6 +1,8 @@
 import React from 'react';
 import {CheckCircle2,CircleX,Clock,InfoCircle,Loader,Minus,TriangleAlert} from '../icons.jsx';
-import {age,summaryOf} from './model.js';
+import {age} from '../age.js';
+import {summaryOf} from './model.js';
+import {RecoveryLine} from '../recovery/parts.jsx';
 
 const ICON={success:CheckCircle2,failed:CircleX,queued:InfoCircle,running:Loader,'needs-review':TriangleAlert};
 // The product's status label; "Not tested" uses the info icon (a state, not a wait).

@@ -1,0 +1,26 @@
+/* Recovery time (3.0.0). Product tokens only. */
+.rec-line{display:inline-flex;align-items:flex-start;gap:var(--spacing);color:var(--text-muted);font-size:inherit;line-height:inherit}
+.rec-line .rec-ic{flex:none;margin-top:2px}
+.rec-line.is-stale{color:var(--text-muted)}.rec-line.is-stale .rec-ic{color:var(--warning)}
+.rec-phases{display:grid;gap:var(--spacing)}
+.rec-bar{display:flex;gap:2px;height:8px;border-radius:var(--dn-radius-sm);overflow:hidden}
+.rec-seg{min-width:4px;flex-basis:0}
+.rec-one{background:var(--dn-viz-2)}.rec-two{background:var(--dn-viz-3)}.rec-three{background:var(--dn-viz-4)}
+.rec-legend{list-style:none;margin:0;padding:0;display:grid;gap:var(--dn-space-1)}
+.rec-legend li{display:flex;align-items:center;gap:var(--spacing);font-size:var(--dn-text-sm)}
+.rec-legend b{margin-left:auto;font-weight:var(--dn-weight-semibold)}
+.rec-dot{width:10px;height:10px;border-radius:var(--dn-radius-sm);flex:none}
+.rec-note{display:flex;gap:var(--spacing);padding:var(--edge);border:1px solid var(--dn-info-border);background:var(--dn-info-surface);color:var(--dn-info-text);border-radius:var(--dn-radius-md)}
+.rec-note svg{flex:none;margin-top:2px}.rec-note p{margin:2px 0 0}
+.rec-card{display:grid;gap:var(--edge)}
+.rec-headline{display:flex;align-items:center;gap:var(--spacing);margin:0;font-size:var(--dn-text-xl);font-weight:var(--dn-weight-medium)}
+.rec-headline svg{color:var(--link)}
+.rec-from{margin:0}
+.rec-recent{width:100%;border:1px solid var(--border-subtle);border-radius:var(--dn-radius-md);border-collapse:separate;border-spacing:0;overflow:hidden}
+.rec-recent th{font-weight:400;font-size:var(--dn-text-sm);color:var(--text-muted);text-align:left;padding:var(--spacing) var(--edge);background:var(--surface-muted)}
+.rec-recent td{padding:var(--edge);border-top:1px solid var(--border-subtle)}
+.rec-recent th:last-child,.rec-recent td:last-child{text-align:right}
+@media(max-width:600px){.rec-recent td,.rec-recent th{padding:var(--spacing)}}
+.rec-recent-title{margin-top:var(--edge)}
+.rec-stale{display:flex;align-items:center;gap:var(--spacing);margin:0}
+.map-sec .rec-phases,.map-sec .rec-note{margin-top:var(--edge)}

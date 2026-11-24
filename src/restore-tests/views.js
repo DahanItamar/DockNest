@@ -104,7 +104,7 @@ export function recoveryBySite(siteId = null, now = Date.now()) {
   return out;
 }
 // The compact form for site summaries in /api/state.
-export const recoverySummary = value => value ? { seconds: value.seconds, provenAt: value.provenAt, stale: value.stale, mayBeLow: value.mayBeLow } : null;
+export const recoverySummary = value => value ? { seconds: value.seconds, phases: value.phases, provenAt: value.provenAt, stale: value.stale, mayBeLow: value.mayBeLow } : null;
 
 // Recovery seconds of each listed passed test (history row), one query for all.
 function recoverySecondsOf(rows) {
