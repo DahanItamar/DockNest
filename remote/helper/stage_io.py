@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno,base64
 from .common import (
-    emit)
+    emit, sync_directory)
 from .paths import (
     SYSTEM_TREES, within)
 from .staging import (
@@ -15,6 +15,8 @@ from .staging import (
 # DockNest's own staging folders: an absolute path with no '..', no symbolic link anywhere in it (checked with realpath and with
 # O_NOFOLLOW on the file), a regular file, a size cap, and a SHA-256 and byte count that both ends compare.
 STAGE_IO_ROOTS=('/var/lib/docknest','/var/lib/docker-backup-manager')
+# A staging folder named by the request must be DockNest's own folder (the names the NAS staging base uses), not any deep path.
+STAGE_IO_FOLDER_NAMES=('.docknest','@docknest','docknest')
 STAGE_IO_MAX=1<<42
 STAGE_IO_CHUNK=1024*1024
 def stage_io_roots(extra):
@@ -22,7 +24,7 @@ def stage_io_roots(extra):
     if extra is not None:
         if not isinstance(extra,str):raise ValueError('Invalid staging folder')
         base=str(staging_base({'stagingRoot':extra}))
-        if len(pathlib.PurePosixPath(base).parts)<3 or any(within(base,tree) for tree in SYSTEM_TREES):raise ValueError('Invalid staging folder')
+        if len(pathlib.PurePosixPath(base).parts)<3 or pathlib.PurePosixPath(base).name not in STAGE_IO_FOLDER_NAMES or any(within(base,tree) for tree in SYSTEM_TREES):raise ValueError('Invalid staging folder')
         roots.append(base)
     return roots
 def stage_io_path(value,extra=None,parent_only=False):
@@ -53,15 +55,17 @@ def stage_read(req):
     emit(result={'size':count,'sha256':digest.hexdigest()})
 def stage_write(req):
     path=stage_io_path(req.get('path'),req.get('stagingBase'),parent_only=True)
-    # No O_TRUNC at open: a file with other links must not lose its data before the checks below.
-    flags=os.O_WRONLY|os.O_CREAT|getattr(os,'O_NOFOLLOW',0)
-    fd=os.open(path,flags,0o600)
+    if os.path.islink(path):raise ValueError('Package paths cannot contain symbolic links')
+    # The package is written to <path>.part (created new, owner only) and renamed into place once it is complete and checked, so a
+    # refused or broken upload never touches an existing package, and only the .part file is ever removed.
+    part=path+'.part'
+    try:os.unlink(part)  # a leftover of an interrupted upload; never followed, it is DockNest's own name
+    except FileNotFoundError:pass
+    fd=os.open(part,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
     done=False
     try:
         with os.fdopen(fd,'wb') as target:
-            info=os.fstat(target.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:raise ValueError('The package destination is not a regular file')
-            target.truncate(0)
+            if not stat.S_ISREG(os.fstat(target.fileno()).st_mode):raise ValueError('The package destination is not a regular file')
             digest=hashlib.sha256();count=0;end=None
             while True:
                 line=sys.stdin.readline()
@@ -79,9 +83,11 @@ def stage_write(req):
                 else:raise ValueError('Invalid package data')
             if end[0]!=count or end[1]!=digest.hexdigest():raise ValueError('The package did not arrive intact')
             target.flush();os.fsync(target.fileno())
+        os.replace(part,path)
+        sync_directory(os.path.dirname(path))
         done=True
     finally:
         if not done:
-            try:os.unlink(path)
+            try:os.unlink(part)
             except OSError:pass
     emit(result={'size':count,'sha256':digest.hexdigest()})

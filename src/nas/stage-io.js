@@ -36,7 +36,8 @@ export async function helperDownload(server, remotePath, output, onProgress = nu
     return await new Promise((resolve, reject) => client.exec(prepared.command, { pty: false }, (error, stream) => {
       if (error) { void auditSudo(server, prepared, 'failed'); return reject(error); }
       let total = null, result, remoteError, failure; const counted = hasher();
-      const fail = cause => { failure ??= cause; stream.destroy(); reject(cause); };
+      // On any failure the output is destroyed with the error, so the caller never finishes or authenticates a partial package.
+      const fail = cause => { failure ??= cause; stream.destroy(); output.destroy?.(cause); reject(cause); };
       const feed = parseEvents(event => { if (Number.isSafeInteger(event.total)) { total = event.total; onProgress?.({ done: counted.size, total }); } if (event.result) result = event.result; if (event.error) remoteError = event.error; });
       stream.stderr.on('data', chunk => { try { feed(chunk); } catch (cause) { fail(cause); } });
       stream.on('data', chunk => {
@@ -50,7 +51,7 @@ export async function helperDownload(server, remotePath, output, onProgress = nu
         void auditSudo(server, prepared, !failure && code === 0 && result ? 'ok' : 'failed');
         if (failure) return;
         const good = code === 0 && result && result.size === counted.size && result.sha256 === counted.hex() && (total === null || total === counted.size);
-        if (!good) return reject(refusal(remoteError || 'The package did not arrive intact; inspect recovery status before retrying', { remoteReported: Boolean(remoteError), exitCode: Number.isInteger(code) ? code : null }));
+        if (!good) { const cause = refusal(remoteError || 'The package did not arrive intact; inspect recovery status before retrying', { remoteReported: Boolean(remoteError), exitCode: Number.isInteger(code) ? code : null }); output.destroy?.(cause); return reject(cause); }
         onProgress?.({ done: counted.size, total, final: true });
         output.end(); resolve();
       });

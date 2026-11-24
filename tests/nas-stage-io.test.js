@@ -52,7 +52,9 @@ test('download fails closed on a wrong size, a wrong checksum, a helper error an
   const content = randomBytes(300);
   for (const [name, options, expected] of [['size', { lie: { size: 299 } }, /did not arrive intact/], ['hash', { lie: { sha256: sha(Buffer.from('other')) } }, /did not arrive intact/], ['total', { lie: { total: 5 } }, /did not arrive intact/],
     ['error', { error: 'The package is outside the DockNest staging folders' }, /outside the DockNest staging folders/], ['exit', { code: 1 }, /did not arrive intact/]]) {
-    await assert.rejects(helperDownload(sudoServer, '/var/lib/docknest/x', sink().output, null, deps(readClient({ content, ...options }))), expected, name);
+    const target = sink();
+    await assert.rejects(helperDownload(sudoServer, '/var/lib/docknest/x', target.output, null, deps(readClient({ content, ...options }))), expected, name);
+    assert.equal(target.output.destroyed, true, name + ': the output is destroyed, so no partial package is finished or authenticated');
   }
 });
 
