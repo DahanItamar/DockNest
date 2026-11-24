@@ -54,7 +54,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (26 modules)"]
+  subgraph Source["remote/helper/ (27 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
