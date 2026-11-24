@@ -80,11 +80,11 @@ rcloneRoutes.post('/rclone/authorize/:sessionId', requireRecentAuth, rateLimit('
   const account = await rclone.account({ id: 'session-' + req.params.sessionId.slice(0, 8), mode: 'rclone', backend: taken.backend, settings: {}, persist: false, secrets });
   res.json({ backend: done.backend, account, tokenExpiresAt: done.tokenExpiresAt });
 });
-rcloneRoutes.get('/rclone/authorize/:sessionId/drives', async (req, res) => {
+rcloneRoutes.get('/rclone/authorize/:sessionId/drives', rateLimit('rclone-paste', 40), async (req, res) => {
   const taken = oauth.take({ sessionId: req.params.sessionId, userId: req.user.id, backend: 'onedrive' });
   res.json({ drives: await rclone.drives({ id: 'session-' + req.params.sessionId.slice(0, 8), mode: 'rclone', backend: 'onedrive', settings: {}, persist: false, secrets: { token: taken.token, ...(taken.client ?? {}) } }) });
 });
-rcloneRoutes.delete('/rclone/authorize/:sessionId', (req, res) => { oauth.cancel({ sessionId: req.params.sessionId, userId: req.user.id }); res.json({ cancelled: true }); });
+rcloneRoutes.delete('/rclone/authorize/:sessionId', rateLimit('rclone-paste', 40), (req, res) => { oauth.cancel({ sessionId: req.params.sessionId, userId: req.user.id }); res.json({ cancelled: true }); });
 
 // ---- create -----------------------------------------------------------------------------------------------------------
 rcloneRoutes.post('/rclone/connect', requireRecentAuth, rateLimit('rclone-connect', 20), async (req, res) => {

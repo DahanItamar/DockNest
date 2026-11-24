@@ -71,8 +71,12 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
   if (flow === 'address') {
     // rclone's listener port is fixed, so only one address sign-in can run at a time.
     if ([...sessions.values()].some(item => item.flow === 'address')) throw fail('Another sign-in is open. Finish it, or wait up to 10 minutes, then try again.', 409, 'oauth_busy');
-    session.folder = await privateFolder();
+    // Reserved before any await, so two requests cannot both pass the check above.
+    session.timer = setTimeout(() => forget(session), SESSION_MS);
+    session.timer.unref?.();
+    sessions.set(session.id, session);
     try {
+      session.folder = await privateFolder();
       const empty = path.join(session.folder, 'rclone.conf');
       await writeFile(empty, '', { mode: 0o600 });
       const env = childEnvironment(session.folder);
@@ -97,9 +101,7 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
       session.url = url;
     } catch (error) { forget(session); throw error; }
   }
-  session.timer = setTimeout(() => forget(session), SESSION_MS);
-  session.timer.unref?.();
-  sessions.set(session.id, session);
+  if (!sessions.has(session.id)) { session.timer = setTimeout(() => forget(session), SESSION_MS); session.timer.unref?.(); sessions.set(session.id, session); }
   return { sessionId: session.id, url: session.url ?? null, expiresInSeconds: SESSION_MS / 1000 };
 }
 

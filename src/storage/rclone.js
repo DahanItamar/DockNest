@@ -11,7 +11,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat as statPath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { PassThrough, Writable } from 'node:stream';
 import { config } from '../config.js';
 import { RCLONE_MINIMUM } from './rclone-pin.js';
@@ -84,18 +84,18 @@ async function acquire(key) {
   return () => { release(); if (locks.get(key) === chain) locks.delete(key); };
 }
 const tempRoot = () => path.join(config.dataDir, 'tmp');
-let swept = false;
-async function sweepStale() {
-  if (swept) return;
-  swept = true;
-  try {
-    for (const name of await readdir(tempRoot())) {
-      if (!name.startsWith('rclone-')) continue;
-      const folder = path.join(tempRoot(), name);
-      // Left by a crash: nothing in this process holds a folder older than an hour.
-      try { if (Date.now() - (await statPath(folder)).mtimeMs > 3600_000) await rm(folder, { recursive: true, force: true }); } catch { /* gone */ }
-    }
-  } catch { /* no folder yet */ }
+// Once per process, before the first folder is made: every rclone-* folder found now was left by a crash (none can be live yet),
+// so all of them go, whatever their age. Every caller waits for the same sweep, so it never meets a folder made after it began.
+let sweeping = null;
+function sweepStale() {
+  sweeping ??= (async () => {
+    try {
+      for (const name of await readdir(tempRoot())) {
+        if (name.startsWith('rclone-')) await rm(path.join(tempRoot(), name), { recursive: true, force: true }).catch(() => {});
+      }
+    } catch { /* no folder yet */ }
+  })();
+  return sweeping;
 }
 export async function privateFolder() {
   await sweepStale();
