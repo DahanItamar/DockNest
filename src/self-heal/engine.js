@@ -15,6 +15,7 @@ import { db, id, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, jobRunners, claimHooks, claimJob, siteInfo, movingSite } from '../engine.js';
 import { emit } from '../alerts/delivery.js';
+import { hasForeignRuntime } from '../runtime.js';
 import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, RETRYABLE, REASONS, reasonText, timing } from './limits.js';
 
 // Clock, SSH and timers; tests replace members.
@@ -62,6 +63,8 @@ function inMaintenance(siteId) {
 // Why a restart of this site must wait now, or null. Used by the tick (to record the wait once) and at claim time.
 export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) return 'removed';
+  // Self-heal restarts through rootful Docker only (docs/podman-rootless.md): an app in another engine is never touched.
+  if (hasForeignRuntime(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId)?.config)) return 'removed';
   if (deploymentHeld(db)) return 'deployment_hold';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND id IS NOT ? AND status IN ('running','recovery_required','move_running','edit_running','edit_waiting','heal_running')").get(siteId, ownJobId)) return 'site_busy';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','move_queued','edit_queued')").get(siteId)) return 'work_queued';
@@ -220,6 +223,7 @@ export async function executeHealJob(job) {
   const { container, containerId } = details;
   let site, server;
   try { ({ site, server } = siteInfo(job.site_id)); } catch { finishHeal(job.id, 'failed', 'failed', { ...details, outcome: 'skipped', reason: 'removed' }, REASONS.removed); return; }
+  if (hasForeignRuntime(site.config)) { finishHeal(job.id, 'failed', 'failed', { ...details, outcome: 'skipped', reason: 'removed' }, REASONS.removed); return; }
   const base = { siteId: site.id, serverId: server.id, container, containerId, jobId: job.id };
   let result = null;
   try {

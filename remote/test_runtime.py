@@ -23,7 +23,7 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(helper.Runtime('podman').argv('ps'), ['podman', 'ps'])
         self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').argv('ps'), ['docker', '--host', 'unix:///run/user/1001/docker.sock', 'ps'])
         self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').argv('ps', '-a'),
-            ['runuser', '-u', 'app', '--', 'env', 'XDG_RUNTIME_DIR=/run/user/1001', 'HOME=/home/app', 'podman', 'ps', '-a'])
+            ['runuser', '-u', 'app', '--', 'env', '-i', 'PATH=' + helper.RUNTIME_PATH, 'XDG_RUNTIME_DIR=/run/user/1001', 'HOME=/home/app', 'podman', 'ps', '-a'])
     def test_compose_goes_through_the_engine(self):
         with patch.object(helper, 'run', return_value=b'') as run:
             helper.Runtime('podman').compose('up', '-d')
