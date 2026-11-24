@@ -6,6 +6,7 @@ import { sftpReadStream } from './sftp-read-stream.js';
 import { pipeline } from 'node:stream/promises';
 import { helperSource } from './helper-bundle.js';
 import { prepareHelper, auditSudo } from './nas/run.js';
+import { identityFor } from './nas/command.js';
 // options: ssh2 transport keepalive for long-held sessions (the self-heal event stream uses 15 s, 3 misses).
 export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}) {
   return new Promise((resolve,reject)=>{
@@ -17,9 +18,17 @@ export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}
       privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>{const ok=hash.toLowerCase()===server.host_key.toLowerCase();hostKeyRejected=!ok;return ok;},readyTimeout:15000,keepaliveInterval,keepaliveCountMax});
   });
 }
+// A server that uses the helper runtime container first gets its pinned image loaded and the folders the call may see
+// computed (src/nas/runtime-prepare.js). Every other server keeps its options untouched and pays nothing.
+async function withRuntime(server,request,options){
+ if(identityFor(server).runtime!=='container')return options;
+ const [{prepareRuntime},{sshRunner}]=await Promise.all([import('./nas/runtime-prepare.js'),import('./nas/service.js')]);
+ return prepareRuntime(server,request,options,{connect,makeRunner:client=>sshRunner(client)});
+}
 // options.keepStdinOpen: stdin stays open while the helper works (site moves); options.signal closes the channel, which
 // ends stdin so the helper stops itself.
 export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}, options={}) {
+ options=await withRuntime(server,request,options);
  const prepared=prepareHelper(server,request,options);
  const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {
@@ -66,6 +75,7 @@ export async function download(server,remotePath,output,onProgress=null) {
 // Binary stdout and bounded JSON stderr use independent SSH channels. Never log
 // stderr: the final in-memory manifest contains secret container configuration.
 export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{},options={}) {
+ options=await withRuntime(server,{...request,operation:'capture-stream'},options);
  const prepared=prepareHelper(server,{...request,operation:'capture-stream'},options);
  const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {

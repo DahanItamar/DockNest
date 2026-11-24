@@ -37,6 +37,15 @@ Read-only and only on a detected NAS; any other server's discovery answer is unc
 - **Synology**: Container Manager projects (`/volume<N>/docker/<project>`) from a container's Compose labels (`manager: 'synology-project'`).
 - **TrueNAS SCALE 24.10 and newer**: apps from `/mnt/.ix-apps/app_configs/<app>` Compose labels (`manager: 'truenas-app'`). DockNest never calls `midclt`. Older SCALE is refused with the message about Kubernetes.
 
+## Helper runtime image (NAS without Python)
+
+- **Image**: `helper-runtime/Dockerfile`, Alpine pinned by digest, Python 3, the Docker CLI and tar. linux/amd64 only. It runs as root on purpose (the helper needs the Docker socket and root file access, which are root-equivalent anyway), with no network unless the operation needs it, no published ports, and it exits after each call.
+- **Build**: `scripts/build-helper-runtime.sh` builds it once, saves `helper-runtime.tar`, loads it fresh and proves it: image ID equals the ID named in the tar, DockNest label, amd64, Python 3.9+, Docker CLI, tar, and no network interface. The CI job `helper-runtime` runs it and then builds the DockNest image to check that the shipped tar matches the pin. The release workflow runs it before the DockNest image build. No secrets are used and the image is not pushed on its own.
+- **Pin**: `scripts/pin-helper-runtime.js` writes the image ID and the tar SHA-256 into `shared/helper-runtime.js` of that build only. The committed file keeps `null`, so a source build refuses the container runtime and uses the host runtime only.
+- **Load**: before a call on a container-runtime server, DockNest checks `docker image inspect` for the pinned ID. If it is missing, the tar is checked against the pinned SHA-256 and streamed to `docker load` over the same SSH connection (`sudo -n -- docker load` for a sudo user), then the loaded image must report exactly the pinned ID. Older DockNest-labelled runtime images are removed afterwards. Nothing is pulled and no tag is trusted. The ID is a hash of the image's configuration and layers as `docker save` writes it (the classic image store); a server whose Docker reports another kind of ID fails the check and is refused, never trusted.
+- **Mounts** (`src/nas/runtime-prepare.js`): computed by DockNest from the server's staging base, the request's config folders and the bind mounts Docker reports for the app's containers, at identity paths, and checked against the deny-list. Calls that only look (discovery, tests, readiness) skip a folder the deny-list refuses; every other call is refused as a whole.
+- **Limits**: operations that use fixed `/var/lib/docknest` and `/var/lib/docker-backup-manager` folders are not yet pool-aware, so backups, restores and moves through the container runtime still need the staging-base work and a real NAS check before they are supported. `docker` is looked up on the `sudo` PATH (Synology's `/usr/local/bin` is not yet handled).
+
 ## Not in this change
 
-The runtime image build and release workflow, loading the image tar over SSH, passing per-call mounts from callers, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
+Pool-aware staging for every helper operation through the container runtime, the Synology Docker path, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.

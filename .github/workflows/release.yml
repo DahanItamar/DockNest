@@ -103,6 +103,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # NAS servers without Python run the helper in a runtime image shipped inside the DockNest image (docs/nas-servers.md).
+      # It is built and proven here, and its image ID and tar checksum are written into shared/helper-runtime.js of this
+      # build only (the tagged commit keeps null). No secret is used; the image is not pushed anywhere on its own.
+      - name: Build, prove and pin the helper runtime image
+        run: bash scripts/build-helper-runtime.sh --pin
       - id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:

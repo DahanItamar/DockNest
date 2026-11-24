@@ -59,6 +59,29 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: docker build -t docknest:ci .
+  # The helper runtime image for NAS servers without Python (docs/nas-servers.md): built once, loaded fresh, proven (labels,
+  # linux/amd64, Python 3.9+, Docker CLI, tar, no network interface), then pinned into a DockNest image build whose
+  # shipped tar must match the pin. No secrets are used and nothing is pushed.
+  helper-runtime:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - run: bash scripts/build-helper-runtime.sh --pin
+      - name: The DockNest image carries the tar that was pinned
+        run: |
+          set -euo pipefail
+          pinned=$(node --input-type=module -e "import { HELPER_RUNTIME_TAR_SHA256 as s, HELPER_RUNTIME_IMAGE_ID as i, isTarSha256, isPinnedImageId } from './shared/helper-runtime.js'; if (!isTarSha256(s) || !isPinnedImageId(i)) process.exit(1); console.log(s)")
+          docker build -t docknest:ci-runtime .
+          shipped=$(docker run --rm --entrypoint sha256sum docknest:ci-runtime /app/helper-runtime.tar | cut -d' ' -f1)
+          [ "$shipped" = "$pinned" ] || { echo "::error::the shipped tar $shipped differs from the pin $pinned"; exit 1; }
   browser:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-26.04
@@ -194,7 +217,7 @@ jobs:
   # integration chain is skipped by design, so this gate stays skipped there exactly as before.
   controlled-beta-gate:
     if: always() && github.event_name != 'workflow_dispatch' && (github.event_name == 'push' || github.event.pull_request.draft == false)
-    needs: [privacy, check, browser, linux-integration, mongo-integration]
+    needs: [privacy, check, helper-runtime, browser, linux-integration, mongo-integration]
     runs-on: ubuntu-26.04
     steps:
       - name: Every needed job passed
