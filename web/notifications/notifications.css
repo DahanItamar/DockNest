@@ -63,7 +63,7 @@ button.nc-bell-item.nc-bell-item:hover{background:var(--dn-bg-hover)}
 .nc-row-meta{display:flex;align-items:center;gap:var(--dn-space-3);font-size:var(--dn-text-xs);color:var(--dn-text-tertiary)}
 .nc-row-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--dn-space-1);max-width:360px}
 .nc-more-row{display:flex;justify-content:center;padding:var(--dn-space-3);border-top:1px solid var(--dn-border-subtle)}
-@media(max-width:767px){.nc-row{flex-wrap:wrap}.nc-row-main{flex-basis:calc(100% - 40px)}.nc-row-actions{flex-basis:100%;flex-wrap:nowrap;justify-content:flex-start;padding-left:36px;max-width:none}.nc-row-actions .nc-label{display:none}button.nc-row-actions .nc-link,.nc-row-actions button.nc-link.nc-link{width:var(--dn-control-h-touch);min-width:var(--dn-control-h-touch);min-height:var(--dn-control-h-touch);padding:0;justify-content:center}.nc-toolbar{gap:var(--dn-space-2)}}
+@media(max-width:767px){.nc-row{position:relative;padding-bottom:var(--dn-space-2)}.nc-row-meta{min-height:var(--dn-control-h-sm)}.nc-row-actions{position:absolute;right:var(--dn-space-1);bottom:var(--dn-space-1);flex-wrap:nowrap;gap:0;max-width:none}.nc-row-actions .nc-label{display:none}.nc-row-actions button.nc-link.nc-link{width:var(--dn-control-h-sm);min-width:var(--dn-control-h-sm);min-height:var(--dn-control-h-sm);padding:0;justify-content:center}.nc-toolbar{gap:var(--dn-space-2)}}
 
 /* Toast stack: newest at the bottom, at most three, "+N more" above them. */
 .toast-wrap.nc-toasts{display:flex;flex-direction:column;align-items:flex-end;gap:var(--dn-space-2)}

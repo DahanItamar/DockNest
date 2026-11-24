@@ -105,6 +105,11 @@ test('titles and bodies never hold secrets, addresses, paths or URLs, whatever a
   assert.ok(validLink('job:job-0001-aaaa') && validLink('route:Jobs') && validLink(null)); assert.ok(!validLink('route:Evil') && !validLink('https://example.com') && !validLink('javascript:alert(1)'));
 });
 
+test('bodies are detail only, also when the title is followed by a name', () => {
+  clear(); emit({ type: 'server.disk_low', key: 'server:d', serverName: 'Main', freeBytes: 3 * 1024 ** 3, usedPercent: 94 });
+  assert.equal(rows(A)[0].body, 'Main: 3.2 GB free (94% used).');
+});
+
 test('API: sign-in, CSRF and the administrator role are required', async () => {
   clear(); emit(failed());
   assert.equal((await call('GET', '/notifications', { token: false })).status, 401);

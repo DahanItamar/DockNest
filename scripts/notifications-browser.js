@@ -96,6 +96,7 @@ try {
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Notifications/ }).click();
     await page.getByRole('heading', { name: 'Notification center' }).waitFor();
     await page.locator('.nc-toolbar').first().waitFor();
+    await page.getByRole('banner').getByRole('button', { name: /unread/ }).waitFor({ timeout: 9000 }); // the 5 s state poll brings the count
     assert.ok(await page.locator('.nc-row').count() >= 8, 'rows listed');
     await shot(page, 'v2-center', scheme, width);
     await folder(page, /^Needs action/);
