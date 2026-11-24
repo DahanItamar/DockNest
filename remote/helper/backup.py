@@ -483,7 +483,7 @@ def readiness(cfg):
         try:
             fn();checks.append({'name':name,'ok':True,'message':'Ready'})
         except Exception as error:
-            message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
+            message=str(error) if isinstance(error,ValueError) else DOCKER_NOT_RUNNING if isinstance(error,subprocess.CalledProcessError) and rootful_docker_down() else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
     selected={}
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:selected.update(containers=preflight(cfg)))
