@@ -66,7 +66,6 @@ The staging folders on the server are root-only (0700) and stay that way: DockNe
 
 Replacement restores (`replace` mode) are refused on every server, NAS included, by design: they need a safety backup and a rollback adapter that do not exist yet (see [open questions](product/open-questions.md), Q10). Restore into a new copy, review it, then switch DNS or the proxy yourself.
 
-The readiness check "Maintenance proxy and website" no longer fails for an app whose maintenance page is switched off: a backup then runs without it, and readiness says so as a note.
 
 ## Not in this change
 

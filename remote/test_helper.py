@@ -255,15 +255,6 @@ class StaticSiteTests(unittest.TestCase):
             result=readiness({'kind':'static','containers':[],'healthUrl':'https://example.org'})
             self.assertTrue(result['ready']);self.assertFalse(result['checks'][1]['ok']);self.assertFalse(result['checks'][1]['required'])
             self.assertFalse(readiness({'containers':[],'healthUrl':'https://example.org','maintenance':{}})['ready'])
-    def test_maintenance_switched_off_is_a_note_not_a_readiness_failure(self):
-        from helper import MAINTENANCE_OFF
-        with patch('helper.preflight',return_value=[]),patch('helper.health',return_value=True):
-            off=readiness({'containers':[],'healthUrl':'https://example.org','maintenance':{'required':False}})
-            missing=readiness({'containers':[],'healthUrl':'https://example.org','maintenance':{}})
-        for result in (off,missing):
-            check=next(item for item in result['checks'] if item['name']=='Maintenance proxy and website')
-            self.assertEqual((check['ok'],check['required'],check['message']),(False,False,MAINTENANCE_OFF))
-            self.assertNotIn('Enable maintenance protection',str(result))
     def test_nginx_metadata_distinguishes_static_and_proxied_sites_without_secrets(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d)/'website';root.mkdir();(root/'index.html').write_text('hello')

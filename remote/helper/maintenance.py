@@ -13,9 +13,6 @@ from .move import (
     DOMAIN, nginx_reload, process_running)
 # </build:header>
 class MaintenanceOptional(ValueError):pass
-# When the owner has switched the maintenance page off for an app, readiness says so and does not call it a failure: a backup then
-# runs without it (maintenance() returns at once), so nothing is missing.
-MAINTENANCE_OFF='Maintenance protection is off for this app, so visitors may see an error for the few seconds its containers are stopped.'
 MAINTENANCE_NOT_SET_UP='The maintenance page is not set up for this site, so visitors may see an error for the few seconds its containers are stopped.'
 def maintenance(cfg,enabled):
     m=cfg.get('maintenance',{})

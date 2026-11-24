@@ -78,7 +78,7 @@ Nothing here marks a real backup or restore as validated (docs/release-validatio
    staging as unfinished, but the host-runtime sudo path is hit too. Suggested fix: do the staged file reads and writes through the sudo helper, as direct capture does.
 2. **Restore through the API with `replace` is refused with "requires a safety backup and rollback adapter; unavailable" (low, probably by design).**
    `copy` (new copy) is the only restore mode that planned as executable on the lab. Confirm that the screens do not offer Replace for these servers.
-3. **The readiness list shows "Enable maintenance protection before backing up a live site" in red for an app with maintenance switched off (low).**
+3. **The readiness list shows "Enable maintenance protection before backing up a live site" in red for an app with maintenance switched off (low). Open follow-up, not fixed here: it may be by design (a restore-check contract expects that readiness answer to stay as it is).**
    The backup still ran. Repro: an app with `maintenanceRequired: false` and no domain, then `POST /api/sites/:id/readiness` (`ready` stays false).
 
 ### Re-run after the sudo package mover fix, 2026-11-24
@@ -94,10 +94,9 @@ default staging folder, not the pool's staging base. The VM was powered off afte
 | Restore test | pass | All six steps (check space, copy backup, restore copy, start, check health, clean up) finished and the lab was left as before. |
 | Recovery time shown | pass | A measured time (20 s on this lab) is available to the Recovery Guide after the passed test. |
 | Replacement restore | refused by design | The API answers that replacement needs a safety backup and a rollback adapter; see open question Q10. Documented in docs/nas-servers.md. |
-| Readiness with maintenance off | pass | The app is ready; the maintenance check is a note ("Maintenance protection is off for this app"), not a red failure. |
 | Staged package movers on the lab's own Python | pass | `remote/test_stage_io.py` and `remote/test_nas_staging.py` (path confinement, symbolic links, hard links, `..`, size and checksum, nothing left behind) pass on the Linux VM. |
 
-Bugs 1 and 3 above are fixed; bug 2 is by design.
+Bug 1 above is fixed; bug 2 is by design; bug 3 (the red maintenance message) is an open follow-up and was not changed.
 
 ### Notes for the next run
 
