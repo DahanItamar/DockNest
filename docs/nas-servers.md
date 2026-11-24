@@ -48,6 +48,13 @@ Read-only and only on a detected NAS; any other server's discovery answer is unc
 - **Release build**: the image is built by a separate `helper-runtime` job in `release.yml` that can only read the repository (no write, packages, id-token or secrets). It hands the tar and its pins (image ID, manifest digest, layers, SHA-256) to the publish job as an artifact and job outputs; the publish job reads the same values from the tar again and refuses any difference before pinning. The Alpine packages in `helper-runtime/Dockerfile` are pinned to exact versions. Release validation builds, loads and proves the image, and the Linux integration job loads it over SSH onto a nested host (`scripts/integration-helper-runtime.js`).
 - **Limits**: operations that use fixed `/var/lib/docknest` and `/var/lib/docker-backup-manager` folders are not yet pool-aware, so backups, restores and moves through the container runtime still need the staging-base work and a real NAS check before they are supported. `docker` is looked up on the `sudo` PATH (Synology's `/usr/local/bin` is not yet handled).
 
+## Screens
+
+- **Server card and Map panel**: the NAS name (Unraid, Synology or TrueNAS) sits next to the connection status. The Map panel of a NAS lists Readiness first (helper runtime, staging folder on the pool, Docker, SSH key warning with a copy-fix button), loaded from `GET /api/servers/:id/nas` (administrators; read-only, nothing stored). Details do not repeat the helper runtime, staging folder or Docker rows.
+- **Discover**: each app names the manager the NAS uses (Unraid template, Compose Manager project, Container Manager project, TrueNAS app). The Unraid WebUI setting is shown as plain text only, never a link. An unsupported TrueNAS version shows "This TrueNAS version is not supported" with the exact message.
+- **Connect wizard**: a System type choice shows the identity advice and steps from `src/nas/guidance.js`, accepts a root or passwordless-sudo account, uses the persistent Unraid key command, and lets a NAS without Python paste its SHA256 host key fingerprint.
+- **Recovery Guide**: the apps table has an "Expected time to recover" column from `shared/recovery-time.js` (measured by the newest passed restore test, "Not measured yet" otherwise). It joins the guide's digest only once an app has a measured time, so a guide made earlier stays current until then.
+
 ## Not in this change
 
 Pool-aware staging for every helper operation through the container runtime, the Synology Docker path, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.

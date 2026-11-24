@@ -5,6 +5,7 @@
 // server address changed and so on) without keeping the values. No timer: the digest is compared on every read and
 // after the changes that affect it (an API change, a finished restore test); with an alert rule for runbook.outdated,
 // each new digest is sent once.
+import { formatRecoveryTime } from '../../shared/recovery-time.js';
 import { createHash } from 'node:crypto';
 import { db, audit, transaction } from '../db.js';
 import { emit } from '../alerts/delivery.js';
@@ -27,6 +28,8 @@ export function inventoryParts(inventory) {
     storage: { targets: sha({ targets: inventory.storage.map(target => ({ id: target.id, name: target.name, mode: target.mode, host: target.host ?? target.endpoint, port: target.port ?? null, root: target.root, bucket: target.bucket ?? null })), default: inventory.defaultTarget }), apps: perApp(inventory, app => ({ main: app.mainTargetId, copies: app.copyTargetIds })) },
     schedules: { selfBackup: sha(inventory.selfBackup.schedule), apps: perApp(inventory, app => app.schedule) },
     tests: { apps: perApp(inventory, app => app.lastTest) },
+    // Only once an app has a measured time, so a guide made before any restore test stays current after an upgrade.
+    ...(inventory.apps.some(app => app.recoveryTime) ? { recovery: { apps: perApp(inventory, app => (app.recoveryTime ? { time: formatRecoveryTime(app.recoveryTime.seconds), day: String(app.recoveryTime.provenAt).slice(0, 10) } : null)) } } : {}),
     kit: sha(inventory.emergency.split ? { digest: inventory.emergency.digest, k: inventory.emergency.k, n: inventory.emergency.n, labels: inventory.emergency.labels } : { split: false }),
     notes: sha(inventory.notes ?? ''),
   };
@@ -36,7 +39,7 @@ export const digestOf = parts => sha(parts);
 export const CHANGES = Object.freeze({
   app_added: 'An app was added.', app_removed: 'An app was removed.', app_changed: "An app's name, server or domains changed.",
   server_added: 'A server was added.', server_removed: 'A server was removed.', server_renamed: 'A server was renamed.', server_address_changed: 'A server address changed.',
-  storage_changed: 'The backup storage changed.', schedules_changed: 'A backup schedule changed.', tests_changed: 'A restore test result changed.',
+  storage_changed: 'The backup storage changed.', schedules_changed: 'A backup schedule changed.', tests_changed: 'A restore test result changed.', recovery_changed: "An app's expected recovery time changed.",
   kit_changed: 'The emergency kit changed.', notes_changed: 'Your notes changed.',
 });
 export function changesBetween(before, after) {
@@ -48,7 +51,8 @@ export function changesBetween(before, after) {
   compare(before.servers ?? {}, after.servers, 'server_added', 'server_removed', (a, b) => { if (a.name !== b.name) found.add('server_renamed'); if (a.address !== b.address) found.add('server_address_changed'); });
   // An app added or removed is named once: its storage, schedule and test only count for apps in both.
   const differs = (a = {}, b = {}) => a.targets !== b.targets || a.selfBackup !== b.selfBackup || Object.keys(b.apps ?? {}).some(appId => appId in (a.apps ?? {}) && a.apps[appId] !== b.apps[appId]);
-  for (const [part, code] of [['storage', 'storage_changed'], ['schedules', 'schedules_changed'], ['tests', 'tests_changed']]) if (differs(before[part], after[part])) found.add(code);
+  for (const [part, code] of [['storage', 'storage_changed'], ['schedules', 'schedules_changed'], ['tests', 'tests_changed'], ['recovery', 'recovery_changed']]) if (differs(before[part], after[part])) found.add(code);
+  if (!before.recovery && after.recovery) found.add('recovery_changed');
   for (const [part, code] of [['kit', 'kit_changed'], ['notes', 'notes_changed']]) if (before[part] !== after[part]) found.add(code);
   return Object.keys(CHANGES).filter(code => found.has(code)).map(code => ({ code, label: CHANGES[code] }));
 }
