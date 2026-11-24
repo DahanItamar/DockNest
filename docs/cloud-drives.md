@@ -4,7 +4,7 @@ DockNest 3.0.0 can keep backups on Google Drive, OneDrive, Dropbox, a WebDAV ser
 SMB share. The transport is a bundled [rclone](https://rclone.org). DockNest encrypts every package before it reaches
 rclone, so rclone only ever moves ciphertext; rclone's own `crypt`, daemon and mount are not used.
 
-This page covers the backend and the screens.
+This page covers the backend and the screens. To prepare the provider side (your own Google app, test users, revoking access), see [Connecting a cloud drive](cloud-drive-setup.md).
 
 ## The screens
 
