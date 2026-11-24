@@ -67,6 +67,9 @@ class TranslateTests(unittest.TestCase):
         with self.assertRaises(R): helper.translate_id(1001, {**SOURCE, 'uid': 0}, TARGET)
         for v in range(0, 5):
             with self.assertRaises(R): self.tr(v)
+    def test_low_target_ids_refused(self):
+        for kind in ('uid', 'gid'):
+            with self.assertRaises(R): helper.translate_id(1001, SOURCE, {**TARGET, kind: 999}, kind)
     def test_missing_map_refused(self):
         with self.assertRaises(R): helper.translate_id(1001, {}, TARGET)
         with self.assertRaises(R): helper.translate_id(1001, SOURCE, None)
@@ -98,6 +101,30 @@ class UnitTests(unittest.TestCase):
             runtime.stop_unit('web.service')
         with patch.object(helper, 'run', side_effect=[b'', subprocess.CalledProcessError(4, 'x', output=b'')]):
             with self.assertRaises(R): runtime.stop_unit('web.service')
+
+class ContainerStopTests(unittest.TestCase):
+    def test_container_must_not_run(self):
+        runtime = helper.Runtime()
+        inactive = subprocess.CalledProcessError(3, 'x', output=b'inactive\n')
+        for answer, ok in ((b'false\n', True), (b'true\n', False), (b'', False)):
+            with patch.object(helper, 'run', side_effect=[b'', inactive, answer]):
+                if ok: runtime.stop_unit('web.service', 'web')
+                else:
+                    with self.assertRaisesRegex(R, 'still running'): runtime.stop_unit('web.service', 'web')
+        with patch.object(helper, 'run', side_effect=[b'', inactive, subprocess.CalledProcessError(1, 'x')]):
+            with self.assertRaises(R): runtime.stop_unit('web.service', 'web')
+        with patch.object(helper, 'run', side_effect=[b'', inactive]), self.assertRaises(R): runtime.stop_unit('web.service', '-x')
+
+class UsingRuntimeTests(unittest.TestCase):
+    def test_scoped_and_restored(self):
+        podman = helper.Runtime('podman')
+        before = helper.RUNTIME
+        with helper.using_runtime(podman):
+            self.assertEqual(helper.RUNTIME.argv('ps'), ['podman', 'ps'])
+        self.assertIs(helper.RUNTIME, before)
+        with self.assertRaises(KeyError), helper.using_runtime(podman): raise KeyError()
+        self.assertIs(helper.RUNTIME, before)
+        with self.assertRaises(R): helper.using_runtime('podman')
 
 class VolumeTests(unittest.TestCase):
     def test_volume_path(self):

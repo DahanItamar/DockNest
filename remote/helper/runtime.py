@@ -52,7 +52,7 @@ def translate_id(value,source,target,kind='uid'):
         start_source,count_source=id_range(source[sub],sub)
         start_target,count_target=id_range(target[sub],sub)
     except (KeyError,TypeError):raise RuntimeRefused('The id mapping is missing or not valid.')
-    if type(own_source) is not int or type(own_target) is not int or own_source<1 or own_target<1:raise RuntimeRefused('The id mapping is missing or not valid.')
+    if type(own_source) is not int or type(own_target) is not int or own_source<1 or own_target<MIN_RUNTIME_UID:raise RuntimeRefused('The id mapping is missing or not valid.')
     if type(value) is not int or value<0:raise RuntimeRefused(UNMAPPABLE)
     if value==own_source:result=own_target
     elif start_source<=value<start_source+count_source:
@@ -93,6 +93,8 @@ class Runtime:
         """Compose through the same engine: `docker compose` or `podman compose` (which runs the installed provider)."""
         return self.cli('compose',*args)
     def volume_path(self,name):
+        # Lexical checks only. Callers (backup, restore) must realpath and open with no-follow before root reads or writes there.
+        # The engine's answer, `inspect` and Mounts output, and a rootless user's socket are untrusted: that user controls them.
         """A named volume's folder, from the engine's own answer. Relative or odd answers are refused; a rootless volume
         must be inside the user's home."""
         if not isinstance(name,str) or not name or name.startswith('-') or '\0' in name:raise RuntimeRefused('The volume name is not valid.')
@@ -107,10 +109,16 @@ class Runtime:
     def unit_state(self,unit):
         try:return run(self.unit_argv('is-active',unit),timeout=30).decode('utf-8','replace').strip()
         except subprocess.CalledProcessError as error:return (error.output or b'').decode('utf-8','replace').strip() or 'unknown'
-    def stop_unit(self,unit):
-        """Stop a managed unit and require it to be inactive before the copy; anything else is refused."""
+    def stop_unit(self,unit,container=None):
+        """Stop a managed unit and require it to be inactive before the copy; anything else is refused.
+        With a container name or id, the container itself must also report not running (fail closed on any other answer)."""
         run(self.unit_argv('stop',unit),timeout=300)
         if self.unit_state(unit)!='inactive':raise RuntimeRefused('A systemd unit did not stop, so DockNest did not copy its data.')
+        if container is not None:
+            if not isinstance(container,str) or not container or container.startswith('-'):raise RuntimeRefused('The container name is not valid.')
+            try:state=self.cli('inspect','--format','{{.State.Running}}',container,timeout=30).decode('utf-8','replace').strip()
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):state=None
+            if state!='false':raise RuntimeRefused('A container is still running after its systemd unit stopped, so DockNest did not copy its data.')
     def start_unit(self,unit):run(self.unit_argv('start',unit),timeout=300)
 def resolve_runtime(spec,passwd=None,subuid_text=None,socket_owner=None):
     """A Runtime from a saved site `runtime` (missing means rootful Docker), checked against the server.
@@ -146,3 +154,17 @@ def resolve_runtime(spec,passwd=None,subuid_text=None,socket_owner=None):
         if owner!=uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
     return runtime
 RUNTIME=Runtime()
+class using_runtime:
+    """`with using_runtime(runtime):` sets the module-wide RUNTIME for one operation and always restores the previous one,
+    so one operation's engine can never leak into the next. Helper operations run one at a time in one process."""
+    def __init__(self,runtime):
+        if not isinstance(runtime,Runtime):raise RuntimeRefused('This container engine is not supported.')
+        self.runtime=runtime
+    def __enter__(self):
+        global RUNTIME
+        self.previous,RUNTIME=RUNTIME,self.runtime
+        return self.runtime
+    def __exit__(self,*exc):
+        global RUNTIME
+        RUNTIME=self.previous
+        return False
