@@ -89,7 +89,7 @@ def run(args,timeout=3600,input=None,cwd=None):
     except subprocess.CalledProcessError as error:
         diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='exit',exitCode=error.returncode)
         raise
-def docker(*args): return run(['docker',*args])
+def docker(*args): return RUNTIME.cli(*args)  # RUNTIME (runtime.py) defaults to rootful Docker: the same argv as always
 def inspect(ids): return [tmpfs_as_host_config(c) for c in json.loads(docker('inspect',*ids))]
 # Compose long-syntax tmpfs mounts appear in Mounts; fold them into HostConfig.Tmpfs so capture and restore see one RAM folder form.
 def tmpfs_as_host_config(c):
