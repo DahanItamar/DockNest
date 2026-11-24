@@ -178,3 +178,12 @@ test('more system folders are denied and helper answers cannot set NAS facts', (
   assert.equal(checkMountPath('/var/lib/docknest'), '/var/lib/docknest');
   assert.deepEqual(withoutNasFacts({ uid: 0, nas: { kind: 'unraid' }, helperRuntime: 'container', stagingBase: '/x', sshIdentity: 'root', docker: '27' }), { uid: 0, docker: '27' });
 });
+
+test('TrueNAS version formats match the helper, and unreadable versions are refused', () => {
+  for (const [text, version] of [['TrueNAS-SCALE-24.10.2.1', '24.10.2.1'], ['TrueNAS-SCALE 25.04', '25.04'], ['TrueNAS-25.10.0\n', '25.10.0'], ['25.04.1', '25.04.1']]) {
+    assert.equal(parseTrueNasVersion(text), version, text); assert.equal(trueNasSupported(version), true);
+  }
+  assert.equal(parseTrueNasVersion('TrueNAS-SCALE-garbage'), 'unknown'); assert.equal(trueNasSupported('unknown'), false);
+  assert.equal(parseTrueNasVersion('Debian 12.5'), null);
+  assert.equal(trueNasSupported(parseTrueNasVersion('TrueNAS-SCALE-24.04.2')), false);
+});

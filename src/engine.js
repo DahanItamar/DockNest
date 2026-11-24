@@ -458,6 +458,12 @@ async function executeRestoreJob(job){
    // The helper checks every package's checksum and link again before it extracts the full package, then each increment.
    stage(job.id,'restoring');result=await transport.remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
   }
+  // Unraid only, and only after the app restored: put the saved template back so the Unraid Docker page keeps managing the app.
+  // Best effort and never overwriting a different file; a failure is a note on the result, never a failed restore.
+  if(parseCapabilities(server)?.nas?.kind==='unraid'){
+   try{const put=await transport.remote(server,{operation:'nas-template-restore',job:job.id});const templates=Array.isArray(put?.templates)?put.templates.slice(0,20).map(item=>({status:String(item?.status??'').slice(0,20)})):[];result={...result,nasTemplates:templates};audit('worker','restore.nas_template',backup.id,{job:job.id,statuses:templates.map(item=>item.status)});}
+   catch{result={...result,nasTemplates:[{status:'failed'}]};}
+  }
   // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
   if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
    recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);

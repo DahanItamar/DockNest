@@ -32,10 +32,11 @@ managers and the connect wizard come in later changes.
 Read-only and only on a detected NAS; any other server's discovery answer is unchanged. Everything read from NAS files is untrusted: sizes and counts are capped, fields are validated, and nothing is run or fetched.
 
 - **Unraid**: templates in `/boot/config/plugins/dockerMan/templates-user/my-*.xml` (64 KB each, 500 at most; a DOCTYPE or entity refuses the file) are matched to containers by name. Each container gets `nasApp` (`manager: 'unraid-template'`, display name, WebUI text, icon URL as text, never fetched; the WebUI text is untrusted, so screens show it as text or check for an http(s) scheme first) and the template file is added to its configuration files, so a backup captures it.
-- **Put back**: helper operation `nas-template-restore` (`archive` inside the restore job, `original` the exact template path) writes the template back only on Unraid, only into that folder, and never overwrites a different file (`restored`, `unchanged` or `kept-existing`).
+- **Put back**: after an app restore succeeds on an Unraid server, the worker calls the helper operation `nas-template-restore` (only the job id). The helper reads the templates named in the verified backup manifest and writes each back only into that folder, never over a different file (`restored`, `unchanged`, `kept-existing`, `missing` or `refused`). The result keeps only those statuses (`result.nasTemplates`); a failure is a note, never a failed restore.
+- **Unraid Compose Manager** plugin projects (`/boot/config/plugins/compose.manager/projects/<name>`) are named read-only from a container's Compose label (`manager: 'unraid-compose-manager'`); DockNest does not capture or restore the plugin's own files.
 - **Synology**: Container Manager projects (`/volume<N>/docker/<project>`) from a container's Compose labels (`manager: 'synology-project'`).
 - **TrueNAS SCALE 24.10 and newer**: apps from `/mnt/.ix-apps/app_configs/<app>` Compose labels (`manager: 'truenas-app'`). DockNest never calls `midclt`. Older SCALE is refused with the message about Kubernetes.
 
 ## Not in this change
 
-The runtime image build and release workflow, loading the image tar over SSH, passing per-call mounts from callers, Unraid Compose Manager projects, wiring the template put-back into the restore flow and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.
+The runtime image build and release workflow, loading the image tar over SSH, passing per-call mounts from callers, and the UI. Real NAS checks (TrueNAS lab, Unraid) are still pending.

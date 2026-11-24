@@ -53,6 +53,30 @@ class NasAppTests(unittest.TestCase):
             self.assertEqual((app['manager'],app['displayName']),('unraid-template','fakeapp'))
             self.assertIsNone(nas_app({'Name':'/unknown','Config':{}},'unraid',found))
             self.assertEqual(unraid_templates(folder+'/missing'),{})
+    def test_compose_manager_projects_are_named_read_only(self):
+        label=lambda folder:{'Name':'/c','Config':{'Labels':{'com.docker.compose.project.working_dir':folder}}}
+        app=nas_app(label('/boot/config/plugins/compose.manager/projects/fakestack'),'unraid',{})
+        self.assertEqual((app['manager'],app['displayName']),('unraid-compose-manager','fakestack'))
+        self.assertNotIn('templateFile',app)
+        self.assertIsNone(nas_app(label('/boot/config/plugins/compose.manager/projects/../x'),'unraid',{}))
+        self.assertIsNone(nas_app(label('/boot/config/other/fakestack'),'unraid',{}))
+    def test_restore_hook_puts_templates_back_from_the_verified_manifest(self):
+        import json
+        from unittest.mock import patch
+        from helper import nas_template_restore
+        with tempfile.TemporaryDirectory() as work:
+            work=pathlib.Path(work);folder=work/'templates';folder.mkdir();posix=folder.as_posix()
+            job='0b3f9d1e-6a4c-4c5e-8f2a-1d2e3f4a5b6c';root=work/'jobs'/job;unpacked=root/'unpacked';unpacked.mkdir(parents=True)
+            source=work/'my-fakeapp.xml';source.write_bytes(template())
+            with tarfile.open(unpacked/'config-1.tar','w') as tar:tar.add(source,arcname='my-fakeapp.xml')
+            (unpacked/'manifest.json').write_text(json.dumps({'configurationFiles':['/data/compose.yaml',posix+'/my-fakeapp.xml','/etc/passwd']}))
+            emitted=[]
+            with patch('helper.owned_job_root',return_value=root),patch('helper.nas_version_facts',return_value={'kind':'unraid','version':'6.12.10'}),patch('helper.UNRAID_TEMPLATE_PATH',__import__('re').compile(__import__('re').escape(posix)+'/my-[A-Za-z0-9._-]{1,100}'+chr(92)+'.xml')),patch('helper.UNRAID_TEMPLATES',posix),patch('helper.emit',lambda result:emitted.append(result)):
+                nas_template_restore({'job':job})
+            self.assertEqual([item['status'] for item in emitted[0]['templates']],['restored'])
+            self.assertEqual((folder/'my-fakeapp.xml').read_bytes(),template())
+            with patch('helper.owned_job_root',return_value=root),patch('helper.nas_version_facts',return_value={'kind':'synology','version':'7.2'}):
+                with self.assertRaises(ValueError):nas_template_restore({'job':job})
     def test_synology_and_truenas_projects_come_from_compose_labels_only(self):
         label=lambda folder:{'Name':'/c','Config':{'Labels':{'com.docker.compose.project.working_dir':folder}}}
         self.assertEqual(nas_app(label('/volume1/docker/fakeproject'),'synology',{})['project'],'fakeproject')
