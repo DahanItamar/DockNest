@@ -21,7 +21,7 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(helper.Runtime().describe(), {'engine': 'docker', 'rootless': False})
     def test_other_engines(self):
         self.assertEqual(helper.Runtime('podman').argv('ps'), ['podman', 'ps'])
-        self.assertEqual(helper.Runtime('docker', True, 'app', 1001).argv('ps'), ['docker', '--host', 'unix:///run/user/1001/docker.sock', 'ps'])
+        self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').argv('ps'), ['docker', '--host', 'unix:///run/user/1001/docker.sock', 'ps'])
         self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').argv('ps', '-a'),
             ['runuser', '-u', 'app', '--', 'env', 'XDG_RUNTIME_DIR=/run/user/1001', 'HOME=/home/app', 'podman', 'ps', '-a'])
     def test_compose_goes_through_the_engine(self):
@@ -31,7 +31,7 @@ class ArgvTests(unittest.TestCase):
     def test_invalid_runtimes_refused(self):
         for args in (('lxc', False), ('docker', 'no'), ('docker', True, 'root', 0), ('docker', True, 'app', 999), ('docker', True, 'App', 1001),
                      ('docker', True, 'a;b', 1001), ('docker', True, '-x', 1001), ('docker', True, 'app', '1001'), ('docker', True, 'app', True),
-                     ('podman', True, 'app', 1001, None), ('podman', True, 'app', 1001, 'relative'), ('podman', True, 'app', 1001, '/'),
+                     ('podman', True, 'app', 1001, None), ('docker', True, 'app', 1001), ('docker', True, 'app', 1001, 'rel'), ('podman', True, 'app', 1001, 'relative'), ('podman', True, 'app', 1001, '/'),
                      ('podman', True, 'app', 1001, '/home/../root'), ('docker', False, 'app', 1001)):
             with self.assertRaises(R, msg=str(args)): helper.Runtime(*args)
 
@@ -41,11 +41,13 @@ class SubidTests(unittest.TestCase):
         self.assertEqual(helper.parse_subid(text, 'app', 1001), [100000, 65536])
         self.assertEqual(helper.parse_subid('1001:100000:65536', 'app', 1001), [100000, 65536])
     def test_refused(self):
-        for text in ('', 'other:1:2', 'app:100000:65536\n1001:300000:65536', 'app:1:2:3', 'app:x:2', 'app:0:65536', 'app:100000:0', 'app:-1:5', 'app:4294967295:5'):
+        for text in ('', 'other:1:2', 'app:100000:65536\n1001:300000:65536', 'app:1:2:3', 'app:x:2', 'app:0:65536', 'app:100000:0', 'app:-1:5', 'app:4294967295:5', 'app:4294967295:1', 'app:00000000001:5', 'app:1:99999999999'):
             with self.assertRaises(R, msg=text): helper.parse_subid(text, 'app', 1001)
 
 class TranslateTests(unittest.TestCase):
     def tr(self, v, kind='uid'): return helper.translate_id(v, SOURCE, TARGET, kind)
+    def test_range_top_edge(self):
+        self.assertEqual(helper.parse_subid('app:4294967295:1', 'app', 1001) if False else helper.id_range([4294967293, 1], 'x'), [4294967293, 1])
     def test_edges(self):
         self.assertEqual(self.tr(1001), 1500)
         self.assertEqual(self.tr(100000), 300000)
@@ -128,6 +130,7 @@ class ResolveTests(unittest.TestCase):
                  ({**spec, 'engine': 'docker'}, {'socket_owner': lambda p: 0}), ({**spec, 'engine': 'docker'}, {'socket_owner': missing})]
         for s, kw in cases:
             with self.assertRaises(R, msg=str(s)): self.resolve(s, **kw)
+        with self.assertRaises(R): self.resolve({**spec, 'engine': 'docker'}, passwd=lambda n: (1001, ''))
         with self.assertRaises(R): helper.resolve_runtime({'engine': 'podman', 'rootless': True, 'user': 'root', 'uid': 0}, passwd=lambda n: (0, '/root'), subuid_text='root:1:2')
 
 if __name__ == '__main__': unittest.main()

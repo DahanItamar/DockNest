@@ -2,7 +2,7 @@
 # <build:header>
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
-import sys,json,subprocess,os,time,pathlib,re,posixpath
+import sys,json,subprocess,os,time,pathlib,re,posixpath,stat
 # </build:header>
 # Root SSH stays the trust model. Root reaches every engine; no shell is ever used and every value that reaches an
 # argv is validated first. The default runtime is rootful Docker and builds exactly the argv `docker` always had.
@@ -16,7 +16,7 @@ class RuntimeRefused(ValueError):
 UNMAPPABLE='A file is owned by an ID the new user cannot map.'
 def id_range(value,name):
     """[start, count] with start >= 1 (never host root) and a count of at least 1, or a refusal."""
-    ok=isinstance(value,(list,tuple)) and len(value)==2 and all(type(v) is int for v in value) and value[0]>=1 and value[1]>=1 and value[0]+value[1]<=2**32
+    ok=isinstance(value,(list,tuple)) and len(value)==2 and all(type(v) is int for v in value) and value[0]>=1 and value[1]>=1 and value[0]+value[1]<=2**32-1
     if not ok:raise RuntimeRefused('The %s range is not valid.'%name)
     return [value[0],value[1]]
 def parse_subid(text,user,uid):
@@ -29,7 +29,7 @@ def parse_subid(text,user,uid):
         parts=line.split(':')
         if len(parts)!=3:raise RuntimeRefused('A subordinate ID file has a line DockNest cannot read.')
         if parts[0]!=user and parts[0]!=str(uid):continue
-        if not (parts[1].isascii() and parts[1].isdigit() and parts[2].isascii() and parts[2].isdigit()):raise RuntimeRefused('A subordinate ID file has a line DockNest cannot read.')
+        if not (all(len(x)<=10 and x.isascii() and x.isdigit() for x in parts[1:])):raise RuntimeRefused('A subordinate ID file has a line DockNest cannot read.')
         found.append(id_range([int(parts[1]),int(parts[2])],'subordinate ID'))
     if not found:raise RuntimeRefused('This user has no subordinate ID range, so DockNest cannot work with its containers.')
     if len(found)>1:raise RuntimeRefused('This user has more than one subordinate ID range, which DockNest does not support yet.')
@@ -75,7 +75,7 @@ class Runtime:
         if engine not in RUNTIME_ENGINES or type(rootless) is not bool:raise RuntimeRefused('This container engine is not supported.')
         if rootless:
             if not isinstance(user,str) or not RUNTIME_USER.fullmatch(user) or type(uid) is not int or uid<MIN_RUNTIME_UID:raise RuntimeRefused('The rootless user is not valid.')
-            if engine=='podman' and (not isinstance(home,str) or not home.startswith('/') or '\0' in home or '\n' in home or posixpath.normpath(home)!=home or home=='/'):raise RuntimeRefused('The rootless user has no usable home folder.')
+            if (not isinstance(home,str) or not home.startswith('/') or '\0' in home or '\n' in home or posixpath.normpath(home)!=home or home=='/'):raise RuntimeRefused('The rootless user has no usable home folder.')
         elif user is not None or uid is not None:raise RuntimeRefused('A rootful engine has no user.')
         self.engine,self.rootless,self.user,self.uid,self.home=engine,rootless,user,uid,home
     def describe(self):
@@ -136,7 +136,11 @@ def resolve_runtime(spec,passwd=None,subuid_text=None,socket_owner=None):
     runtime=Runtime(engine,True,user,uid,found[1])
     if engine=='docker':
         path='/run/user/%d/docker.sock'%uid
-        if socket_owner is None:socket_owner=lambda p:os.stat(p).st_uid
+        if socket_owner is None:
+            def socket_owner(p):
+                info=os.lstat(p)
+                if not stat.S_ISSOCK(info.st_mode):raise OSError('not a socket')
+                return info.st_uid
         try:owner=socket_owner(path)
         except OSError:raise RuntimeRefused('The rootless Docker engine is not running for this user.')
         if owner!=uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
