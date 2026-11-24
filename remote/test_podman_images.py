@@ -233,4 +233,64 @@ class WorkdirTests(unittest.TestCase):
         with patch.object(helper, 'run', return_value=b'') as run: runtime.cli('ps', cwd='/tmp')
         self.assertEqual(run.call_args.kwargs['cwd'], '/tmp')
 
+class SessionBusTests(unittest.TestCase):
+    PATH = '/run/user/1001/bus'
+    def lstat(self, mode, uid=1001):
+        def lstat(path):
+            assert path == self.PATH
+            return type('S', (), {'st_mode': mode, 'st_uid': uid})()
+        return lstat
+    def test_only_rootless_podman_with_a_socket_of_its_user_gets_the_bus(self):
+        podman = rootless('podman')
+        self.assertEqual(podman.session_bus(self.lstat(stat.S_IFSOCK | 0o700)), 'unix:path=' + self.PATH)
+        for bad in (self.lstat(stat.S_IFSOCK | 0o700, uid=0), self.lstat(stat.S_IFREG | 0o600), self.lstat(stat.S_IFLNK | 0o777)):
+            self.assertIsNone(podman.session_bus(bad))
+        def missing(path): raise FileNotFoundError(path)
+        self.assertIsNone(podman.session_bus(missing))
+        self.assertIsNone(rootless('docker').session_bus(self.lstat(stat.S_IFSOCK | 0o700)), 'rootless Docker needs no session bus')
+        self.assertIsNone(helper.Runtime('podman').session_bus(self.lstat(stat.S_IFSOCK | 0o700)))
+    def test_argv_carries_the_bus_only_for_the_users_own_path(self):
+        podman = rootless('podman')
+        self.assertNotIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, podman.argv('ps'))
+        argv = podman.argv('ps', bus='unix:path=' + self.PATH)
+        self.assertEqual(argv[argv.index('env') + 1:argv.index('podman')][-1], 'DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH)
+        for other in ('unix:path=/run/user/0/bus', 'unix:path=/tmp/evil', 'tcp:host=x'):
+            self.assertFalse(any(part.startswith('DBUS_SESSION_BUS_ADDRESS') for part in podman.argv('ps', bus=other)), other)
+        self.assertFalse(any('DBUS' in part for part in rootless('docker').argv('ps', bus='unix:path=' + self.PATH)))
+        self.assertEqual(helper.Runtime('podman').argv('ps', bus='unix:path=' + self.PATH), ['podman', 'ps'])
+    def test_cli_and_stream_pass_the_checked_bus(self):
+        runtime = rootless('podman')
+        with patch.object(runtime, 'session_bus', return_value='unix:path=' + self.PATH), patch.object(helper, 'run', return_value=b'') as run:
+            runtime.cli('ps')
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, run.call_args[0][0])
+        fake = popen()
+        with patch.object(runtime, 'session_bus', return_value='unix:path=' + self.PATH), patch.object(subprocess, 'Popen', fake): runtime.stream('load', poll=0.01)
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS=unix:path=' + self.PATH, fake.calls[0].argv)
+        fake = popen()
+        with patch.object(runtime, 'session_bus', return_value=None), patch.object(subprocess, 'Popen', fake): runtime.stream('load', poll=0.01)
+        self.assertFalse(any('DBUS' in part for part in fake.calls[0].argv))
+
+class RestartReasonTests(unittest.TestCase):
+    def reason(self, *records):
+        with patch.object(helper, 'inspect', return_value=list(records)): return helper.restart_reason(['x'])
+    def record(self, name='shop', running=True, health=None):
+        state = {'Running': running}
+        if health is not None: state['Health'] = health
+        return {'Id': 'a' * 64, 'Name': '/' + name, 'State': state}
+    def test_a_health_check_that_never_started_is_named(self):
+        text = self.reason(self.record(health={'Status': 'starting', 'Log': []}))
+        self.assertIn('health check of shop never started', text); self.assertIn('rootless Podman', text); self.assertIn('watchdog remains armed', text)
+    def test_other_stalls_have_their_own_sentence(self):
+        self.assertIn('shop is not running', self.reason(self.record(running=False)))
+        self.assertIn('shop reports unhealthy', self.reason(self.record(health={'Status': 'unhealthy', 'Log': [{}]})))
+        self.assertIn('shop reports starting', self.reason(self.record(health={'Status': 'starting', 'Log': [{'ExitCode': 1}]})))
+    def test_nothing_specific_keeps_the_old_text(self):
+        self.assertEqual(self.reason(self.record(health={'Status': 'healthy'})), 'inspect remote watchdog and recovery.json')
+        self.assertEqual(self.reason(self.record()), 'inspect remote watchdog and recovery.json')
+        with patch.object(helper, 'inspect', side_effect=RuntimeError('x')): self.assertEqual(helper.restart_reason(['x']), 'inspect remote watchdog and recovery.json')
+        self.assertEqual(helper.restart_reason([]), 'inspect remote watchdog and recovery.json')
+    def test_the_sentence_holds_names_only(self):
+        record = self.record(health={'Status': 'starting', 'Log': []}); record['Config'] = {'Env': ['TOKEN=' + 'x' * 5]}; record['State']['Health']['Log'] = []
+        self.assertNotIn('TOKEN', self.reason(record))
+
 if __name__ == '__main__': unittest.main()
