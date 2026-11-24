@@ -35,6 +35,7 @@
     "docs:screenshots": "node scripts/readme-screenshots.js",
     "test:self-backup": "node scripts/self-backup-browser.js",
     "test:storage": "node scripts/storage-browser.js",
+    "test:notifications": "node --no-addons scripts/notifications-browser.js",
     "test:clients-drives": "node --no-addons scripts/clients-drives-browser.js",
     "test:storage-report": "node scripts/storage-report-browser.js",
     "test:cleanup": "node scripts/cleanup-browser.js",
