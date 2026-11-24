@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
-import { HELPER_RUNTIME_LABEL, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG, HELPER_RUNTIME_TAR, HELPER_RUNTIME_TAR_SHA256, isLayerList, isTarSha256 } from '../../shared/helper-runtime.js';
+import { HELPER_RUNTIME_LABEL, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG, HELPER_RUNTIME_TAR, HELPER_RUNTIME_TAR_SHA256, isLayerList, isTarSha256, pinnedRuntimeIds } from '../../shared/helper-runtime.js';
 import { argvToCommand, sudoPrefix } from './command.js';
 
 // Getting the helper runtime image onto a NAS (docs/nas-servers.md). The image tar ships inside the DockNest image, is
@@ -53,17 +53,19 @@ const sameLayers = (a, b) => Array.isArray(a) && a.length === b.length && a.ever
 
 // `run(argv)` resolves { code, stdout } (the NAS read-only runner); `client` is the open SSH connection. Resolves { runId, loaded }:
 // the immutable ID the helper is run by on this server.
-export async function ensureRuntimeImage({ client, run, identity = 'root', layers = HELPER_RUNTIME_LAYERS, tag = HELPER_RUNTIME_TAG, tarPath, tarSha256 } = {}) {
-  if (!isLayerList(layers)) throw new RuntimeImageRefused('The helper runtime image is not pinned in this DockNest build.');
+export async function ensureRuntimeImage({ client, run, identity = 'root', layers = HELPER_RUNTIME_LAYERS, tag = HELPER_RUNTIME_TAG, ids = pinnedRuntimeIds(), tarPath, tarSha256 } = {}) {
+  if (!isLayerList(layers) || !ids.length) throw new RuntimeImageRefused('The helper runtime image is not pinned in this DockNest build.');
+  // Same layers are not enough: the image's own ID (which covers its Entrypoint, User and Env) must be one of the pinned IDs too.
+  const genuine = image => Boolean(image) && ids.includes(image.id) && sameLayers(image.layers, layers);
   const lead = identity === 'sudo' ? sudoPrefix() : [];
   const held = await heldImage(run, lead, tag);
-  if (held && sameLayers(held.layers, layers)) return { runId: held.id, loaded: false };
+  if (genuine(held)) return { runId: held.id, loaded: false };
   await verifiedTar({ tarPath, tarSha256 });
   const code = await execWithInput(client, [...lead, 'docker', 'load'], createReadStream(tarPath ?? HELPER_RUNTIME_TAR));
   if (code !== 0) throw new RuntimeImageRefused('The server could not load the helper runtime image.');
   // The layers are hashes of the image's own content, so a swapped or damaged tar cannot produce them.
   const loaded = await heldImage(run, lead, tag);
-  if (!loaded || !sameLayers(loaded.layers, layers)) throw new RuntimeImageRefused('The loaded helper runtime image does not match the pinned layers.');
+  if (!genuine(loaded)) throw new RuntimeImageRefused('The loaded helper runtime image does not match the pinned ID and layers.');
   await removeOldRuntimes(run, lead, loaded.id);
   return { runId: loaded.id, loaded: true };
 }

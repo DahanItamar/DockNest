@@ -8,6 +8,7 @@ export const HELPER_RUNTIME_NAME = 'docknest-helper-runtime';
 export const HELPER_RUNTIME_LABEL = 'org.docknest.helper=1';
 export const HELPER_RUNTIME_TAR = '/app/helper-runtime.tar';
 export const HELPER_RUNTIME_IMAGE_ID = null; // 'sha256:' + 64 lowercase hex, set by the release build
+export const HELPER_RUNTIME_MANIFEST_DIGEST = null; // 'sha256:' + 64 hex: the image's manifest digest, its ID on the containerd image store
 export const HELPER_RUNTIME_TAR_SHA256 = null; // 64 lowercase hex: SHA-256 of /app/helper-runtime.tar, set by the release build
 export const MIN_HOST_PYTHON = [3, 9];
 export const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -22,3 +23,6 @@ export const HOST_NETWORK_OPERATIONS = Object.freeze(['domain-routes', 'restore-
 export const TAR_SHA256_PATTERN = /^[a-f0-9]{64}$/;
 export const isTarSha256 = value => typeof value === 'string' && TAR_SHA256_PATTERN.test(value);
 export const isPinnedImageId = value => typeof value === 'string' && IMAGE_ID_PATTERN.test(value);
+// The image IDs a server may report for the release image: the config digest (classic image store) or the manifest digest
+// (containerd image store). Anything else is not DockNest's image, whatever its layers are.
+export const pinnedRuntimeIds = (image = HELPER_RUNTIME_IMAGE_ID, manifest = HELPER_RUNTIME_MANIFEST_DIGEST) => [image, manifest].filter(isPinnedImageId);
