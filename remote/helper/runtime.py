@@ -2,8 +2,9 @@
 # <build:header>
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
-import sys,json,subprocess,os,time,pathlib,re,posixpath,stat
+import sys,json,subprocess,os,time,pathlib,re,posixpath,stat,signal
 from .common import docker, run
+# STOPPING (common.py) is read at call time as a bare global: the one namespace of the built helper always holds its current value.
 # </build:header>
 # Root SSH stays the trust model. Root reaches every engine; no shell is ever used and every value that reaches an
 # argv is validated first. The default runtime is rootful Docker and builds exactly the argv `docker` always had.
@@ -11,6 +12,10 @@ from .common import docker, run
 RUNTIME_USER=re.compile(r'[a-z_][a-z0-9_-]{0,31}')
 RUNTIME_UNIT=re.compile(r'[A-Za-z0-9_][A-Za-z0-9:_.@-]{0,200}\.service')
 RUNTIME_ENGINES=('docker','podman')
+STREAM_ERROR_TAIL=2048  # bytes of an engine's error output kept on a failed stream
+STREAM_BYTES_PER_SECOND=10*1000*1000  # a slow disk or engine; the time allowed grows with the archive
+STREAM_MIN_SECONDS=3600
+STREAM_MAX_SECONDS=24*3600
 MIN_RUNTIME_UID=1000
 RUNTIME_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 class RuntimeRefused(ValueError):
@@ -100,6 +105,41 @@ class Runtime:
         try:info=lstat(path)
         except OSError:raise RuntimeRefused('The rootless Docker engine is not running for this user.')
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused('The rootless Docker socket does not belong to this user.')
+    def stream(self,*args,stdin=None,stdout=None,timeout=3600,poll=1.0):
+        """One engine call whose data goes through file descriptors, never through DockNest's memory. A rootless engine runs as
+        its user and cannot open root's private folders, so root opens the file and hands the engine the descriptor.
+        The call is watched every `poll` seconds: a stopped step ends it (the engine is terminated, then killed) and a longer
+        run than `timeout` is an error. The engine's last STREAM_ERROR_TAIL bytes of error output travel on the exception
+        as `.stderr` only; they are never printed or sent."""
+        if STOPPING:raise ValueError('DockNest stopped this step.')
+        if self.engine=='docker' and self.rootless:self.check_socket()
+        import tempfile
+        with tempfile.TemporaryFile() as errors:
+            # Its own session and process group: the engine child cannot outlive runuser, and a stop ends the whole group.
+            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True)
+            deadline=time.monotonic()+timeout
+            def end(forced):
+                group=getattr(os,'killpg',None)
+                if group is None:
+                    (process.kill if forced else process.terminate)();return
+                try:group(process.pid,signal.SIGKILL if forced else signal.SIGTERM)
+                except ProcessLookupError:pass  # the group is already gone
+            def finish():
+                end(False)
+                try:process.wait(timeout=10)
+                except subprocess.TimeoutExpired:end(True);process.wait()
+            try:
+                while True:
+                    try:code=process.wait(timeout=poll);break
+                    except subprocess.TimeoutExpired:pass
+                    if STOPPING:finish();raise ValueError('DockNest stopped this step.')
+                    if time.monotonic()>=deadline:finish();raise subprocess.TimeoutExpired(self.argv(*args)[:1],timeout)
+            except BaseException:
+                if process.poll() is None:finish()
+                raise
+            if code!=0:
+                errors.seek(0,2);size=errors.tell();errors.seek(max(0,size-STREAM_ERROR_TAIL))
+                raise subprocess.CalledProcessError(code,self.argv(*args)[:1],stderr=errors.read(STREAM_ERROR_TAIL))
     def cli(self,*args,**options):
         if self.engine=='docker' and self.rootless:self.check_socket()
         return run(self.argv(*args),**options)
@@ -365,3 +405,29 @@ def rootless_hardening_problem(runtime,hardening):
     than created without it. `hardening` is the original container's hardening record."""
     if runtime.rootless and hardening.get('seccomp') not in ('default','unconfined'):return 'This app uses a custom seccomp profile, which a rootless copy cannot load yet.'
     return None
+
+def engine_load(archive):
+    """`docker load` of one image archive. Rootful Docker: exactly `docker load -i <archive>`. Another engine: the archive is
+    opened by root (no link followed, a regular file only) and streamed to `load` on standard input."""
+    runtime=current_runtime()
+    if runtime_is_default(runtime):return docker('load','-i',str(archive))
+    fd=os.open(str(archive),os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):raise RuntimeRefused('The image archive is not a regular file.')
+        size=os.fstat(fd).st_size
+        runtime.stream('load',stdin=fd,timeout=min(STREAM_MAX_SECONDS,max(STREAM_MIN_SECONDS,size//STREAM_BYTES_PER_SECOND+600)))
+    finally:os.close(fd)
+def engine_save(path,*references):
+    """`docker save -o <path> <images>`. Rootful Docker: exactly that. Another engine: the engine writes to standard output,
+    which is a file root creates (new, 0600, no link followed), so the engine never needs root's folder."""
+    runtime=current_runtime()
+    if runtime_is_default(runtime):return docker('save','-o',str(path),*references)
+    fd=os.open(str(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
+    try:runtime.stream('save',*references,stdout=fd,timeout=STREAM_MAX_SECONDS)  # the size is not known before the engine writes it
+    except BaseException:
+        os.close(fd);fd=None
+        try:os.unlink(str(path))
+        except OSError:pass
+        raise
+    finally:
+        if fd is not None:os.close(fd)

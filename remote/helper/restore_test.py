@@ -23,7 +23,7 @@ from .dumps import (
 from .install import (
     systemd_present)
 from .runtime import (
-    RuntimeRefused, chmod_folder, current_runtime, engine_architecture, remove_rootless_data_root, resolve_runtime, restore_target, rootless_data_root, rootless_hardening_problem, runtime_is_default, translate_tree)
+    RuntimeRefused, chmod_folder, current_runtime, engine_load, engine_architecture, remove_rootless_data_root, resolve_runtime, restore_target, rootless_data_root, rootless_hardening_problem, runtime_is_default, translate_tree)
 # Mutable state lives in common and is never copied by import: STOPPING, RUNTIME
 # </build:header>
 # ---- Automatic restore tests (docs/restore-tests.md) ----
@@ -249,7 +249,7 @@ def load_images_keeping_tags(archive):
     except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
     if names:raise ValueError('The image archive names images (%s); DockNest backups save images by ID only, so it is not loaded.'%', '.join(names[:3]))
     state={'created':{'tags':[]}}
-    try:docker('load','-i',str(archive))
+    try:engine_load(archive)
     finally:restore_test_tags(state)
 def restore_test_tags(state):
     """Point every tag the load moved back at the image it named before, so a later `docker compose up` on this server
@@ -446,7 +446,7 @@ def restore_test_restore(req):
     for image in wanted:
         if image not in before:test_journal(d,state,'images',image)
     try:
-        for archive in image_archives(unpacked):docker('load','-i',str(archive))
+        for archive in image_archives(unpacked):engine_load(archive)
     finally:restore_test_tags(state)
     # Online logical dumps: loaded into the restored data folders (network none) before the copy's containers exist.
     if dumped_services(manifest):

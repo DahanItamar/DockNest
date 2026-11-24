@@ -149,3 +149,8 @@ test('Podman and rootless cleanup and move facts: copies kept, orphan restore fo
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for cleanup verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Podman and rootless image archives stream through descriptors: load on stdin from a root-opened file, save to a new private file, rootful Docker unchanged',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_images.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for image archive verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
