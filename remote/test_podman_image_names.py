@@ -111,13 +111,30 @@ class NameTests(unittest.TestCase):
 
 class FormatTests(unittest.TestCase):
     def test_podman_saves_a_docker_archive_and_docker_is_unchanged(self):
-        self.assertEqual(helper.Runtime('podman').save_arguments(), ['save', '--format', 'docker-archive'])
-        self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').save_arguments(), ['save', '--format', 'docker-archive'])
+        self.assertEqual(helper.Runtime('podman').save_arguments(1), ['save', '--format', 'docker-archive'])
+        self.assertEqual(helper.Runtime('podman', True, 'app', 1001, '/home/app').save_arguments(1), ['save', '--format', 'docker-archive'])
+        for runtime in (helper.Runtime('podman'), helper.Runtime('podman', True, 'app', 1001, '/home/app')):
+            self.assertEqual(runtime.save_arguments(2), ['save', '--format', 'docker-archive', '--multi-image-archive'])
+            self.assertEqual(runtime.save_arguments(5), ['save', '--format', 'docker-archive', '--multi-image-archive'])
+            self.assertNotIn('--multi-image-archive', runtime.save_arguments(1)); self.assertNotIn('--multi-image-archive', runtime.save_arguments(0))
+        self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').save_arguments(3), ['save'], 'Docker needs no such flag')
+        self.assertEqual(helper.Runtime().save_arguments(3), ['save'])
         self.assertEqual(helper.Runtime('docker', True, 'app', 1001, '/home/app').save_arguments(), ['save'])
         self.assertEqual(helper.Runtime().save_arguments(), ['save'])
         self.assertEqual(helper.Runtime().argv(*helper.Runtime().save_arguments(), 'sha256:a'), ['docker', 'save', 'sha256:a'])
+    def test_both_saves_pass_the_number_of_images(self):
+        # engine_save: two references become one multi-image archive; one stays a plain docker archive.
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            seen = []
+            runtime = helper.Runtime('podman', True, 'app', 1001, '/home/app')
+            with patch.object(helper.Runtime, 'stream', lambda self, *args, **kw: seen.append(list(args))), helper.using_runtime(runtime):
+                helper.engine_save(pathlib.Path(folder) / 'one.tar', 'sha256:a')
+                helper.engine_save(pathlib.Path(folder) / 'two.tar', 'sha256:a', 'sha256:b')
+        self.assertEqual(seen[0], ['save', '--format', 'docker-archive', 'sha256:a'])
+        self.assertEqual(seen[1], ['save', '--format', 'docker-archive', '--multi-image-archive', 'sha256:a', 'sha256:b'])
     def test_the_streamed_backup_uses_the_same_arguments(self):
         text = (pathlib.Path(__file__).parent / 'helper' / 'backup.py').read_text()
-        self.assertIn('save_arguments()', text); self.assertNotIn(".argv('save'", text)
+        self.assertIn('save_arguments(len(saved_ids)+len(images))', text); self.assertNotIn(".argv('save'", text)
 
 if __name__ == '__main__': unittest.main()
