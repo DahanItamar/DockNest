@@ -40,8 +40,8 @@ called validated. A real backup or restore is not marked validated without a Lin
 ## Client reports and recovery time
 
 - [ ] SMTP: a test email and the day-1 email arrive with the PDF attached (under 8 MB); a failed send retries and then alerts.
-- [ ] Recovery time: the "may be low" note appears after real backups grow more than 50% past the tested one, and "not recent" after twice the test cadence.
-- [ ] The PDF opens in common viewers, Hebrew names render, and no address, path or login appears in it.
+- [x] PASS (2026-11-24, integration head 585e817, fake database rows): recovery time flags. A newest backup twice the tested size gives `mayBeLow: true`; a passed test 40 days old on the weekly default gives `stale: true`; a fresh, same-size test gives neither. Still to see on a real restore: the same flags after real backups grow.
+- [x] PASS (2026-11-24, fake data, throwaway data folder): a client report PDF with a Hebrew client name and Hebrew app names is 329 KB for 3 apps and 3 pages (limit 8 MB). Page 1 rendered to PNG: Hebrew is right to left and real glyphs, no boxes. Text extraction of the whole PDF holds no server name, host, IP, port, SSH user, container name, path or email address, only the owner-typed contact line and the DockNest credit. The PDF itself has no "may be low" or "not recent" wording; those notes are on screen only. Still open: opening it in other common viewers.
 
 ## Results: local lab run, 2026-11-24
 

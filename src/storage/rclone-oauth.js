@@ -6,6 +6,7 @@
 //     `state` only, and sends it to the loopback listener. The listener lives at most 10 minutes.
 //  B. Token: the JSON `rclone authorize` printed on the owner's own computer, parsed strictly.
 //  C. The owner's own client ID and secret, passed to the authorize process through its environment, never its arguments.
+// The sign-in link is printed at NOTICE level, so the helper must not run quieter; its output is only matched, never logged.
 // Pending tokens stay in memory, sealed with the master key, for the session only.
 import http from 'node:http';
 import path from 'node:path';
@@ -18,6 +19,9 @@ import { BACKENDS } from './rclone-errors.js';
 import { AUTH_HOST, AUTH_PORT, issuedState, looksLikeToken, parseClient, parsePastedAddress, parseToken } from './rclone-input.js';
 import { childEnvironment, privateFolder } from './rclone.js';
 
+// Production always uses rclone's fixed port. Only under NODE_ENV=test may DOCKNEST_TEST_AUTH_PORT move the local listener,
+// so tests do not collide with a real rclone on this machine; the pasted-address check (rclone-input.js) is unchanged.
+const LISTEN_PORT = process.env.NODE_ENV === 'test' && /^\d{4,5}$/.test(process.env.DOCKNEST_TEST_AUTH_PORT ?? '') ? process.env.DOCKNEST_TEST_AUTH_PORT : AUTH_PORT;
 export const SESSION_MS = 10 * 60_000;
 // The only places the provider's own sign-in page may be.
 const PROVIDER_HOSTS = Object.freeze({ drive: ['accounts.google.com'], onedrive: ['login.microsoftonline.com', 'login.live.com'], dropbox: ['www.dropbox.com', 'dropbox.com'] });
@@ -47,7 +51,7 @@ const waitFor = (test, ms, message) => new Promise((resolveWait, reject) => {
 // One request to rclone's own loopback listener. Host and port are constants; only the path and query vary.
 function listener(pathAndQuery) {
   return new Promise((resolveRequest, reject) => {
-    const request = http.get({ host: AUTH_HOST, port: Number(AUTH_PORT), path: pathAndQuery, timeout: 15_000, agent: false }, response => {
+    const request = http.get({ host: AUTH_HOST, port: Number(LISTEN_PORT), path: pathAndQuery, timeout: 15_000, agent: false }, response => {
       response.resume();
       resolveRequest({ status: response.statusCode, location: response.headers.location ?? null });
     });
@@ -80,8 +84,9 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
       const empty = path.join(session.folder, 'rclone.conf');
       await writeFile(empty, '', { mode: 0o600 });
       const env = childEnvironment(session.folder);
+      if (LISTEN_PORT !== AUTH_PORT) env.DOCKNEST_TEST_AUTH_PORT = LISTEN_PORT;
       if (session.client) { env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_ID`] = client.clientId; env[`RCLONE_${CLIENT_ENV[backend]}_CLIENT_SECRET`] = client.clientSecret; }
-      const { cmd, args } = command(['authorize', backend, '--auth-no-open-browser', '--config', empty, '--ask-password=false', '--log-level', 'ERROR']);
+      const { cmd, args } = command(['authorize', backend, '--auth-no-open-browser', '--config', empty, '--ask-password=false', '--log-level', 'NOTICE']);
       session.child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true });
       const collect = chunk => { if (session.output.length < 65536) session.output += chunk.toString('utf8'); };
       session.stdout = '';
@@ -89,7 +94,7 @@ export async function start({ userId, backend, flow = 'address', clientId, clien
       session.child.stderr.on('data', collect);
       session.exited = new Promise(resolveExit => { session.child.once('error', () => resolveExit('error')); session.child.once('close', () => resolveExit('closed')); });
       const found = await Promise.race([
-        waitFor(() => new RegExp(`${AUTH_HOST.replaceAll('.', '\\.')}:${AUTH_PORT}/auth\\?state=([A-Za-z0-9_-]{8,128})`).exec(session.output)?.[1], 20_000, 'The sign-in helper did not start. Try again.'),
+        waitFor(() => new RegExp(`${AUTH_HOST.replaceAll('.', '\\.')}:${LISTEN_PORT}/auth\\?state=([A-Za-z0-9_-]{8,128})`).exec(session.output)?.[1], 20_000, 'The sign-in helper did not start. Try again.'),
         session.exited.then(() => { throw fail('The sign-in helper could not start. Check that rclone is installed.', 503, 'rclone_missing'); }),
       ]);
       if (!issuedState(found)) throw fail('The sign-in helper gave an unexpected answer.', 502, 'oauth_helper');
@@ -130,7 +135,7 @@ export async function submit({ sessionId, userId, pasted }) {
     await listener(`/?${query}`);
     token = await tokenFromHelper(session);
   }
-  session.pending = seal(JSON.stringify(token));
+  session.pending = seal(JSON.stringify(token)); session.stdout = ''; session.output = '';
   if (session.child) session.child.kill('SIGKILL');
   return { backend: session.backend, tokenExpiresAt: token.expiry || null };
 }
