@@ -46,7 +46,7 @@ Storage, **Add storage destination**: the provider list has the groups Cloud dri
    local listener (always at `127.0.0.1`, whichever name was pasted) and keeps the resulting token, sealed, in memory for the session.
 3. Alternatively `flow: "token"`: paste the JSON that `rclone authorize "drive"` printed on the owner's computer. Only
    `access_token`, `token_type`, `refresh_token`, `expiry` (and a numeric `expires_in`) are accepted.
-4. The owner's own app (client ID and secret, strongly recommended for Google Drive: the shared sign-in app has one request limit for everyone, so Google answers `rateLimitExceeded` and a test can take minutes; DockNest then says "Google is limiting the shared sign-in app. Use your own Google app ID for steady speed.") goes to the helper through its environment.
+4. The owner's own app (client ID and secret, strongly recommended for Google Drive: the shared sign-in app has one request limit for everyone, so Google answers `rateLimitExceeded` and a test can take minutes; DockNest then says "Google is limiting the shared sign-in app. Use your own Google app ID for steady speed." If your app is in Google's "Testing" mode, add your Google account as a test user, or Google answers 403 access_denied.) goes to the helper through its environment.
 5. `POST /api/storage-targets/rclone/connect` creates the destination from the session (OAuth) or from a login (WebDAV, SMB),
    tests it and saves it. Scopes: Drive `drive.file`, OneDrive `Files.ReadWrite` + `offline_access`.
 
