@@ -22,7 +22,9 @@ export const serverCleanupRoutes = express.Router();
 let testMinAgeSeconds = null;
 export function setCleanupTestMinAge(seconds) { testMinAgeSeconds = seconds === null ? null : z.number().int().min(0).max(86400).parse(seconds); }
 const testFields = () => (testMinAgeSeconds === null ? {} : { minAgeSeconds: testMinAgeSeconds });
-export const CLEANUP_KINDS = Object.freeze(['containers', 'images', 'volumes', 'buildCache']);
+// 'runtimeData' and 'runtimeContainers' are the leftovers and copies in Podman and rootless engines (docs/podman-rootless.md):
+// the folder of a rootless restore can be cleaned, a container is only listed as kept.
+export const CLEANUP_KINDS = Object.freeze(['containers', 'images', 'volumes', 'buildCache', 'runtimeData', 'runtimeContainers']);
 const PREVIEW_MS = 15 * 60_000, MAX_PREVIEWS = 50, MAX_ITEMS = 500, MAX_REFS = 2000;
 const REF = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}$/;
 // Safe Edit steps (edit_*) and self-heal restarts (heal_*, 2.15) are active work on their server too.

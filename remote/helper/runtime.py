@@ -186,7 +186,7 @@ class using_runtime:
 # Facts of a rootless user's files are untrusted (that user controls them), so every source is checked on its way:
 # absolute, normalised, no link in any component, and inside the user's home.
 RUNTIME_ARCHITECTURES={'amd64':'x86_64','x86_64':'x86_64','arm64':'aarch64','aarch64':'aarch64'}
-RUNTIME_OPERATIONS=('plan','readiness','capture','capture-stream')
+RUNTIME_OPERATIONS=('plan','readiness','capture','capture-stream','move-facts')
 # Restore tests carry the runtime of the backup in `runtime`; the helper records it at prepare and every later step reads it back.
 RESTORE_TEST_RUNTIME_OPERATIONS=('restore-test-check','restore-test-prepare')
 def runtime_is_default(runtime):return runtime.engine=='docker' and not runtime.rootless
