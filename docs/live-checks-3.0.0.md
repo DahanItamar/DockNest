@@ -42,3 +42,46 @@ called validated. A real backup or restore is not marked validated without a Lin
 - [ ] SMTP: a test email and the day-1 email arrive with the PDF attached (under 8 MB); a failed send retries and then alerts.
 - [ ] Recovery time: the "may be low" note appears after real backups grow more than 50% past the tested one, and "not recent" after twice the test cadence.
 - [ ] The PDF opens in common viewers, Hebrew names render, and no address, path or login appears in it.
+
+## Results: local lab run, 2026-11-24
+
+Run against the integration branch (6ca079d) with a throwaway data directory, fake test data only, a lab TrueNAS SCALE 25.10 VM
+(lab NAS, VirtualBox, reached through a loopback forward) and a local folder on the test PC. The VM was powered off afterwards.
+Nothing here marks a real backup or restore as validated (docs/release-validation.md): the Linux Docker integration job still does that.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| TrueNAS lab: connect with a sudo user | pass | Connected as a non-root user; readiness green (NAS version, passwordless sudo, host Python runtime, Docker, staging folder on the pool). |
+| TrueNAS lab: discover apps | pass | A fake app under `/mnt/.ix-apps/app_configs` shows as a TrueNAS app with its manager and project name. |
+| A NAS user without passwordless sudo gets the one-line fix | pass | A second lab user without sudo is refused with 409 and the passwordless sudo fix. |
+| TrueNAS lab: back up | fail with the default (staged) delivery, pass with direct delivery | Bug 1. With delivery set to direct the backup completed (about 1.2 s of downtime) and the scrub of the stored copy passed. |
+| TrueNAS lab: restore (copy) | fail | Bug 1. The plan was executable, then the upload ended with "Permission denied". |
+| TrueNAS lab: restore test | fail (could not run) | Bug 1. The step "Copy backup" failed; nothing was started on the lab NAS. |
+| TrueNAS lab: recovery time | not measured | No restore test passed, so the Recovery Guide has no measured time. Repeat after bug 1 is fixed. |
+| TrueNAS 24.04 refused with the Kubernetes message | skipped | Needs a 24.04 VM; covered by unit tests only. |
+| Local folder destination | pass for connect, backup, scrub; restore blocked by bug 1 | The same-disk warning (409, then accepted on request) behaved as documented. The encrypted backup landed in the folder and verified. The restore planned from that folder as the main copy, but could not run because of bug 1. |
+| WebDAV through rclone | skipped | The pinned rclone is linux/amd64 and only inside the image; this PC has no Docker daemon and no rclone, and downloading one was not done. |
+| Rootless Podman and rootless Docker | skipped: no VM | The only lab VM is the rootful TrueNAS one. Creating a Linux VM needs the owner's OK. |
+| Helper runtime image over `docker load` | skipped | The VM has Docker, but this PC cannot build the pinned amd64 image tar (no Docker), and TrueNAS has Python so it uses the host runtime. The Linux integration job covers the load path. |
+| Cloud drives, Unraid, Synology, SMTP and PDF checks | not in scope | They need an account, a USB-stick machine or hardware. |
+
+### Bugs found
+
+1. **Backup, restore and restore test fail for a NAS user who uses sudo, unless delivery is direct (high).**
+   The helper runs as root through sudo and keeps its staged files in an owner-only root folder (`<stagingBase>/<job id>`,
+   mode 0700, root). The staged archive is then fetched with SFTP as the SSH user, who cannot read it: `download()` in
+   `src/ssh.js` (called from `src/engine.js`, around line 604) fails with "Permission denied". The restore does the reverse: the SFTP
+   upload into the same root-owned folder (`uploadStream` in `src/ssh.js`, used by `sendPackage` in `src/engine.js`) is refused. The restore test copy step
+   uses the same upload. Repro: connect a non-root passwordless-sudo user on a TrueNAS 25.x lab, add a Compose app, set
+   `stagingRoot` to the reported `stagingBase`, run a backup (fails at "packing"), then restore it as a copy (fails at once).
+   Setting `deliveryMode` to `direct` makes the backup pass because that path streams through the sudo helper. docs/nas-servers.md already lists container-runtime
+   staging as unfinished, but the host-runtime sudo path is hit too. Suggested fix: do the staged file reads and writes through the sudo helper, as direct capture does.
+2. **Restore through the API with `replace` is refused with "requires a safety backup and rollback adapter; unavailable" (low, probably by design).**
+   `copy` (new copy) is the only restore mode that planned as executable on the lab. Confirm that the screens do not offer Replace for these servers.
+3. **The readiness list shows "Enable maintenance protection before backing up a live site" in red for an app with maintenance switched off (low).**
+   The backup still ran. Repro: an app with `maintenanceRequired: false` and no domain, then `POST /api/sites/:id/readiness` (`ready` stays false).
+
+### Notes for the next run
+
+- Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema).
+- The lab fixture app must exit with code 0 on SIGTERM, or the clean shutdown check fails by design ("running, nonzero exit or OOM").
