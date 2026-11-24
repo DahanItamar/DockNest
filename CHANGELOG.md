@@ -8,7 +8,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Added
 
-- New look: slate neutrals and a teal accent. Settings > Appearance has an accent colour choice (Teal by default, Blue, Indigo or Orange), saved per account in this browser. The logo, buttons, links and charts follow it. Switching accent or light/dark fades smoothly (about 0.2 s, colours only, instant with reduced motion). The dashboard tiles are now plain cards with a small accent icon. Status colours stay green, amber and red, and text on buttons meets contrast in every accent and in light and dark.
+- New look: slate neutrals and a teal accent. Settings > Appearance has an accent colour choice (Teal by default, Blue, Indigo, Orange or Pink), saved per account in this browser. The logo, buttons, links and charts follow it. Switching accent or light/dark fades smoothly (about 0.2 s, colours only, instant with reduced motion). The dashboard tiles are now plain cards with a small accent icon. Status colours stay green, amber and red, and text on buttons meets contrast in every accent and in light and dark.
 
 **Recovery**
 - Recovery time: DockNest now measures how long each app takes to come back, from its newest passed restore test (get the backup, restore data, start and check). Existing restore tests already count, so there is a number on day one. It shows under the last test on the dashboard ("Back in about 12 min, proven 3 days ago"), on the app panel in the Map with its three parts, and at the top of Restore tests with the recent tests. An old test is greyed and says "not recent"; after the backups grow a note says the number may be low.

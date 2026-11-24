@@ -5,6 +5,7 @@ export const ACCENTS = Object.freeze([
   { id: 'blue', label: 'Blue' },
   { id: 'indigo', label: 'Indigo' },
   { id: 'orange', label: 'Orange' },
+  { id: 'pink', label: 'Pink' },
 ]);
 export const DEFAULT_ACCENT = 'teal';
 export const validAccent = value => (ACCENTS.some(accent => accent.id === value) ? value : DEFAULT_ACCENT);

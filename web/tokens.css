@@ -120,9 +120,29 @@
  --dn-viz-1:#F76B15;--dn-viz-2:#FFA057;--dn-viz-3:#696E77;--dn-viz-4:#E5484D;--dn-viz-area:#F76B1540;
  --dn-map-domain-fill:#F76B1510;
 }
+:root[data-accent=pink]{
+ --dn-brand-1:#FFFCFE;--dn-brand-2:#FEF7FB;--dn-brand-3:#FEE9F5;--dn-brand-4:#FBDCEF;--dn-brand-5:#F6CEE7;--dn-brand-6:#EFBFDD;--dn-brand-7:#E7ACD0;--dn-brand-8:#DD93C2;--dn-brand-9:#D6409F;--dn-brand-10:#CF3897;--dn-brand-11:#C2298A;--dn-brand-12:#651249;
+ --dn-chrome-1:#FFFCFE;--dn-chrome-2:#FEF7FB;--dn-chrome-3:#FEE9F5;--dn-chrome-4:#FBDCEF;--dn-chrome-5:#F6CEE7;--dn-chrome-6:#EFBFDD;--dn-chrome-7:#E7ACD0;--dn-chrome-8:#DD93C2;--dn-chrome-9:#D6409F;--dn-chrome-10:#CF3897;--dn-chrome-11:#C2298A;--dn-chrome-12:#651249;
+ --dn-brand-text-step:#AD247B;--dn-chrome-text-step:#AD247B;--dn-brand-text-soft:#B53988;
+ --dn-brand-solid-step:#B83789;--dn-brand-solid-hover-step:#A6327B;--dn-chrome-solid-step:#B83789;--dn-chrome-solid-hover-step:#A6327B;
+ --dn-brand-ui:#D6409F;--dn-chrome-ui:#D6409F;
+ --dn-brand-logo:#D6409F;
+ --dn-viz-1:#D6409F;--dn-viz-2:#AD247B;--dn-viz-3:#8B8D98;--dn-viz-4:#E5484D;--dn-viz-area:#D6409F40;
+ --dn-map-domain-fill:#D6409F10;
+}
+:root[data-accent=pink][data-theme=dark]{
+ --dn-brand-1:#191117;--dn-brand-2:#21121D;--dn-brand-3:#37172F;--dn-brand-4:#4B143D;--dn-brand-5:#591C47;--dn-brand-6:#692955;--dn-brand-7:#833869;--dn-brand-8:#A84885;--dn-brand-9:#D6409F;--dn-brand-10:#DE51A8;--dn-brand-11:#FF8DCC;--dn-brand-12:#FDD1EA;
+ --dn-chrome-1:#191117;--dn-chrome-2:#21121D;--dn-chrome-3:#37172F;--dn-chrome-4:#4B143D;--dn-chrome-5:#591C47;--dn-chrome-6:#692955;--dn-chrome-7:#833869;--dn-chrome-8:#A84885;--dn-chrome-9:#D6409F;--dn-chrome-10:#DE51A8;--dn-chrome-11:#FF8DCC;--dn-chrome-12:#FDD1EA;
+ --dn-brand-text-step:#FF8DCC;--dn-chrome-text-step:#FF8DCC;--dn-brand-text-soft:#C86EA0;
+ --dn-brand-solid-step:#B83789;--dn-brand-solid-hover-step:#A6327B;--dn-chrome-solid-step:#B83789;--dn-chrome-solid-hover-step:#A6327B;
+ --dn-brand-ui:#FF8DCC;--dn-chrome-ui:#FF8DCC;
+ --dn-brand-logo:#DE51A8;
+ --dn-viz-1:#D6409F;--dn-viz-2:#FF8DCC;--dn-viz-3:#696E77;--dn-viz-4:#E5484D;--dn-viz-area:#D6409F40;
+ --dn-map-domain-fill:#D6409F10;
+}
 
 /* Accent previews for the Settings swatches (each accent's step 9, whatever accent is active). */
-:root{--dn-accent-teal:#12A594;--dn-accent-blue:#0090FF;--dn-accent-indigo:#3E63DD;--dn-accent-orange:#F76B15}
+:root{--dn-accent-teal:#12A594;--dn-accent-blue:#0090FF;--dn-accent-indigo:#3E63DD;--dn-accent-orange:#F76B15;--dn-accent-pink:#D6409F}
 
 /* ============ 3. Semantic colour (theme-agnostic: resolves through primitives) ============ */
 :root{

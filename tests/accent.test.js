@@ -7,9 +7,9 @@ const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8'
 
 test('the accent choice is Teal by default and only the four known accents are accepted', () => {
   assert.equal(DEFAULT_ACCENT, 'teal');
-  assert.deepEqual(ACCENTS.map(accent => accent.id), ['teal', 'blue', 'indigo', 'orange']);
-  for (const id of ['teal', 'blue', 'indigo', 'orange']) assert.equal(validAccent(id), id);
-  for (const bad of ['classic', 'green', 'purple', '', null, undefined, '__proto__', 'TEAL', '"><script>']) assert.equal(validAccent(bad), 'teal', String(bad));
+  assert.deepEqual(ACCENTS.map(accent => accent.id), ['teal', 'blue', 'indigo', 'orange', 'pink']);
+  for (const id of ['teal', 'blue', 'indigo', 'orange', 'pink']) assert.equal(validAccent(id), id);
+  for (const bad of ['classic', 'green', 'crimson', 'purple', '', null, undefined, '__proto__', 'TEAL', '"><script>']) assert.equal(validAccent(bad), 'teal', String(bad));
 });
 
 test('the accent is saved like the theme: per account in this browser, with a device-wide fallback', () => {
@@ -20,7 +20,7 @@ test('the accent is saved like the theme: per account in this browser, with a de
 
 test('the early theme script, the tokens and the logo set cover exactly the same accents', () => {
   const init = read('public/theme-init.js');
-  const listed = /\['teal','blue','indigo','orange'\]/.test(init);
+  const listed = /\['teal','blue','indigo','orange','pink'\]/.test(init);
   assert.ok(listed, 'theme-init.js allows the same four accents');
   const tokens = read('web/tokens.css');
   for (const { id } of ACCENTS) {

@@ -20,7 +20,7 @@ function topLevelRules(text) {
 const decls = body => Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);?/g)].map(m => [m[1], m[2].trim()]));
 // Accents: Teal is the default (plain :root); Blue, Indigo and Orange override through :root[data-accent=NAME] (light) and
 // :root[data-accent=NAME][data-theme=dark]. Every accent is gated in both themes.
-const ACCENTS = ['teal', 'blue', 'indigo', 'orange'];
+const ACCENTS = ['teal', 'blue', 'indigo', 'orange', 'pink'];
 const light = {}, darkOnly = {}, accentLight = {}, accentDark = {};
 for (const [sel, body] of topLevelRules(css)) {
   if (sel.startsWith('@')) continue;

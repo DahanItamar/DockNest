@@ -12,7 +12,7 @@ if(master.readUInt32BE(16)!==2172||master.readUInt32BE(20)!==724)throw Error('Ap
 let version=hash.slice(0,10);const outputs=[];
 // 3.0.0 accents: the approved masters keep their shape; only the hue moves to each accent's logo colour from web/tokens.css
 // (--dn-brand-logo: step 9 on light, step 10 on dark). Teal is the default and also feeds the favicon and app icons.
-const ACCENTS=['teal','blue','indigo','orange'];
+const ACCENTS=['teal','blue','indigo','orange','pink'];
 const tokenCss=await readFile('web/tokens.css','utf8');
 function logoColor(accent,dark){
  const selector=accent==='teal'?(dark?':root[data-theme=dark]':':root'):':root[data-accent='+accent+']'+(dark?'[data-theme=dark]':'');

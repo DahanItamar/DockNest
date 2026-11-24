@@ -41,6 +41,16 @@
         "src": "/brand/logo-orange-dark-600-49de2109c7.webp",
         "srcSet": "/brand/logo-orange-dark-600-49de2109c7.webp 600w, /brand/logo-orange-dark-1200-49de2109c7.webp 1200w"
       }
+    },
+    "pink": {
+      "light": {
+        "src": "/brand/logo-pink-light-600-9f8092d71d.webp",
+        "srcSet": "/brand/logo-pink-light-600-9f8092d71d.webp 600w, /brand/logo-pink-light-1200-9f8092d71d.webp 1200w"
+      },
+      "dark": {
+        "src": "/brand/logo-pink-dark-600-0a4e6128bc.webp",
+        "srcSet": "/brand/logo-pink-dark-600-0a4e6128bc.webp 600w, /brand/logo-pink-dark-1200-0a4e6128bc.webp 1200w"
+      }
     }
   }
 }

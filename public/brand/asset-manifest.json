@@ -281,6 +281,66 @@
       "sha256": "2f332fdc0949e7db7eb21d09eded4be9116433705341f02ef4680ae09ecc76c5"
     },
     {
+      "filename": "logo-pink-light-600-9f8092d71d.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "9f8092d71deb28da73b384ca056bdc5301a9a852da756ce5a3a54669fd6f5d1f",
+      "width": 600,
+      "height": 118,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 2015,
+        "height": 395
+      },
+      "bytes": 23590,
+      "sha256": "3a15031c5cb44b3e07a9cf28f650795104e31a80504fd7f300ff89f92eaba65a"
+    },
+    {
+      "filename": "logo-pink-dark-600-0a4e6128bc.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "0a4e6128bcb7c84b317a46058b9a064146e6a913d1a1aa05109e25e454fe6fd8",
+      "width": 600,
+      "height": 118,
+      "crop": {
+        "left": 2,
+        "top": 147,
+        "width": 2169,
+        "height": 426
+      },
+      "bytes": 22754,
+      "sha256": "0516d48db0f2b531c9b5fe100302c6244436db5bbe9f7a4e82106dd2bb32b9ea"
+    },
+    {
+      "filename": "logo-pink-light-1200-9f8092d71d.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "9f8092d71deb28da73b384ca056bdc5301a9a852da756ce5a3a54669fd6f5d1f",
+      "width": 1200,
+      "height": 235,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 2015,
+        "height": 395
+      },
+      "bytes": 59646,
+      "sha256": "453d4177057bada68826cbde73be820b6acecde86a3b8a2d1ac1e50417c1d7e0"
+    },
+    {
+      "filename": "logo-pink-dark-1200-0a4e6128bc.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "0a4e6128bcb7c84b317a46058b9a064146e6a913d1a1aa05109e25e454fe6fd8",
+      "width": 1200,
+      "height": 236,
+      "crop": {
+        "left": 2,
+        "top": 147,
+        "width": 2169,
+        "height": 426
+      },
+      "bytes": 57000,
+      "sha256": "6a8536721471f01f819df5fda13f669162c99d6fa3634e55af9cff9da2babf88"
+    },
+    {
       "filename": "favicon-16-1490ad8249.png",
       "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
       "sourceSha256": "1490ad8249d46c0ddc73265f807e4f0818b8df24e1402d9a83745f20433f6aa9",

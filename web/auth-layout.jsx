@@ -33,10 +33,10 @@ export function AuthLayout({children,back}){
  },[]);
  return <div className="auth-shell auth-page lg-t2"><div className="lg-split">
   <aside className="lg-brandpanel" aria-label="DockNest"><FloatingPaths/>
-   <div className="lg-bp-top"><Brand/><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p><p className="lg-bp-cap">Backups that test themselves.</p></div>
+   <div className="lg-bp-top"><Brand tagline={false}/><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p></div>
    <Highlights/>
   </aside>
-  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-head-brand"><Brand/></span><ThemeToggle/></header>
+  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-head-brand"><Brand tagline={false}/></span><ThemeToggle/></header>
    <main className="auth-main lg-formside"><div className="lg-col auth-card">{back}{children}</div></main>
   </div>
  </div></div>;

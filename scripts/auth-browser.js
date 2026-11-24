@@ -40,7 +40,7 @@ for(const theme of ['light','dark']){
  assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
  const panel=page.locator('.lg-brandpanel');await panel.waitFor();
  assert.match(await panel.innerText(),/Worry less\. Sleep more\.\s*Restore anytime\./);
- assert.match(await panel.innerText(),/Backups that test themselves\./);
+ assert.doesNotMatch(await panel.innerText(),/Backups that test themselves/);
  assert.equal(await page.locator('.lg-brandpanel .lg-path').count(),40,'twenty lines in each set');
  assert.deepEqual(await page.locator(".lg-pg").evaluateAll(g=>g.map(x=>getComputedStyle(x).animationName)),["none","none"],"v2: the background lines no longer drift");
  assert.equal(await page.locator('.lg-paths path').evaluateAll(p=>p.every(x=>getComputedStyle(x).animationName==='none')),true,'only transforms move, never the path data');
