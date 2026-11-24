@@ -1,5 +1,4 @@
 import { posix } from 'node:path';
-import { HELPER_RUNTIME_IMAGE_ID } from '../../shared/helper-runtime.js';
 import { identityFor, sudoPrefix } from './command.js';
 import { checkMountPath, computeMounts, MountRefused, UNRAID_TEMPLATES } from './mounts.js';
 import { ensureRuntimeImage } from './runtime-image.js';
@@ -12,7 +11,7 @@ import { ensureRuntimeImage } from './runtime-image.js';
 const LOOKING = new Set(['test', 'discover', 'readiness', 'plan', 'describe-containers', 'domain-routes', 'key-scan', 'list-project-files', 'nas-template-restore']);
 const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const CACHE_MS = 5 * 60 * 1000;
-const ready = new Map();
+const ready = new Map(); // server id -> { runId, until }
 
 const parent = path => (typeof path === 'string' && path.startsWith('/') ? posix.dirname(path) : null);
 export function requestPaths(server, request, facts) {
@@ -60,12 +59,14 @@ export async function prepareRuntime(server, request, options = {}, { connect, m
   try {
     const run = makeRunner(client);
     const key = server.id ?? null;
-    if (!key || (ready.get(key) ?? 0) < Date.now()) {
-      try { await ensureRuntimeImage({ client, run, identity, imageId: HELPER_RUNTIME_IMAGE_ID }); } catch (error) { ready.delete(key); throw error; }
-      if (key) ready.set(key, Date.now() + CACHE_MS);
+    let known = key ? ready.get(key) : null;
+    if (!known || known.until < Date.now()) {
+      try { known = { runId: (await ensureRuntimeImage({ client, run, identity })).runId }; } catch (error) { ready.delete(key); throw error; }
+      if (key) ready.set(key, { runId: known.runId, until: Date.now() + CACHE_MS });
     }
-    if (Array.isArray(options.runtimeMounts)) return options;
-    return { ...options, runtimeMounts: await computeRuntimeMounts({ server, request, run, identity, nasKind }) };
+    const withImage = { ...options, runtimeImageId: known.runId };
+    if (Array.isArray(options.runtimeMounts)) return withImage;
+    return { ...withImage, runtimeMounts: await computeRuntimeMounts({ server, request, run, identity, nasKind }) };
   } finally { client.end(); }
 }
 export const forgetRuntime = serverId => ready.delete(serverId);

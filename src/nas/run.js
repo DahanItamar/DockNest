@@ -7,7 +7,8 @@ export function prepareHelper(server, request, options = {}) {
   const { identity, runtime, nasKind } = identityFor(server);
   const operation = typeof request?.operation === 'string' && /^[a-z][a-z0-9-]{0,48}$/.test(request.operation) ? request.operation : null;
   if (runtime === 'container' && !Array.isArray(options.runtimeMounts)) throw new CommandRefused('This call did not say which folders the helper runtime needs.');
-  const command = helperCommand({ identity, runtime, operation, mounts: options.runtimeMounts ?? [], nasKind });
+  const imageId = typeof options.runtimeImageId === 'string' ? options.runtimeImageId : undefined;
+  const command = helperCommand({ identity, runtime, operation, mounts: options.runtimeMounts ?? [], nasKind, ...(imageId ? { imageId } : {}) });
   return { command, identity, runtime, operation };
 }
 

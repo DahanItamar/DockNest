@@ -11,6 +11,12 @@ export const HELPER_RUNTIME_IMAGE_ID = null; // 'sha256:' + 64 lowercase hex, se
 export const HELPER_RUNTIME_TAR_SHA256 = null; // 64 lowercase hex: SHA-256 of /app/helper-runtime.tar, set by the release build
 export const MIN_HOST_PYTHON = [3, 9];
 export const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
+// The layers of the image (its rootfs diff IDs, content hashes): the same on every Docker image store, unlike the image ID,
+// which is the config digest on the classic store and the manifest digest on the containerd store. A server's copy is
+// trusted only when its layers equal these; it is then run by the ID that server reports, which is immutable.
+export const HELPER_RUNTIME_LAYERS = null; // array of 'sha256:' + 64 hex, set by the release build
+export const HELPER_RUNTIME_TAG = HELPER_RUNTIME_NAME + ':release';
+export const isLayerList = value => Array.isArray(value) && value.length >= 1 && value.length <= 64 && value.every(item => IMAGE_ID_PATTERN.test(item));
 // Helper operations that may use the host network (restore test probes, domain checks). Everything else gets none.
 export const HOST_NETWORK_OPERATIONS = Object.freeze(['domain-routes', 'restore-test-run']);
 export const TAR_SHA256_PATTERN = /^[a-f0-9]{64}$/;
