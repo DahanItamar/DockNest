@@ -35,6 +35,10 @@ export function parseTrustProxy(value) {
 }
 export const config = {
   dataDir,
+  // rclone transport for cloud-drive destinations (src/storage/rclone.js). A path ending in .js runs under this Node (tests).
+  rcloneBin: process.env.DOCKNEST_RCLONE_BIN || 'rclone',
+  // Parents of the folders an owner may use as a local-folder destination (a USB disk or NAS share bind-mounted into the container).
+  localStorage: (process.env.DOCKNEST_LOCAL_STORAGE || '').split(',').map(value => value.trim()).filter(Boolean).map(value => path.resolve(value)),
   backupDir: path.resolve(process.env.BACKUP_DIR || path.join(dataDir, 'backups')),
   masterKey: process.env.MASTER_KEY_FILE || path.join(dataDir, 'master.key'),
   setupTokenFile: process.env.SETUP_TOKEN_FILE || path.join(dataDir, 'setup.token'),

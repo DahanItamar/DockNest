@@ -53,6 +53,7 @@ const catalogue = Object.freeze({
   'emergency.key_changed': 'New emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.',
   'emergency.key_changed:retired': 'The split was turned off: the kit opens with one recovery passphrase again. If you did not do this, open DockNest now.',
   // Recovery Guide (docs/recovery-guide.md).
+  'storage.reconnect_needed': 'Sign in again to {destination}. Backups to it fail until you press Reconnect in DockNest.',
   'runbook.outdated': 'Apps, servers, storage or the emergency kit changed since the Recovery Guide was made. Make a new one and replace the printed copy.',
   // Client reports (docs/client-reports.md).
   'report.failed': 'The scheduled client report could not be emailed after several tries. Open DockNest to download it instead.',

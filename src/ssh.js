@@ -5,6 +5,7 @@ import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
 import { pipeline } from 'node:stream/promises';
 import { helperSource } from './helper-bundle.js';
+import { prepareHelper, auditSudo } from './nas/run.js';
 // options: ssh2 transport keepalive for long-held sessions (the self-heal event stream uses 15 s, 3 misses).
 export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}) {
   return new Promise((resolve,reject)=>{
@@ -19,16 +20,18 @@ export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}
 // options.keepStdinOpen: stdin stays open while the helper works (site moves); options.signal closes the channel, which
 // ends stdin so the helper stops itself.
 export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}, options={}) {
- const client=await connect(server);
+ const prepared=prepareHelper(server,request,options);
+ const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {
   const source=helperSource().toString('utf8');
   // Send trusted code and request through stdin; a fixed loader avoids shell
   // argument limits as the helper grows. Request values never enter the command.
   const encoded=Buffer.from(source).toString('base64');
-  const command = 'python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
+  // The command comes from src/nas/run.js: today's exact command unless this server is a NAS (sudo, runtime container).
+  const command=prepared.command;
   return await new Promise((resolve,reject)=>{
    client.exec(command,{pty:false},(err,stream)=>{
-    if(err)return reject(err);
+    if(err){void auditSudo(server,prepared,'failed');return reject(err);}
     if(options.signal){const abort=()=>{reject(Object.assign(new Error('DockNest stopped waiting for this step.'),{aborted:true}));try{stream.close();}catch{}};if(options.signal.aborted){abort();return;}options.signal.addEventListener('abort',abort,{once:true});}
     let buffer='',result,remoteError,remoteCode;
     stream.on('data',chunk=>{
@@ -38,7 +41,7 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
-    stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null,...(remoteCode?{helperCode:remoteCode}:{})})));
+    stream.once('close',code=>{void auditSudo(server,prepared,code===0&&result?'ok':'failed');return code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null,...(remoteCode?{helperCode:remoteCode}:{})}));});
     const payload=encoded+'\n'+JSON.stringify(request)+'\n';
     if(options.keepStdinOpen)stream.write(payload);else stream.end(payload);
    });
@@ -62,13 +65,14 @@ export async function download(server,remotePath,output,onProgress=null) {
 
 // Binary stdout and bounded JSON stderr use independent SSH channels. Never log
 // stderr: the final in-memory manifest contains secret container configuration.
-export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{}) {
- const client=await connect(server);
+export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{},options={}) {
+ const prepared=prepareHelper(server,{...request,operation:'capture-stream'},options);
+ const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {
   const encoded=helperSource().toString('base64');
-  const command='python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
+  const command=prepared.command;
   return await new Promise((resolve,reject)=>client.exec(command,{pty:false},(error,stream)=>{
-   if(error)return reject(error);
+   if(error){void auditSudo(server,prepared,'failed');return reject(error);}
    let buffer='',result,remoteError,transportError;
    stream.stderr.on('data',chunk=>{
     buffer+=chunk.toString();
@@ -86,6 +90,7 @@ export async function remoteCaptureStream(server,request,output,onStage=()=>{},o
    stream.once('error',error=>{transportError=error;reject(Object.assign(new Error('Direct capture transport failed; inspect recovery status before retrying'),{cause:error}));});
    stream.once('close',async code=>{
     await writing.catch(()=>{});
+    void auditSudo(server,prepared,!transportError&&code===0&&result?.streamed?'ok':'failed');
     output.off('error',storageFailed);
     if(!transportError&&code===0&&result?.streamed&&result.manifest?.complete)return resolve(result);
     reject(Object.assign(new Error(remoteError||'Direct capture failed; inspect recovery status before retrying'),{remoteReported:!!remoteError}));
