@@ -1,4 +1,4 @@
-import { globalLoginGuard, recordGlobalFailure } from './login-guard.js';
+import { globalLoginGuard, recordGlobalFailure, rememberSignIn } from './login-guard.js';
 import { Router } from 'express';
 import fs from 'node:fs';
 import { clientKey } from './client-key.js';
@@ -190,6 +190,7 @@ auth.post('/verify',globalLoginGuard,rateLimit('verify',15),(req,res)=>{
  });
  if(!result){recordGlobalFailure();return res.status(401).json({error:'Invalid password or code.'});}
  res.cookie('dbm_session',result.token,cookieOptions);
+ rememberSignIn(req,res,cookieOptions);
  const {token:_token,...view}=result;res.json(view);
 });
 auth.post('/reauth',requireAuth,csrf,rateLimit('reauth',10),(req,res)=>{

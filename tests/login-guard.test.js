@@ -76,3 +76,57 @@ test('signing in still accepts any stored password: only new passwords follow th
   }
   assert.match(source, /password:newPasswordSchema,setupToken/);
 });
+
+// ---- the owner is never kept out by someone else's guessing ----
+const { rememberSignIn, knownSignIn, forgetKnownSignIns, DEVICE_COOKIE, KNOWN_MS } = await import('../src/login-guard.js');
+const { digest } = await import('../src/crypto.js');
+const request = (ip, cookie) => ({ ip, headers: cookie ? { cookie } : {} });
+const guard = req => { const out = { headers: {} }; const res = { set: (name, value) => { out.headers[name] = value; }, status: code => { out.status = code; return { json: body => { out.body = body; } }; } }; let passed = false; globalLoginGuard(req, res, () => { passed = true; }); return { passed, ...out }; };
+const signIn = (ip, now = Date.now()) => { let cookie; rememberSignIn(request(ip), { cookie: (name, value, options) => { cookie = { name, value, options }; } }, { secure: true, httpOnly: false, sameSite: 'lax' }, now); return cookie; };
+const pause = () => { const now = Date.now(); for (let n = 0; n < GLOBAL_FAIL_LIMIT; n++) recordGlobalFailure(now); };
+
+test('the known-device cookie is httpOnly, SameSite=Strict, 30 days, opaque, and only its hash is stored', () => {
+  reset(); forgetKnownSignIns();
+  const cookie = signIn('198.51.100.7');
+  assert.equal(cookie.name, DEVICE_COOKIE);
+  assert.deepEqual([cookie.options.httpOnly, cookie.options.sameSite, cookie.options.maxAge, cookie.options.secure], [true, 'strict', KNOWN_MS, true]);
+  const [id, signature] = cookie.value.split('.');
+  assert.match(id, /^[A-Za-z0-9_-]{32}$/); assert.ok(signature.length >= 40);
+  const keys = db.prepare("SELECT key FROM rate_limits WHERE key LIKE 'device:%'").all().map(row => row.key);
+  assert.deepEqual(keys, ['device:' + digest(id)], 'the stored key is a hash, never the id');
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM rate_limits').all()).includes(id));
+});
+
+test('during a pause the owner (known device) signs in; an attacker without the cookie is still paused', () => {
+  reset(); forgetKnownSignIns();
+  const cookie = signIn('198.51.100.7'); pause();
+  assert.equal(guard(request('203.0.113.9')).passed, false, 'a stranger is paused');
+  assert.equal(guard(request('203.0.113.9')).status, 429);
+  const owner = guard(request('203.0.113.50', `${cookie.name}=${cookie.value}`));
+  assert.equal(owner.passed, true, 'the owner, on a new address, with the cookie, is let through');
+  assert.equal(guard(request('203.0.113.9', 'other=1; ' + `${cookie.name}=${cookie.value}`)).passed, true, 'among other cookies');
+});
+
+test('a forged, tampered, expired or revoked cookie is ignored', () => {
+  reset(); forgetKnownSignIns();
+  const cookie = signIn('198.51.100.7'); pause();
+  const [id, signature] = cookie.value.split('.');
+  const forged = [`${cookie.name}=${id}.${'A'.repeat(signature.length)}`, `${cookie.name}=${id}`, `${cookie.name}=${id}.${signature}.x`, `${cookie.name}=${id.slice(1)}.${signature}`, `${cookie.name}=abc.def`, `${cookie.name}=`,
+    `${cookie.name}=${'z'.repeat(32)}.${signature}`];
+  for (const value of forged) assert.equal(guard(request('203.0.113.9', value)).passed, false, value.slice(0, 40));
+  // A validly signed id that was never stored (or whose row has expired) is no better.
+  db.prepare("UPDATE rate_limits SET reset_at=? WHERE key LIKE 'device:%'").run(Date.now() - 1);
+  assert.equal(guard(request('203.0.113.9', `${cookie.name}=${cookie.value}`)).passed, false, 'expired');
+  db.prepare("DELETE FROM rate_limits WHERE key LIKE 'login-ok:%'").run();
+  assert.equal(knownSignIn(request('203.0.113.9', `${cookie.name}=${cookie.value}`)), false);
+});
+
+test('the address of a recent sign-in is the fallback; other addresses stay paused; thirty days and a revoke end it', () => {
+  reset(); forgetKnownSignIns();
+  const now = Date.now(); signIn('198.51.100.7', now); pause();
+  assert.equal(guard(request('198.51.100.7')).passed, true, 'same address, no cookie');
+  assert.equal(guard(request('198.51.100.8')).passed, false, 'another address');
+  assert.equal(knownSignIn(request('198.51.100.7'), now + KNOWN_MS + 1), false, 'after 30 days');
+  forgetKnownSignIns();
+  assert.equal(guard(request('198.51.100.7')).passed, false, 'a password change or ending all sessions revokes both marks');
+});

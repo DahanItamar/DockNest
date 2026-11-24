@@ -200,7 +200,7 @@ By default DockNest trusts no reverse proxy: the client address used by its rate
 
 ### Global sign-in pause
 
-Next to the per-address limits, DockNest counts failed sign-ins from everyone together (wrong system password at sign-in or invitation, wrong code). After 20 failures within 15 minutes, sign-in pauses for 30 seconds, then 1, 2, 4, 8 and at most 15 minutes, with a plain message and a `Retry-After` header. Nothing is permanent: the pause and the count end by themselves, requests refused during a pause do not extend it, and a successful sign-in does not clear it. It is the backstop when many addresses, or forged ones (see above), try the password. A person locked out only has to wait.
+Next to the per-address limits, DockNest counts failed sign-ins from everyone together (wrong system password at sign-in or invitation, wrong code). After 20 failures within 15 minutes, sign-in pauses for 30 seconds, then 1, 2, 4, 8 and at most 15 minutes, with a plain message and a `Retry-After` header. Nothing is permanent: the pause and the count end by themselves, requests refused during a pause do not extend it, and a successful sign-in does not clear it. It is the backstop when many addresses, or forged ones (see above), try the password. The owner is not kept out by it: every full sign-in (password and code) leaves a signed, opaque known-device cookie (httpOnly, SameSite=Strict, 30 days; only its hash is stored) and remembers the sign-in's client address for 30 days, and requests carrying either skip the pause. The per-address limits and the authenticator code still apply to them. Changing the system password or ending all sessions clears both. Anyone else only has to wait.
 
 ## Host updater
 

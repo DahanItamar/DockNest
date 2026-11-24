@@ -5,6 +5,7 @@ import { db, id, audit, transaction } from './db.js';
 import { config } from './config.js';
 import { base32, seal, digest, passwordHash } from './crypto.js';
 import { requireAdmin, requireRecentAuth, securityPolicy, IDLE_MS, INVITATION_MS, opaque, sharedPasswordMatches, qrEnrollment, credentialEpoch, newPasswordSchema } from './auth.js';
+import { forgetKnownSignIns } from './login-guard.js';
 
 export const access = Router();
 access.use(requireAdmin);
@@ -16,6 +17,7 @@ const account = userId => {
   return user;
 };
 function revokeSessions(userId) {
+  forgetKnownSignIns();
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
   db.prepare('DELETE FROM login_challenges WHERE user_id=?').run(userId);
   for (const invitation of db.prepare('SELECT id FROM invitations WHERE user_id=?').all(userId)) db.prepare('DELETE FROM enrollment_challenges WHERE invitation_id=?').run(invitation.id);
@@ -96,6 +98,7 @@ access.post('/password', requireRecentAuth, (req, res) => {
     db.prepare("UPDATE settings SET value=? WHERE key='shared_password_hash'").run(passwordHash(data.newPassword));
     db.prepare("UPDATE settings SET value=? WHERE key='auth_epoch'").run(String(credentialEpoch() + 1));
     db.exec('DELETE FROM sessions; DELETE FROM login_challenges; DELETE FROM enrollment_challenges; DELETE FROM challenges;');
+    forgetKnownSignIns();
     db.prepare('UPDATE invitations SET revoked_at=? WHERE consumed_at IS NULL AND revoked_at IS NULL').run(Date.now());
     audit(req.user.id, 'access.universal_password_changed', req.user.id, { allSessionsRevoked: true });
   });
