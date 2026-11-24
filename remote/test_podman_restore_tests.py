@@ -140,12 +140,12 @@ class RestoreRefusalTests(Folders):
 
 class LimitFlagTests(unittest.TestCase):
     DOCKER = ['--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '1024', '--restart', 'no', '--log-driver', 'local', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3']
-    def test_podman_gets_the_limits_without_docker_log_options(self):
+    def test_podman_gets_the_limits_and_its_own_bounded_log_driver(self):
         for runtime in (rootless(), helper.Runtime('podman')):
             with helper.using_runtime(runtime):
                 flags = helper.limit_args(512, 1.0)
-            self.assertEqual(flags, ['--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '1024', '--restart', 'no'])
-            self.assertFalse(any(part.startswith('--log') for part in flags), 'Podman has no local log driver')
+            self.assertEqual(flags, ['--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '1024', '--restart', 'no', '--log-driver', 'k8s-file', '--log-opt', 'max-size=10m'])
+            self.assertNotIn('local', flags, 'Podman has no local log driver'); self.assertNotIn('max-file=3', flags, 'k8s-file has no file count')
     def test_docker_keeps_its_exact_flags(self):
         self.assertEqual(helper.limit_args(512, 1.0), self.DOCKER)
         with helper.using_runtime(helper.Runtime('docker', True, 'alice', 1001, '/home/alice')):
