@@ -8,7 +8,7 @@ export const MAX_MOUNTS = 64;
 // Letters, digits and a few path characters. A comma would add options to --mount, so it is refused with quotes,
 // backslashes, dollar signs, backticks and control characters.
 const SAFE_PATH = /^\/[\p{L}\p{N}._@+=: ~/-]*$/u;
-const DENIED = ['/proc', '/sys', '/dev', '/etc', '/run', '/var/run', '/root/.ssh', '/boot/config/ssh'];
+const DENIED = ['/proc', '/sys', '/dev', '/etc', '/run', '/var/run', '/root', '/data', '/var/lib/docker', '/usr', '/bin', '/boot/config/ssh'];
 export const UNRAID_TEMPLATES = '/boot/config/plugins/dockerMan/templates-user';
 
 function within(path, base) { return path === base || path.startsWith(base + '/'); }

@@ -20,17 +20,18 @@ export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}
 // options.keepStdinOpen: stdin stays open while the helper works (site moves); options.signal closes the channel, which
 // ends stdin so the helper stops itself.
 export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}, options={}) {
- const client=await connect(server);
+ const prepared=prepareHelper(server,request,options);
+ const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {
   const source=helperSource().toString('utf8');
   // Send trusted code and request through stdin; a fixed loader avoids shell
   // argument limits as the helper grows. Request values never enter the command.
   const encoded=Buffer.from(source).toString('base64');
   // The command comes from src/nas/run.js: today's exact command unless this server is a NAS (sudo, runtime container).
-  const prepared=prepareHelper(server,request,options),command=prepared.command;
+  const command=prepared.command;
   return await new Promise((resolve,reject)=>{
    client.exec(command,{pty:false},(err,stream)=>{
-    if(err)return reject(err);
+    if(err){void auditSudo(server,prepared,'failed');return reject(err);}
     if(options.signal){const abort=()=>{reject(Object.assign(new Error('DockNest stopped waiting for this step.'),{aborted:true}));try{stream.close();}catch{}};if(options.signal.aborted){abort();return;}options.signal.addEventListener('abort',abort,{once:true});}
     let buffer='',result,remoteError,remoteCode;
     stream.on('data',chunk=>{
@@ -65,12 +66,13 @@ export async function download(server,remotePath,output,onProgress=null) {
 // Binary stdout and bounded JSON stderr use independent SSH channels. Never log
 // stderr: the final in-memory manifest contains secret container configuration.
 export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{},options={}) {
- const client=await connect(server);
+ const prepared=prepareHelper(server,{...request,operation:'capture-stream'},options);
+ const client=await connect(server).catch(error=>{void auditSudo(server,prepared,'failed');throw error;});
  try {
   const encoded=helperSource().toString('base64');
-  const prepared=prepareHelper(server,{...request,operation:'capture-stream'},options),command=prepared.command;
+  const command=prepared.command;
   return await new Promise((resolve,reject)=>client.exec(command,{pty:false},(error,stream)=>{
-   if(error)return reject(error);
+   if(error){void auditSudo(server,prepared,'failed');return reject(error);}
    let buffer='',result,remoteError,transportError;
    stream.stderr.on('data',chunk=>{
     buffer+=chunk.toString();

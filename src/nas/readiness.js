@@ -66,3 +66,6 @@ export async function checkNas({ run, username = 'root', imageId = HELPER_RUNTIM
 
 // What goes into the server capabilities JSON. Facts only; nothing secret.
 export const capabilityFacts = result => result?.nas ? { nas: result.nas, helperRuntime: result.helperRuntime ?? null, stagingBase: result.stagingBase ?? null, sshIdentity: result.identity ?? null } : {};
+// These keys come only from the NAS readiness check; a helper answer can never set them.
+export const NAS_FACT_KEYS = Object.freeze(['nas', 'helperRuntime', 'stagingBase', 'sshIdentity']);
+export const withoutNasFacts = value => Object.fromEntries(Object.entries(value ?? {}).filter(([key]) => !NAS_FACT_KEYS.includes(key)));

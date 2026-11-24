@@ -4,7 +4,7 @@ import { helperArgv, helperCommand, identityFor, LEGACY_HOST_COMMAND, LOADER, qu
 import { computeMounts, checkMountPath, MountRefused } from '../src/nas/mounts.js';
 import { prepareHelper, setSudoAuditSink, auditSudo } from '../src/nas/run.js';
 import { detectNas, parseUnraidVersion, parseSynologyVersion, parseTrueNasVersion, trueNasSupported, pythonUsable, chooseStagingBase } from '../src/nas/detect.js';
-import { checkNas } from '../src/nas/readiness.js';
+import { checkNas, withoutNasFacts } from '../src/nas/readiness.js';
 import { HELPER_RUNTIME_IMAGE_ID } from '../shared/helper-runtime.js';
 
 // A fake image ID built at runtime (no hash literals in the repository).
@@ -171,4 +171,10 @@ test('readiness: old TrueNAS is refused, no-Python needs a pinned image, low spa
   assert.ok(tight.checks.find(c => c.id === 'hard-links'));
   const plain = await checkNas({ run: fakeRun().run, username: 'root' });
   assert.equal(plain.nas, null); assert.equal(plain.ready, false);
+});
+
+test('more system folders are denied and helper answers cannot set NAS facts', () => {
+  for (const bad of ['/root', '/root/x', '/data', '/var/lib/docker', '/var/lib/docker/volumes', '/usr/bin', '/bin']) assert.throws(() => checkMountPath(bad), MountRefused, bad);
+  assert.equal(checkMountPath('/var/lib/docknest'), '/var/lib/docknest');
+  assert.deepEqual(withoutNasFacts({ uid: 0, nas: { kind: 'unraid' }, helperRuntime: 'container', stagingBase: '/x', sshIdentity: 'root', docker: '27' }), { uid: 0, docker: '27' });
 });
