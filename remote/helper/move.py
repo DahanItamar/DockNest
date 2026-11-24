@@ -228,7 +228,8 @@ def source_site_facts(cfg,tokens):
     networks={}
     for c in cs:
         for name in (c.get('NetworkSettings',{}).get('Networks') or {}):
-            if name in ['bridge','host','none'] or name in networks:continue
+            # pasta and slirp4netns are how rootless Podman reaches the network, not networks: `network inspect pasta` exits 125.
+            if name in ['bridge','host','none','pasta','slirp4netns'] or name in networks:continue
             n=json.loads(docker('network','inspect',name))[0]
             networks[name]={'name':name,'driver':n.get('Driver'),'internal':bool(n.get('Internal')),'ipv6':bool(n.get('EnableIPv6')),'labels':{k:v for k,v in (n.get('Labels') or {}).items() if k.startswith('com.docker.compose.')}}
     # The web port nginx proxies to; then the configured loopback health URL; then the first published TCP port.
