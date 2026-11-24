@@ -73,8 +73,45 @@ jobs:
             [ "$attempt" = 6 ] || { echo "No successful Release validation run listed for $GITHUB_SHA yet (attempt $attempt of 6); retrying in 20 s"; sleep 20; }
           done
           echo "::error::No successful Release validation run for candidate $GITHUB_SHA; run it from main with that commit as the candidate before tagging"; exit 1
-  publish:
+  # The helper runtime image (docs/nas-servers.md) is built here, away from everything that can publish: this job can only read
+  # the repository (no contents write, no packages, no id-token, no secrets) and hands the tar and its three pins to the publish
+  # job as an artifact and as job outputs. The publish job checks the tar against them before it ships it.
+  helper-runtime:
     needs: gate
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read    # check out the tagged commit; nothing else
+    outputs:
+      image_id: ${{ steps.pins.outputs.image_id }}
+      tar_sha256: ${{ steps.pins.outputs.tar_sha256 }}
+      layers: ${{ steps.pins.outputs.layers }}
+      manifest_digest: ${{ steps.pins.outputs.manifest_digest }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - name: Build and prove the helper runtime image
+        run: bash scripts/build-helper-runtime.sh
+      - name: Record the pins
+        id: pins
+        run: |
+          echo "image_id=$(node scripts/pin-helper-runtime.js --id-from-tar helper-runtime.tar)" >> "$GITHUB_OUTPUT"
+          echo "tar_sha256=$(sha256sum helper-runtime.tar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "layers=$(node scripts/pin-helper-runtime.js --layers-from-tar helper-runtime.tar)" >> "$GITHUB_OUTPUT"
+          echo "manifest_digest=$(node scripts/pin-helper-runtime.js --manifest-digest-from-tar helper-runtime.tar)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: helper-runtime
+          path: helper-runtime.tar
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    needs: [gate, helper-runtime]
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
@@ -103,6 +140,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # NAS servers without Python run the helper in a runtime image shipped inside the DockNest image (docs/nas-servers.md).
+      # It was built and proven in the helper-runtime job. The tar is checked here against that job's outputs (its SHA-256, and
+      # its image ID and layers read from the tar itself) before they are written into shared/helper-runtime.js of this build
+      # only (the tagged commit keeps null). Nothing is built with these permissions and nothing is pushed on its own.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: helper-runtime
+      - name: Verify and pin the helper runtime image
+        env:
+          IMAGE_ID: ${{ needs.helper-runtime.outputs.image_id }}
+          TAR_SHA256: ${{ needs.helper-runtime.outputs.tar_sha256 }}
+          LAYERS: ${{ needs.helper-runtime.outputs.layers }}
+          MANIFEST: ${{ needs.helper-runtime.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          [ "$(sha256sum helper-runtime.tar | cut -d' ' -f1)" = "$TAR_SHA256" ] || { echo "::error::the helper runtime tar differs from the one that was built"; exit 1; }
+          [ "$(node scripts/pin-helper-runtime.js --id-from-tar helper-runtime.tar)" = "$IMAGE_ID" ] || { echo "::error::the helper runtime image ID differs"; exit 1; }
+          [ "$(node scripts/pin-helper-runtime.js --layers-from-tar helper-runtime.tar)" = "$LAYERS" ] || { echo "::error::the helper runtime layers differ"; exit 1; }
+          [ "$(node scripts/pin-helper-runtime.js --manifest-digest-from-tar helper-runtime.tar)" = "$MANIFEST" ] || { echo "::error::the helper runtime manifest digest differs"; exit 1; }
+          node scripts/pin-helper-runtime.js --image-id "$IMAGE_ID" --tar-sha256 "$TAR_SHA256" --layers "$LAYERS" --manifest-digest "$MANIFEST"
       - id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:

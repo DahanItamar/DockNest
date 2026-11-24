@@ -28,15 +28,15 @@ test('sudo mode is one fixed argv with no shell string', () => {
 });
 
 test('the container runtime has no network, no ports, a pinned image and computed mounts', () => {
-  const argv = helperArgv({ identity: 'sudo', runtime: 'container', operation: 'capture', mounts: ['/mnt/user/appdata/app', '/mnt/user/appdata/app/sub', '/mnt/user/system/docknest'], imageId: fakeId });
+  const argv = helperArgv({ identity: 'sudo', runtime: 'container', operation: 'capture', mounts: ['/mnt/user/appdata/app', '/mnt/user/appdata/app/sub', '/mnt/user/system/docknest'], imageId: fakeId, allowedIds: [fakeId] });
   assert.deepEqual(argv.slice(0, 8), ['sudo', '-n', '--', 'docker', 'run', '--rm', '-i', '--pull']);
   assert.equal(argv[argv.indexOf('--network') + 1], 'none');
   assert.ok(!argv.includes('-p') && !argv.includes('--publish') && !argv.includes('--privileged'));
   assert.ok(argv.includes(fakeId));
   const mounts = argv.filter((_, i) => argv[i - 1] === '--mount');
   assert.deepEqual(mounts, ['type=bind,src=/mnt/user/appdata/app,dst=/mnt/user/appdata/app,bind-propagation=rslave', 'type=bind,src=/mnt/user/system/docknest,dst=/mnt/user/system/docknest,bind-propagation=rslave']);
-  assert.equal(helperArgv({ runtime: 'container', operation: 'domain-routes', mounts: [], imageId: fakeId }).includes('host'), true);
-  assert.equal(helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId })[helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId }).indexOf('--network') + 1], 'none');
+  assert.equal(helperArgv({ runtime: 'container', operation: 'domain-routes', mounts: [], imageId: fakeId, allowedIds: [fakeId] }).includes('host'), true);
+  assert.equal(helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId, allowedIds: [fakeId] })[helperArgv({ runtime: 'container', operation: 'restore', mounts: [], imageId: fakeId, allowedIds: [fakeId] }).indexOf('--network') + 1], 'none');
 });
 
 test('the container runtime fails closed without a pinned image or mounts', () => {
