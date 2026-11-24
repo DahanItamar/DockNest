@@ -143,4 +143,39 @@ class RefusalTests(unittest.TestCase):
         for op in ('discover', 'test', 'domain-routes'):
             helper.refuse_foreign_runtime({'operation': op, 'config': {'runtime': {'engine': 'podman', 'rootless': False}}})
 
+class EngineErrorTests(unittest.TestCase):
+    ENGINES = [{'engine': 'podman', 'rootless': True, 'user': 'alice', 'uid': 1001}]
+    def collect(self, run):
+        errors = []
+        with patch.object(helper, 'run', run):
+            found = helper.other_engine_containers(self.ENGINES, {'alice': '/home/alice'}, errors)
+        return found, errors
+    def test_a_failing_engine_is_an_error_not_an_empty_list(self):
+        secret = 'secret' + 'value'
+        def failing(argv, **kw): raise subprocess.CalledProcessError(125, argv, stderr=secret.encode())
+        found, errors = self.collect(failing)
+        self.assertEqual(found, []); self.assertEqual(errors, [{'runtime': {'engine': 'podman', 'rootless': True, 'user': 'alice', 'uid': 1001}, 'reason': 'failed'}])
+        self.assertNotIn(secret, str(errors), 'no engine text in the error')
+    def test_each_failure_has_a_fixed_reason(self):
+        def timeout(argv, **kw): raise subprocess.TimeoutExpired(argv, 30)
+        def missing(argv, **kw): raise OSError('no runuser')
+        cases = [(timeout, 'timeout'), (lambda argv, **kw: b'x' * (helper.ENGINE_OUTPUT_LIMIT + 1), 'too-large'), (lambda argv, **kw: b'not-an-id\n', 'unreadable'), (missing, 'failed')]
+        for run, reason in cases:
+            self.assertEqual([e['reason'] for e in self.collect(run)[1]], [reason])
+        def garbled(argv, **kw): return b'aabbccddeeff\n' if argv[-2:] == ['ps', '-aq'] else b'{not json'
+        self.assertEqual([e['reason'] for e in self.collect(garbled)[1]], ['unreadable'])
+        def wrong(argv, **kw): return b'aabbccddeeff\n' if argv[-2:] == ['ps', '-aq'] else b'{"a": 1}'
+        self.assertEqual([e['reason'] for e in self.collect(wrong)[1]], ['unreadable'])
+        self.assertEqual(set(helper.ENGINE_ERRORS), {'timeout', 'failed', 'too-large', 'unreadable'})
+    def test_an_engine_with_no_containers_is_not_an_error(self):
+        found, errors = self.collect(lambda argv, **kw: b'')
+        self.assertEqual((found, errors), ([], []))
+    def test_the_error_list_is_optional_and_capped(self):
+        with patch.object(helper, 'run', side_effect=subprocess.CalledProcessError(1, 'x')):
+            self.assertEqual(helper.other_engine_containers(self.ENGINES, {'alice': '/home/alice'}), [])
+            many = [{'engine': 'podman', 'rootless': True, 'user': 'u%d' % n, 'uid': 2000 + n} for n in range(40)]
+            errors = []
+            helper.other_engine_containers(many, {'u%d' % n: '/home/u%d' % n for n in range(40)}, errors)
+        self.assertEqual(len(errors), helper.ENGINE_LIST_LIMIT)
+
 if __name__ == '__main__': unittest.main()
