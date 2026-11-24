@@ -2,13 +2,13 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
-import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_LABEL, HELPER_RUNTIME_TAR, HELPER_RUNTIME_TAR_SHA256, isPinnedImageId, isTarSha256 } from '../../shared/helper-runtime.js';
+import { HELPER_RUNTIME_LABEL, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG, HELPER_RUNTIME_TAR, HELPER_RUNTIME_TAR_SHA256, isLayerList, isTarSha256 } from '../../shared/helper-runtime.js';
 import { argvToCommand, sudoPrefix } from './command.js';
 
 // Getting the helper runtime image onto a NAS (docs/nas-servers.md). The image tar ships inside the DockNest image, is
 // checked against the SHA-256 pinned by the release build, streamed to `docker load` on the server over the same SSH
-// connection, and the loaded image must have exactly the pinned image ID. Nothing is pulled from a registry and no tag
-// is trusted: the server only ever runs the image by ID.
+// connection, and the loaded image must have exactly the pinned layers. Nothing is pulled from a registry and the tag is
+// never trusted: the server runs the image by the immutable ID it reports for those layers.
 export class RuntimeImageRefused extends Error { constructor(message) { super(message); this.name = 'RuntimeImageRefused'; } }
 export const MAX_TAR_BYTES = 512 * 1024 * 1024;
 const LOAD_TIMEOUT_MS = 10 * 60 * 1000;
@@ -41,23 +41,31 @@ export function execWithInput(client, argv, input, { timeoutMs = LOAD_TIMEOUT_MS
 }
 
 const ID_LINE = /^sha256:[a-f0-9]{64}$/;
-async function loadedId(run, lead, imageId) {
-  const out = await run([...lead, 'docker', 'image', 'inspect', '--format', '{{.Id}}', imageId]).catch(() => ({ code: 1, stdout: '' }));
-  return out.code === 0 && String(out.stdout).trim() === imageId;
+// What this server holds under the release tag: its own image ID and the image's layers. Layers are content hashes, equal
+// on every Docker image store; the ID is store-specific (config digest or manifest digest), so it is read here, not pinned.
+async function heldImage(run, lead, tag) {
+  const out = await run([...lead, 'docker', 'image', 'inspect', '--format', '{{.Id}}|{{json .RootFS.Layers}}', tag]).catch(() => ({ code: 1, stdout: '' }));
+  if (out.code !== 0) return null;
+  const [id, layers] = String(out.stdout).trim().split('|');
+  try { return ID_LINE.test(id) ? { id, layers: JSON.parse(layers) } : null; } catch { return null; }
 }
+const sameLayers = (a, b) => Array.isArray(a) && a.length === b.length && a.every((item, index) => item === b[index]);
 
-// `run(argv)` resolves { code, stdout } (the NAS read-only runner); `client` is the open SSH connection.
-export async function ensureRuntimeImage({ client, run, identity = 'root', imageId = HELPER_RUNTIME_IMAGE_ID, tarPath, tarSha256 } = {}) {
-  if (!isPinnedImageId(imageId)) throw new RuntimeImageRefused('The helper runtime image is not pinned in this DockNest build.');
+// `run(argv)` resolves { code, stdout } (the NAS read-only runner); `client` is the open SSH connection. Resolves { runId, loaded }:
+// the immutable ID the helper is run by on this server.
+export async function ensureRuntimeImage({ client, run, identity = 'root', layers = HELPER_RUNTIME_LAYERS, tag = HELPER_RUNTIME_TAG, tarPath, tarSha256 } = {}) {
+  if (!isLayerList(layers)) throw new RuntimeImageRefused('The helper runtime image is not pinned in this DockNest build.');
   const lead = identity === 'sudo' ? sudoPrefix() : [];
-  if (await loadedId(run, lead, imageId)) return { loaded: false };
+  const held = await heldImage(run, lead, tag);
+  if (held && sameLayers(held.layers, layers)) return { runId: held.id, loaded: false };
   await verifiedTar({ tarPath, tarSha256 });
   const code = await execWithInput(client, [...lead, 'docker', 'load'], createReadStream(tarPath ?? HELPER_RUNTIME_TAR));
   if (code !== 0) throw new RuntimeImageRefused('The server could not load the helper runtime image.');
-  // The ID is a hash of the image's own configuration and layers, so a swapped or damaged tar cannot produce it.
-  if (!(await loadedId(run, lead, imageId))) throw new RuntimeImageRefused('The loaded helper runtime image does not match the pinned ID.');
-  await removeOldRuntimes(run, lead, imageId);
-  return { loaded: true };
+  // The layers are hashes of the image's own content, so a swapped or damaged tar cannot produce them.
+  const loaded = await heldImage(run, lead, tag);
+  if (!loaded || !sameLayers(loaded.layers, layers)) throw new RuntimeImageRefused('The loaded helper runtime image does not match the pinned layers.');
+  await removeOldRuntimes(run, lead, loaded.id);
+  return { runId: loaded.id, loaded: true };
 }
 
 // Older DockNest runtime images (the DockNest label, any other ID) are removed once the pinned one is verified.

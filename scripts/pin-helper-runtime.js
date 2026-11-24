@@ -7,18 +7,19 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname } from 'node:path';
-import { IMAGE_ID_PATTERN, TAR_SHA256_PATTERN } from '../shared/helper-runtime.js';
+import { IMAGE_ID_PATTERN, TAR_SHA256_PATTERN, isLayerList } from '../shared/helper-runtime.js';
 
 const defaultFile = fileURLToPath(new URL('../shared/helper-runtime.js', import.meta.url));
 
-export function pinText(text, imageId, tarSha256) {
+export function pinText(text, imageId, tarSha256, layers) {
+  if (!isLayerList(layers)) throw new Error('The layers must be a list of sha256 values.');
   if (!IMAGE_ID_PATTERN.test(String(imageId))) throw new Error('The image ID must be sha256: followed by 64 lowercase hex characters.');
   if (!TAR_SHA256_PATTERN.test(String(tarSha256))) throw new Error('The tar checksum must be 64 lowercase hex characters.');
-  const line = name => new RegExp(`^export const ${name} = (?:null|'[^']*');`, 'm');
+  const line = name => new RegExp(`^export const ${name} = (?:null|'[^']*'|\\[[^\\]]*\\]);`, 'm');
   let out = text;
-  for (const [name, value] of [['HELPER_RUNTIME_IMAGE_ID', imageId], ['HELPER_RUNTIME_TAR_SHA256', tarSha256]]) {
+  for (const [name, value] of [['HELPER_RUNTIME_IMAGE_ID', `'${imageId}'`], ['HELPER_RUNTIME_TAR_SHA256', `'${tarSha256}'`], ['HELPER_RUNTIME_LAYERS', JSON.stringify(layers).replaceAll('"', "'")]]) {
     if (!line(name).test(out)) throw new Error(`${name} was not found in the expected form.`);
-    out = out.replace(line(name), () => `export const ${name} = '${value}';`);
+    out = out.replace(line(name), () => `export const ${name} = ${value};`);
   }
   return out;
 }
@@ -35,13 +36,28 @@ export function imageIdFromTar(tarPath) {
   return 'sha256:' + match[1];
 }
 
+// The layer IDs (rootfs diff IDs) of the one image in a docker save tar: read from its configuration blob.
+export function layersFromTar(tarPath) {
+  const run = member => spawnSync('tar', ['-xOf', basename(tarPath), member], { cwd: dirname(tarPath), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const manifest = run('manifest.json');
+  if (manifest.status !== 0) throw new Error('The tar has no manifest.json.');
+  const config = JSON.parse(manifest.stdout)?.[0]?.Config;
+  if (typeof config !== 'string' || !/^(?:blobs\/sha256\/[a-f0-9]{64}|[a-f0-9]{64}\.json)$/.test(config)) throw new Error('The image configuration is not named by its SHA-256.');
+  const blob = run(config);
+  if (blob.status !== 0) throw new Error('The tar has no image configuration.');
+  const layers = JSON.parse(blob.stdout)?.rootfs?.diff_ids;
+  if (!isLayerList(layers)) throw new Error('The image configuration lists no valid layers.');
+  return layers;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), value = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
   try {
     if (value('--id-from-tar')) console.log(imageIdFromTar(value('--id-from-tar')));
+    else if (value('--layers-from-tar')) console.log(JSON.stringify(layersFromTar(value('--layers-from-tar'))));
     else {
       const file = value('--file') ?? defaultFile;
-      writeFileSync(file, pinText(readFileSync(file, 'utf8'), value('--image-id'), value('--tar-sha256')));
+      writeFileSync(file, pinText(readFileSync(file, 'utf8'), value('--image-id'), value('--tar-sha256'), JSON.parse(value('--layers') ?? 'null')));
       console.log('Pinned the helper runtime image ' + value('--image-id'));
     }
   } catch (error) { console.error(error.message); process.exit(1); }
