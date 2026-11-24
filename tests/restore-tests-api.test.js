@@ -219,7 +219,7 @@ test('detail matches the contract; cancel, clean-up retry and acknowledge follow
   assert.equal((await json(await operator('POST', `/restore-tests/${testId}/cancel`, {}))).body.code, 'NOT_ACTIVE');
   const card = (await json(await operator('GET', `/sites/${siteId}/restore-tests`))).body;
   assert.equal(card.active, null);
-  assert.deepEqual({ ...card.last, finishedAt: !!card.last.finishedAt }, { id: testId, result: 'failed', finishedAt: true, restoreSeconds: null, internet: false, failedStep: 'start_containers', reason: detail.reason, serverName: 'detail-test', source: null });
+  assert.deepEqual({ ...card.last, finishedAt: !!card.last.finishedAt }, { id: testId, result: 'failed', finishedAt: true, restoreSeconds: null, recovery: null, internet: false, failedStep: 'start_containers', reason: detail.reason, serverName: 'detail-test', source: null });
   assert.equal((await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}))).body.code, 'TEST_ACTIVE', 'a failed clean-up still holds the site’s one unfinished test');
   // Acknowledge through the job's recovery route: administrators only, with the site name, and only when nothing is left.
   const jobId = rt.loadTest(testId).job_id;

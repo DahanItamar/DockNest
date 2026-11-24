@@ -9,6 +9,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 ### Added
 
 **Recovery**
+- Recovery time: DockNest now measures how long each app takes to come back, from its newest passed restore test (get the backup, restore data, start and check). Existing restore tests already count, so there is a number on day one. Screens follow in a later 3.0.0 build.
 - Redis and Valkey: apps using them are detected and shown in the Databases list with what they keep (saved to disk or cache only). A cache-only server is no longer an error, and with online dumps on, a server that saves to disk keeps running while a consistent snapshot is taken and restored.
 - Recovery Guide: plain, numbered steps to bring every app back on a new server, made from what DockNest knows now, with the exact commands for each app. Download it as a PDF (Hebrew included); addresses and storage logins are added only if you choose, and logins need you to confirm again. A copy without any login is saved next to the recovery kit after every Self Backup, and an optional alert tells you when the guide is out of date.
 - After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
