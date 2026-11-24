@@ -114,6 +114,23 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
   </tr>
 </table>
 
+New in 3.0.0, with synthetic data:
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/recovery-time.png" width="100%" alt="Dashboard apps list with a recovery time line under each last test" /></td>
+    <td width="50%"><img src="docs/media/client-report.png" width="100%" alt="Client report preview with one row per app and a Download PDF button" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/cloud-drives.png" width="100%" alt="Storage page with a Google Drive destination card" /></td>
+    <td width="50%"><img src="docs/media/nas-server.png" width="100%" alt="Map panel of an Unraid NAS with its readiness list" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/podman-app.png" width="100%" alt="Apps page with a Podman rootless engine badge on an app" /></td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
 <!-- Screenshots for Recovery Guide, Keys safe and Domains are added when their pages land. -->
 
 ## Requirements
