@@ -116,7 +116,7 @@ class Runtime:
         import tempfile
         with tempfile.TemporaryFile() as errors:
             # Its own session and process group: the engine child cannot outlive runuser, and a stop ends the whole group.
-            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True)
+            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True,cwd=self.workdir())
             deadline=time.monotonic()+timeout
             def end(forced):
                 group=getattr(os,'killpg',None)
@@ -140,8 +140,13 @@ class Runtime:
             if code!=0:
                 errors.seek(0,2);size=errors.tell();errors.seek(max(0,size-STREAM_ERROR_TAIL))
                 raise subprocess.CalledProcessError(code,self.argv(*args)[:1],stderr=errors.read(STREAM_ERROR_TAIL))
+    def workdir(self):
+        """The folder an engine of another user starts in: the helper's own working folder (root's home) is closed to that user, and
+        a rootless engine that cannot enter it fails (podman ps, for one). Rootful Docker keeps the folder it always had."""
+        return '/' if self.rootless else None
     def cli(self,*args,**options):
         if self.engine=='docker' and self.rootless:self.check_socket()
+        if self.workdir() is not None:options.setdefault('cwd',self.workdir())
         return run(self.argv(*args),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
     def compose(self,*args):

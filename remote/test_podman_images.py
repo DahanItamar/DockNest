@@ -19,8 +19,8 @@ def popen(action=None, hang=0):
     """A fake subprocess.Popen: wait() times out `hang` times, then `action(process)` runs and its result is the exit code."""
     calls = []
     class Process:
-        def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False):
-            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid = argv, stdin, stdout, stderr, start_new_session, FAKE_PID
+        def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False, cwd=None):
+            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid, self.cwd = argv, stdin, stdout, stderr, start_new_session, FAKE_PID, cwd
             self.returncode = None; self.waits = 0; self.terminated = False; self.killed = False; self.timeouts = []
             calls.append(self)
         def wait(self, timeout=None):
@@ -212,5 +212,25 @@ class WiringTests(unittest.TestCase):
     def test_stopping_is_read_at_call_time_not_copied_at_import(self):
         text = (pathlib.Path(__file__).parent / 'helper' / 'runtime.py').read_text()
         self.assertNotIn('import STOPPING', text); self.assertNotIn('STOPPING,', text.split('# </build:header>')[0])
+
+class WorkdirTests(unittest.TestCase):
+    def test_a_rootless_engine_never_starts_in_a_folder_closed_to_its_user(self):
+        fake = popen()
+        with patch.object(subprocess, 'Popen', fake), helper.using_runtime(rootless()): helper.current_runtime().stream('load', poll=0.01)
+        self.assertEqual(fake.calls[0].cwd, '/')
+        for engine in ('docker', 'podman'):
+            runtime = rootless(engine)
+            with patch.object(helper, 'run', return_value=b'') as run, patch.object(runtime, 'check_socket'): runtime.cli('ps')
+            self.assertEqual(run.call_args.kwargs['cwd'], '/', engine)
+    def test_rootful_engines_keep_their_folder(self):
+        with patch.object(helper, 'run', return_value=b'') as run: helper.Runtime().cli('ps')
+        self.assertNotIn('cwd', run.call_args.kwargs, 'rootful Docker is called exactly as before')
+        self.assertIsNone(helper.Runtime('podman').workdir())
+        with patch.object(helper, 'run', return_value=b'') as run: helper.Runtime('podman').cli('ps')
+        self.assertNotIn('cwd', run.call_args.kwargs)
+    def test_a_caller_can_still_choose_a_folder(self):
+        runtime = rootless()
+        with patch.object(helper, 'run', return_value=b'') as run: runtime.cli('ps', cwd='/tmp')
+        self.assertEqual(run.call_args.kwargs['cwd'], '/tmp')
 
 if __name__ == '__main__': unittest.main()
