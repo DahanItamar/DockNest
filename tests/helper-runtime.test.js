@@ -10,6 +10,7 @@ import { pinText, imageIdFromTar, layersFromTar, manifestDigestFromTar } from '.
 import { ensureRuntimeImage, verifiedTar, removeOldRuntimes, RuntimeImageRefused } from '../src/nas/runtime-image.js';
 import { computeRuntimeMounts, requestPaths } from '../src/nas/runtime-prepare.js';
 import { prepareHelper } from '../src/nas/run.js';
+import { helperArgv } from '../src/nas/command.js';
 import { MountRefused } from '../src/nas/mounts.js';
 import { HELPER_RUNTIME_IMAGE_ID, HELPER_RUNTIME_TAR_SHA256, HELPER_RUNTIME_LAYERS, HELPER_RUNTIME_TAG, HELPER_RUNTIME_MANIFEST_DIGEST } from '../shared/helper-runtime.js';
 
@@ -113,18 +114,23 @@ test('old runtime removal only touches labelled image IDs other than the current
   assert.deepEqual(server.removed, [oldId]);
 });
 
-test('the helper is run by the server-reported ID; a source build or a bad ID is refused', () => {
+test('the helper is run by the server-reported ID; a source build or an unpinned ID is refused', () => {
   const server = { id: 's1', username: 'admin', capabilities: JSON.stringify({ nas: { kind: 'truenas' }, helperRuntime: 'container' }) };
-  const prepared = prepareHelper(server, { operation: 'test' }, { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: runId, allowedIds: [runId] });
-  assert.ok(prepared.command.includes(`'${runId}'`) && !prepared.command.includes('sh -c'));
-  assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: [] }), /not pinned/, 'no ID, no pin: refused');
+  // prepareHelper has no way to widen the pinned set: in a source build nothing is pinned, so every ID is refused.
+  assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: runId }), /not pinned/);
   assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: [], runtimeImageId: 'docknest-helper-runtime:release' }), /not pinned/);
+  assert.throws(() => prepareHelper(server, { operation: 'test' }, { runtimeMounts: [], runtimeImageId: runId, allowedIds: [runId] }), /not pinned/, 'an allowedIds option is ignored');
+  // helperArgv itself checks the pinned set (tests pass one directly).
+  assert.ok(helperArgv({ runtime: 'container', operation: 'test', mounts: ['/mnt/tank/.docknest'], imageId: runId, allowedIds: [runId] }).includes(runId));
+  assert.throws(() => helperArgv({ runtime: 'container', operation: 'test', mounts: [], imageId: sha('swapped-config'), allowedIds: [imageId, runId] }), /not pinned/);
 });
 
 // Mounts: computed from DockNest's own facts, the config and Docker's bind sources; never from anything else.
 function mountRunner(binds, containers = []) {
   return async argv => {
     const a = argv[0] === 'sudo' ? argv.slice(3) : argv;
+    if (a[0] === 'realpath') return { code: 0, stdout: a.at(-1) + '\n' };
+    if (a[0] === 'mkdir') return { code: 0, stdout: '' };
     if (a[1] === 'inspect') return { code: 0, stdout: binds.join('\n') + '\n' };
     if (a[1] === 'ps') return { code: 0, stdout: containers.join('\n') + '\n' };
     return { code: 127, stdout: '' };
@@ -145,7 +151,7 @@ test('a looking call skips what the deny-list refuses; names that are not contai
   const mounts = await computeRuntimeMounts({ server: nasServer, request: { operation: 'discover' }, run: mountRunner(['/etc/nginx', '/mnt/tank/apps/a'], ['a'.repeat(64)]), identity: 'sudo', nasKind: 'truenas' });
   assert.deepEqual(mounts, ['/mnt/tank/.docknest', '/mnt/tank/apps/a']);
   const calls = [];
-  await computeRuntimeMounts({ server: nasServer, request: { operation: 'capture', config: { containers: ['ok-1', '--all', 'a b', '$(x)'] } }, run: async argv => { calls.push(argv); return { code: 0, stdout: '' }; }, identity: 'root', nasKind: 'truenas' });
+  await computeRuntimeMounts({ server: nasServer, request: { operation: 'capture', config: { containers: ['ok-1', '--all', 'a b', '$(x)'] } }, run: async argv => { calls.push(argv); const a = argv[0] === 'sudo' ? argv.slice(3) : argv; return { code: 0, stdout: a[0] === 'realpath' ? a.at(-1) + '\n' : '' }; }, identity: 'root', nasKind: 'truenas' });
   assert.deepEqual(calls.find(call => call[1] === 'inspect').slice(-1), ['ok-1']);
   assert.deepEqual(requestPaths(nasServer, { stagingBase: '/mnt/tank/x', config: { composeFiles: ['/a/b/c.yml', 5] } }, { stagingBase: '/mnt/tank/.docknest' }).sort(), ['/a/b', '/mnt/tank/.docknest', '/mnt/tank/x'].sort());
   const unraid = await computeRuntimeMounts({ server: { id: 'u', capabilities: '{}' }, request: { operation: 'discover' }, run: mountRunner([]), identity: 'root', nasKind: 'unraid' });
@@ -178,10 +184,45 @@ test('both image stores are accepted when the ID is pinned, and a swapped-config
   await assert.rejects(ensureRuntimeImage({ ...fakeServer(), ...pinnedArgs, ids: [] }), RuntimeImageRefused);
 });
 
-test('the helper command accepts only a pinned ID, however it was passed', () => {
-  const server = { id: 's1', username: 'admin', capabilities: JSON.stringify({ nas: { kind: 'truenas' }, helperRuntime: 'container' }) };
-  const options = { runtimeMounts: ['/mnt/tank/.docknest'], runtimeImageId: sha('swapped-config') };
-  assert.throws(() => prepareHelper(server, { operation: 'test' }, options), /not pinned/, 'source build: nothing is pinned');
-  assert.throws(() => prepareHelper(server, { operation: 'test' }, { ...options, allowedIds: [imageId, runId] }), /not pinned/, 'a shaped ID that is not in the set');
-  assert.ok(prepareHelper(server, { operation: 'test' }, { ...options, runtimeImageId: runId, allowedIds: [imageId, runId] }).command.includes(runId));
+
+// Mount paths are checked where they really point, and known-safe binds never make a backup refuse.
+function pathRunner(links, binds = [], missing = []) {
+  const calls = [];
+  const run = async argv => {
+    calls.push(argv);
+    const a = argv[0] === 'sudo' ? argv.slice(3) : argv;
+    if (a[0] === 'realpath') { const path = a.at(-1); return missing.includes(path) ? { code: 1, stdout: '' } : { code: 0, stdout: (links[path] ?? path) + '\n' }; }
+    if (a[0] === 'mkdir') { const index = missing.indexOf(a.at(-1)); if (index >= 0) missing.splice(index, 1); return { code: 0, stdout: '' }; }
+    if (a[1] === 'inspect') return { code: 0, stdout: binds.join('\n') + '\n' };
+    return { code: 127, stdout: '' };
+  };
+  return { run, calls };
+}
+test('a link from an app folder to a system folder is refused where it points; looking calls skip it', async () => {
+  const request = { operation: 'capture', config: { containers: ['app-1'], stagingRoot: '/mnt/tank/.docknest' } };
+  const evil = pathRunner({ '/mnt/tank/apps/app': '/etc/ssh' }, ['/mnt/tank/apps/app']);
+  await assert.rejects(computeRuntimeMounts({ server: nasServer, request, run: evil.run, identity: 'sudo', nasKind: 'truenas' }), MountRefused);
+  assert.ok(evil.calls.some(call => call.includes('realpath') && call.includes('-e') && call.includes('--')), 'fixed argv: realpath -e --');
+  const looking = await computeRuntimeMounts({ server: nasServer, request: { operation: 'discover' }, run: pathRunner({ '/mnt/tank/apps/app': '/etc/ssh' }, ['/mnt/tank/apps/app']).run, identity: 'sudo', nasKind: 'truenas' });
+  assert.deepEqual(looking, ['/mnt/tank/.docknest']);
+});
+
+test('a missing folder is refused, except DockNest\'s own staging folder, which is created owner-only', async () => {
+  const request = { operation: 'capture', config: { containers: ['app-1'], stagingRoot: '/mnt/tank/.docknest' } };
+  await assert.rejects(computeRuntimeMounts({ server: nasServer, request, run: pathRunner({}, ['/mnt/tank/gone'], ['/mnt/tank/gone']).run, identity: 'sudo', nasKind: 'truenas' }), /does not exist/);
+  const fresh = pathRunner({}, [], ['/mnt/tank/.docknest']);
+  assert.deepEqual(await computeRuntimeMounts({ server: nasServer, request, run: fresh.run, identity: 'sudo', nasKind: 'truenas' }), ['/mnt/tank/.docknest']);
+  assert.deepEqual(fresh.calls.find(call => call.includes('mkdir')), ['sudo', '-n', '--', 'mkdir', '-p', '-m', '700', '--', '/mnt/tank/.docknest']);
+});
+
+test('the host clock, name files and the Docker socket are left out instead of refusing a backup', async () => {
+  const request = { operation: 'capture', config: { containers: ['app-1'], stagingRoot: '/mnt/tank/.docknest' } };
+  const binds = ['/etc/localtime', '/etc/timezone', '/etc/hosts', '/var/run/docker.sock', '/run/docker.sock', '/mnt/tank/apps/app/data'];
+  assert.deepEqual(await computeRuntimeMounts({ server: nasServer, request, run: pathRunner({}, binds).run, identity: 'sudo', nasKind: 'truenas' }), ['/mnt/tank/.docknest', '/mnt/tank/apps/app/data']);
+  await assert.rejects(computeRuntimeMounts({ server: nasServer, request, run: pathRunner({}, ['/etc/ssh']).run, identity: 'sudo', nasKind: 'truenas' }), MountRefused, 'any other system folder still refuses');
+});
+
+test('server edits make the next call check the image again', async () => {
+  const { forgetRuntime } = await import('../src/nas/runtime-prepare.js');
+  assert.equal(forgetRuntime('s1'), false, 'forgetting an unknown server is harmless');
 });

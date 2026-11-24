@@ -8,9 +8,9 @@ export function prepareHelper(server, request, options = {}) {
   const operation = typeof request?.operation === 'string' && /^[a-z][a-z0-9-]{0,48}$/.test(request.operation) ? request.operation : null;
   if (runtime === 'container' && !Array.isArray(options.runtimeMounts)) throw new CommandRefused('This call did not say which folders the helper runtime needs.');
   // Only src/nas/runtime-prepare.js sets runtimeImageId (an ID the server reported for the pinned layers); helperArgv then
-  // accepts it only if it is one of the build's pinned IDs. allowedIds exists for tests; no caller in src passes it.
+  // accepts it only if it is one of the build's pinned IDs.
   const imageId = typeof options.runtimeImageId === 'string' ? options.runtimeImageId : undefined;
-  const command = helperCommand({ identity, runtime, operation, mounts: options.runtimeMounts ?? [], nasKind, ...(imageId ? { imageId } : {}), ...(Array.isArray(options.allowedIds) ? { allowedIds: options.allowedIds } : {}) });
+  const command = helperCommand({ identity, runtime, operation, mounts: options.runtimeMounts ?? [], nasKind, ...(imageId ? { imageId } : {}) });
   return { command, identity, runtime, operation };
 }
 

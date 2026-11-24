@@ -9,6 +9,9 @@ import { ensureRuntimeImage } from './runtime-image.js';
 // Calls that only look (discovery, tests, readiness) skip a folder the deny-list refuses; every other call refuses
 // as a whole, so a backup never silently misses a folder.
 const LOOKING = new Set(['test', 'discover', 'readiness', 'plan', 'describe-containers', 'domain-routes', 'key-scan', 'list-project-files', 'nas-template-restore']);
+// Bind mounts every container has and no backup holds (the host's clock and name files, the Docker socket). They are left out of
+// the helper's folders on purpose: the helper never copies them, and they must not make a whole backup refuse.
+export const SKIPPED_BINDS = Object.freeze(['/etc/localtime', '/etc/timezone', '/etc/hosts', '/etc/hostname', '/etc/resolv.conf', '/var/run/docker.sock', '/run/docker.sock']);
 const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const CACHE_MS = 5 * 60 * 1000;
 const ready = new Map(); // server id -> { runId, until }
@@ -38,15 +41,30 @@ async function containerNames(run, lead, request) {
   return out.code === 0 ? String(out.stdout).split('\n').map(line => line.trim()).filter(line => /^[a-f0-9]{64}$/.test(line)).slice(0, 200) : [];
 }
 
+// The deny-list is checked on the path as written and again on where it really points: a link from an app folder to /etc is
+// refused. realpath -e runs on the server with a fixed argv. DockNest's own staging folder may not exist yet: it is created
+// (mkdir -p, owner only) and resolved again; any other folder that does not exist is refused.
+async function resolvedMount(run, lead, path, { nasKind, create }) {
+  let out = await run([...lead, 'realpath', '-e', '--', path]).catch(() => ({ code: 1, stdout: '' }));
+  if (out.code !== 0 && create) {
+    await run([...lead, 'mkdir', '-p', '-m', '700', '--', path]).catch(() => null);
+    out = await run([...lead, 'realpath', '-e', '--', path]).catch(() => ({ code: 1, stdout: '' }));
+  }
+  if (out.code !== 0) throw new MountRefused('A folder the helper runtime needs does not exist on the server.');
+  checkMountPath(String(out.stdout).trim(), { nasKind });
+  return path;
+}
 export async function computeRuntimeMounts({ server, request, run, identity, nasKind }) {
   const lead = identity === 'sudo' ? sudoPrefix() : [];
   const facts = typeof server.capabilities === 'string' ? (() => { try { return JSON.parse(server.capabilities); } catch { return null; } })() : server.capabilities;
-  const wanted = [...requestPaths(server, request, facts), ...await bindSources(run, lead, await containerNames(run, lead, request))];
+  const binds = (await bindSources(run, lead, await containerNames(run, lead, request))).filter(path => !SKIPPED_BINDS.includes(path));
+  const wanted = [...requestPaths(server, request, facts), ...binds];
+  const own = new Set([facts?.stagingBase, request?.stagingBase, request?.config?.stagingRoot].filter(value => typeof value === 'string'));
   if (nasKind === 'unraid' && ['discover', 'nas-template-restore'].includes(request?.operation)) wanted.push(UNRAID_TEMPLATES);
   const looking = LOOKING.has(request?.operation);
   const allowed = [];
   for (const path of wanted) {
-    try { allowed.push(checkMountPath(path, { nasKind })); } catch (error) { if (!looking) throw error; }
+    try { allowed.push(await resolvedMount(run, lead, checkMountPath(path, { nasKind }), { nasKind, create: own.has(path) && !looking })); } catch (error) { if (!looking) throw error; }
   }
   return computeMounts(allowed, { nasKind });
 }
@@ -69,4 +87,5 @@ export async function prepareRuntime(server, request, options = {}, { connect, m
     return { ...withImage, runtimeMounts: await computeRuntimeMounts({ server, request, run, identity, nasKind }) };
   } finally { client.end(); }
 }
+// Called when a server's connection details change, so the next call checks the image again.
 export const forgetRuntime = serverId => ready.delete(serverId);
