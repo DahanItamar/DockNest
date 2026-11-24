@@ -1,6 +1,8 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {AlertCircle,ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
+import {RuntimeBadge} from '../runtime-ui.jsx';
+import {isRootful,testServerProblem} from '../runtime-ui.js';
 import {useGuard} from '../map/MoveFlow.jsx';
 import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
@@ -50,7 +52,8 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
  const cores=Number(target?.capabilities?.cpus??target?.capabilities?.cpuCount)||null;
  const time=timeLimit(form.time),memory=memoryLimit(form.memory),cpu=cpuLimit(form.cpu,cores);
  const active=!!card?.active,copyTargets=Array.isArray(card?.copyTargets)?card.copyTargets:[];
- const reason=whyNoRun({serverId:form.serverId,liveServer:live,allowLive:form.allow})||(active?'A test is already running.':'');
+ const engineProblem=testServerProblem(site,target);
+ const reason=whyNoRun({serverId:form.serverId,liveServer:live,allowLive:form.allow})||(active?'A test is already running.':'')||(engineProblem?engineProblem.split('. ')[0].replace(/^This server/,target.name)+'.':'');
  const shown=(state,result)=>(tried||(state.pick==='custom'&&state.custom.trim()))?result.error:'';
  const set=patch=>{setForm(previous=>({...previous,...patch}));setStarted(false);setError('')};
  const invalid=!!(time.error||memory.error||cpu.error);
@@ -91,6 +94,8 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
    <label className="field"><span>How often</span>
     <select value={form.cadence} disabled={!form.enabled||!isAdmin} onChange={event=>set({cadence:event.target.value})}>{CADENCES.map(([value,text])=><option key={value} value={value}>{text}</option>)}</select>
    </label>
+   {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="rt-engine"><span>Engine</span><RuntimeBadge runtime={site.config.runtime}/></div>}
+   {engineProblem&&<AlertPanel variant="warning" title={`${target.name} cannot test ${site.name}`}>{engineProblem}</AlertPanel>}
    <label className="field"><span>Test server</span>
     <select value={form.serverId} disabled={!isAdmin} onChange={event=>set({serverId:event.target.value,allow:false})}>
      <option value="">Choose a server</option>
