@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
+from .runtime import (
+    RUNTIME_USER, MIN_RUNTIME_UID, Runtime, RuntimeRefused, parse_subid, using_runtime)
 from .paths import (
     SITE_PATH, lexical, within)
 from .routing import (
@@ -388,3 +390,129 @@ def link_report(containers):
         try:return container_link_facts(c)
         except Exception:return None
     return [facts(c) for c in containers]
+
+# ---- Container engines (docs/podman-rootless.md, ADR decision 2) ----
+# Read-only probe of the engines root can reach: rootful Docker, Podman as root, and for each user with a subordinate ID
+# range whose home already holds rootless storage, that user's running rootless Docker and rootless Podman. Nothing is
+# started or created, a home folder is only lstat'd (never followed through a link), and any engine that cannot be read
+# is left out: the probe never fails a scan. Users, uids, homes and versions of rootless engines come from files and
+# sockets those users control, so they are validated here and again by DockNest before they are shown.
+ENGINE_LIST_LIMIT=32
+SUBORDINATE_FILE='/etc/subuid'
+ENGINE_VERSION=re.compile(r'[0-9][0-9A-Za-z.+~_-]{0,31}')
+def rootless_users(subuid_text=None,lookup=None):
+    """(user, uid, home) for each name in /etc/subuid with exactly one valid range, a normal uid and an absolute home."""
+    if subuid_text is None:
+        try:subuid_text=pathlib.Path(SUBORDINATE_FILE).read_text()
+        except OSError:return []
+    if lookup is None:
+        def lookup(key):
+            import pwd
+            try:entry=pwd.getpwuid(int(key)) if str(key).isdigit() else pwd.getpwnam(key)
+            except (KeyError,ValueError,OverflowError):return None
+            return entry.pw_name,entry.pw_uid,entry.pw_dir
+    found,seen=[],set()
+    for line in str(subuid_text).splitlines():
+        line=line.strip()
+        if not line or line.startswith('#') or line.count(':')!=2:continue
+        entry=lookup(line.split(':',1)[0])
+        if not entry or entry[0] in seen:continue
+        user,uid,home=entry
+        seen.add(user)
+        if not isinstance(user,str) or not RUNTIME_USER.fullmatch(user) or type(uid) is not int or uid<MIN_RUNTIME_UID:continue
+        if not isinstance(home,str) or not home.startswith('/') or home=='/' or posixpath.normpath(home)!=home or '\0' in home:continue
+        own='\n'.join(l for l in str(subuid_text).splitlines() if l.strip().split(':',1)[0] in (user,str(uid)))
+        try:parse_subid(own,user,uid)
+        except RuntimeRefused:continue
+        found.append((user,uid,home))
+        if len(found)>=ENGINE_LIST_LIMIT:break
+    return found
+def storage_folder(home,*parts,lstat=os.lstat):
+    """True when home/<parts> is a real folder (a link, a file or nothing is False). Never reads inside it."""
+    path=home
+    for part in parts:
+        path=posixpath.join(path,part)
+        try:info=lstat(path)
+        except OSError:return False
+        if not stat.S_ISDIR(info.st_mode):return False
+    return True
+def socket_owned_by(path,uid,lstat=os.lstat):
+    try:info=lstat(path)
+    except OSError:return False
+    return stat.S_ISSOCK(info.st_mode) and info.st_uid==uid
+def cgroup_delegated(uid,read=None):
+    """True when the user's systemd slice has memory and cpu delegated (cgroup v2), so a limit can be set for its containers."""
+    path='/sys/fs/cgroup/user.slice/user-%d.slice/user@%d.service/cgroup.controllers'%(uid,uid)
+    try:text=(read or (lambda p:pathlib.Path(p).read_text()))(path)
+    except OSError:return False
+    return {'memory','cpu'}<=set(str(text).split())
+def engine_version(runtime,format):
+    try:answer=runtime.cli('version','--format',format,timeout=20).decode('utf-8','replace').strip()
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):return None
+    return answer if ENGINE_VERSION.fullmatch(answer) else None
+def engine_probe(subuid_text=None,lookup=None,lstat=os.lstat,which=shutil.which,delegated=cgroup_delegated,version=engine_version):
+    """Engines found on this server: [{engine, rootless, user?, uid?, version, cgroupDelegated}]. Never raises."""
+    engines=[]
+    def add(runtime,format,delegation):
+        number=version(runtime,format)
+        if number is None:return
+        engines.append({**runtime.describe(),'version':number,'cgroupDelegated':delegation})
+    try:
+        add(Runtime(),'{{.Server.Version}}',True)
+        if which('podman'):add(Runtime('podman'),'{{.Version}}',True)
+        for user,uid,home in rootless_users(subuid_text,lookup):
+            if storage_folder(home,'.local','share','docker',lstat=lstat) and socket_owned_by('/run/user/%d/docker.sock'%uid,uid,lstat):
+                add(Runtime('docker',True,user,uid,home),'{{.Server.Version}}',bool(delegated(uid)))
+            if which('podman') and storage_folder(home,'.local','share','containers','storage',lstat=lstat):
+                add(Runtime('podman',True,user,uid,home),'{{.Version}}',bool(delegated(uid)))
+    except Exception:pass
+    return engines[:ENGINE_LIST_LIMIT]
+def engine_homes(subuid_text=None,lookup=None):
+    return {user:home for user,uid,home in rootless_users(subuid_text,lookup)}
+def engine_runtime(engine,homes):
+    """The Runtime for one probed engine record (its home taken from the passwd lookup, never from the record), or None."""
+    try:
+        home=homes.get(engine.get('user')) if engine.get('rootless') else None
+        return Runtime(engine['engine'],engine['rootless'],engine.get('user'),engine.get('uid'),home)
+    except (RuntimeRefused,KeyError,TypeError,AttributeError):return None
+ENGINE_CONTAINER_LIMIT=200
+ENGINE_OUTPUT_LIMIT=8*1024*1024
+def other_engine_containers(engines,homes):
+    """(runtime, inspect record) for every container of every non-default engine. A broken, slow or oversized engine
+    adds nothing: a rootless user controls its engine's answers, so time, size and count are all capped."""
+    tagged=[]
+    for engine in engines[:ENGINE_LIST_LIMIT]:
+        runtime=engine_runtime(engine,homes)
+        if runtime is None or (runtime.engine=='docker' and not runtime.rootless):continue
+        try:
+            listing=runtime.cli('ps','-aq',timeout=30)
+            if len(listing)>ENGINE_OUTPUT_LIMIT:continue
+            ids=listing.decode('utf-8','replace').split()[:ENGINE_CONTAINER_LIMIT]
+            if not ids or not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):continue
+            answer=runtime.cli('inspect',*ids,timeout=60)
+            if len(answer)>ENGINE_OUTPUT_LIMIT:continue
+            records=json.loads(answer)
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):continue
+        if not isinstance(records,list):continue
+        tagged+=[(runtime,c) for c in records[:ENGINE_CONTAINER_LIMIT] if isinstance(c,dict) and isinstance(c.get('Id'),str)]
+    return tagged[:ENGINE_CONTAINER_LIMIT]
+def foreign_container(runtime,c):
+    """The discover entry of a container from a Podman or rootless engine: only fields the engine really answered.
+    No hardening facts, links, web hints or configuration files yet: those read the rootful Docker engine only."""
+    config,state,network=c.get('Config') or {},c.get('State') or {},c.get('NetworkSettings') or {}
+    return {'hardening':None,'links':None,'runtime':runtime.describe(),'id':c['Id'],'name':str(c.get('Name') or '').lstrip('/'),'image':config.get('Image'),
+        'state':state.get('Status'),'running':bool(state.get('Running')),'health':(state.get('Health') or {}).get('Status'),'labels':config.get('Labels') or {},
+        'mounts':c.get('Mounts') or [],'temporaryMemoryFolders':list((c.get('HostConfig') or {}).get('Tmpfs') or {}),'ports':network.get('Ports') or {},
+        'webHints':[],'backupConfiguration':{'composeFiles':[],'configFiles':[],'directory':''}}
+# Until backup and restore understand other engines, an app that names one is refused by every operation that would
+# otherwise run its containers through rootful Docker.
+# KNOWN GAP for the backup/restore PR: operations that carry no config (restore and prepare-restore take a manifest;
+# self-heal-*, describe-containers and list-project-files take names) are blocked in Node (src/runtime.js hasForeignRuntime),
+# but the helper cannot see their engine yet. The restore PR must refuse a manifest whose runtime is not rootful Docker.
+RUNTIME_FREE_OPERATIONS=('discover','test','domain-routes','install-status')
+def refuse_foreign_runtime(request):
+    config=request.get('config') if isinstance(request,dict) else None
+    runtime=config.get('runtime') if isinstance(config,dict) else None
+    if runtime is None or request.get('operation') in RUNTIME_FREE_OPERATIONS:return
+    if isinstance(runtime,dict) and runtime.get('engine')=='docker' and runtime.get('rootless') is False and not runtime.get('user') and runtime.get('uid') is None:return
+    raise RuntimeRefused('Backups and restores of Podman and rootless apps are not available yet in this release.')
