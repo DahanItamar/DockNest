@@ -59,6 +59,10 @@ async function connectRunner() {
 
 // ---- a rootless user ------------------------------------------------------------------------------------------------------
 const USER = 'dnlive';
+async function diagnostics(uid) {
+  const tryRun = async (...args) => (await sudo(...args).catch(error => 'ERR ' + String(error.stderr || error.message).slice(0, 300))).slice(0, 700);
+  return JSON.stringify({ run: await tryRun('ls', '-la', `/run/user/${uid}`), unit: await tryRun('systemctl', 'status', `user@${uid}.service`, '--no-pager', '-l'), pkg: await tryRun('dpkg', '-l', 'dbus-user-session'), sessions: await tryRun('loginctl', 'list-users') });
+}
 async function createUser({ delegated }) {
   // dbus-user-session starts the per-user bus with the user's systemd instance; uidmap provides newuidmap and newgidmap.
   await sudo('apt-get', 'update');
@@ -72,7 +76,10 @@ async function createUser({ delegated }) {
   await sudo('systemctl', 'daemon-reload');
   await sudo('loginctl', 'enable-linger', USER);
   await sudo('systemctl', 'restart', `user@${uid}.service`);
-  await until(async () => (await sh('test', ['-S', `/run/user/${uid}/bus`]).then(() => true, () => false)), 'The user session bus did not start', 60);
+  // The user's own D-Bus socket comes from dbus.socket of the user's systemd instance; start it explicitly and keep what the
+  // system says if it does not appear (a failed run must say why).
+  await sudo('systemctl', '--user', '--machine', USER + '@', 'start', 'dbus.socket').catch(() => '');
+  await until(async () => (await sh('sudo', ['test', '-S', `/run/user/${uid}/bus`]).then(() => true, () => false)), 'The user session bus did not start: ' + await diagnostics(uid), 60).catch(async error => { throw new Error(String(error.message).replace(/did not start: .*/s, 'did not start: ') + await diagnostics(uid)); });
   const controllers = await sudo('cat', `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`).catch(() => '');
   evidence.delegation = controllers.split(/\s+/).filter(Boolean);
   const has = ['memory', 'cpu'].every(name => evidence.delegation.includes(name));
