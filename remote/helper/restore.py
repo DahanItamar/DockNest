@@ -8,9 +8,11 @@ from .common import (
 from .paths import (
     excluded_path, mount_table)
 from .databases import (
-    cached_sqlite_file_proof, data_checks, file_sha256, restart_services)
+    cached_sqlite_file_proof, data_checks, file_sha256, restart_services, sqlite_file_source)
 from .backup import (
     archive_renames_safely, tree_digest, verify_artifacts)
+from .runtime import (
+    chmod_folder, current_runtime, engine_architecture, manifest_runtime_problem, refuse_links, remove_rootless_data_root, restore_target, rootless_data_root, rootless_hardening_problem, translate_tree)
 from .incremental import (
     CHAIN_ID, FORMAT_VERSIONS, HEX64, MAX_CHAIN, manifest_snapshots)
 from .net import (
@@ -262,6 +264,10 @@ def unpack_verified(req,root):
     unpacked=root/'unpacked';safe_extract(payload,unpacked)
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion') not in FORMAT_VERSIONS or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
+    # Format 3 (Podman and rootless apps): checked here, where every restore, restore test, move and recovery reads a manifest.
+    problem=manifest_runtime_problem(manifest)
+    if problem:raise ValueError(problem)
+    if manifest.get('runtime') is not None and req.get('operation') not in ('restore','restore-test-run'):raise ValueError('Moves and recovery of Podman and rootless apps are not available yet in this release.')
     # A v2 full package stands alone; an increment needs its whole chain.
     if manifest['formatVersion']==2 and (manifest.get('backupKind')!='full' or (manifest.get('chain') or {}).get('position')!=0):raise ValueError('This backup is incremental; restore it together with its chain.')
     return unpacked,manifest,verify_artifacts(unpacked,manifest)
@@ -287,7 +293,7 @@ def broken_link(chain,k):
 def chain_problem(manifests,chain):
     """None when manifests[0..n-1] form one verified chain in order, else the reason."""
     first=manifests[0]
-    if first.get('formatVersion') not in FORMAT_VERSIONS:return 'Unsupported or incomplete backup'
+    if first.get('formatVersion') not in (1,2):return 'Unsupported or incomplete backup'  # format 3 (Podman and rootless) is never a chain
     if first.get('formatVersion')!=2 or first.get('backupKind')!='full':return 'The first backup of the chain is not a full backup.'
     chain_id=(first.get('chain') or {}).get('id')
     try:keys=manifest_snapshots(first)
@@ -565,7 +571,22 @@ def chain_extract(archives,destination):
         # from a relative template, which -C (openat-based) does not move.
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
     strip_privileges(destination)
+def refuse_restored_links(service,restored):
+    """Root reads the restored SQLite files of a copy that belongs to a rootless user: no link on any of their paths."""
+    for filename in service.get('sqliteFiles') or []:
+        source,_=sqlite_file_source(filename,restored)
+        for suffix in ('','-journal','-wal','-shm'):refuse_links(str(source)+suffix)
 def restore(req):
+    try:restore_copy(req)
+    except BaseException:
+        # A rootless copy's data folder is root-made for this job only: a failed restore never leaves it behind.
+        runtime=current_runtime()
+        if runtime.rootless:
+            try:remove_rootless_data_root(runtime,req.get('job'))
+            except Exception:pass
+        raise
+def restore_copy(req):
+    global RUNTIME
     root=owned_job_root(req)
     unpacked,manifest,artifacts_verified=unpack_verified(req,root)
     external=external_restore_plan(manifest,req.get('externalReadOnly',[]))
@@ -578,13 +599,22 @@ def restore(req):
         if tree_digest(entries[0])!=manifest.get('staticFiles'):raise ValueError('Restored static files differ from the captured website')
         for i,_ in enumerate(manifest.get('configurationFiles',[])):safe_extract(unpacked/('config-%d.tar'%i),root/('configuration-%d'%i))
         emit(result={'kind':'static','root':str(root),'documentRoot':str(entries[0]),'filesVerified':True,'fileCount':manifest['staticFiles']['files'],'hostingUnchanged':True,'externallyAccessible':False,'restoreTested':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh private directory','artifactsVerified':artifacts_verified},'application':{'status':'passed','scope':'static file contents and metadata; no visitor workflow','method':'captured tree digest'}},'access':'Review files at '+str(entries[0])+'; configure nginx only after validation.'});return
-    if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise ValueError('Architecture mismatch')
+    data_root=root;translation=None;foreign=manifest.get('runtime') is not None
+    if foreign:
+        # Podman and rootless apps (docs/podman-rootless.md): the target engine is the manifest's own unless the request names
+        # another user of the same engine kind. Anything else is refused before a container or a file exists.
+        target,translation=restore_target(manifest,req.get('runtime'))
+        RUNTIME=target
+        if len(manifest.get('containers') or [])!=1:raise ValueError('Restoring an app with several containers into Podman or a rootless engine is not available yet.')
+        if target.rootless:data_root=pathlib.Path(rootless_data_root(target,req['job']))
+    if manifest['architecture']!=engine_architecture():raise ValueError('Architecture mismatch')
     containers=manifest['containers'];plans=restore_network_plan(containers)
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
     multi=len(containers)>1
     if multi and int(docker('version','--format','{{.Server.Version}}').decode().split('.')[0])<28:raise ValueError('Grouped isolated restores require Docker 28 or newer')
     if shutil.disk_usage(root).free<mount_bytes(unpacked)+dump_bytes(manifest)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
-    definitions=[];sources={}
+    if data_root!=root and shutil.disk_usage(data_root).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+    definitions=[];sources={};owned=set()
     for i,c in enumerate(containers):
         name='dbm-restore-'+req['job'][:12]+('-'+str(i) if multi else '')
         args=['create','--name',name,'--network','none','--restart','no','--label','docker-backup-manager.restore='+req['job']]
@@ -592,9 +622,18 @@ def restore(req):
         args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+        problem=rootless_hardening_problem(current_runtime(),hardening(c))
+        if problem:raise ValueError(problem)
         args+=hardening_args(c,root)
         for j,m in enumerate(c['Mounts']):
-            source=extract_mount(unpacked,i,j,m,sources,root)
+            source=extract_mount(unpacked,i,j,m,sources,data_root)
+            if data_root!=root and source not in owned:
+                # Root-owned, traversable folder; the data inside gets the target user's IDs (ADR decision 5), refused as a whole
+                # when any file's owner cannot be mapped, before anything is re-owned.
+                chmod_folder(source.parent,0o711)
+                # Even with the same ID map every owner is checked: nothing in a rootless copy may belong to host root.
+                translate_tree(str(source),*(translation or (manifest['idMap'],manifest['idMap'])))
+                owned.add(source)
             mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
             args+=['--mount',mount]
         for reference in external['references']:
@@ -606,6 +645,7 @@ def restore(req):
         if not service.get('sqliteFiles'):continue
         original=next(c for c in containers if c['Id']==service['container'])
         restored={**original,'Mounts':[{**mount,'Source':str(sources[(mount['Type'],mount['Source'])])} for mount in original['Mounts']]}
+        if foreign:refuse_restored_links(service,restored)
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
         sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
@@ -650,4 +690,4 @@ def restore(req):
         except Exception:pass
         raise
     application_complete=bool(contracts) and all(s['engine']!='generic' and s.get('expectedChecks') for s in contracts)
-    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'externalReferences':external,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified,'externalDataReadOnly':bool(external['references'])},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only native database checks','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
+    emit(result={**({'runtime':current_runtime().describe(),'dataRoot':str(data_root)} if foreign else {}),'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'externalReferences':external,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified,'externalDataReadOnly':bool(external['references'])},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only native database checks','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})

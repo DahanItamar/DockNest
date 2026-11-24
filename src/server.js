@@ -526,7 +526,7 @@ app.post('/api/backups/:id/scrub', (req,res)=>res.status(202).json(enqueueScrub(
 // A chosen restore source that is not a verified copy: 409 with its code, so the dialog can say which copy is unusable.
 const sourceRefusal = error => { if (error.code === 'source_unavailable') throw Object.assign(new Error(error.message), { status: 409, expose: true, publicCode: error.code }); throw error; };
 app.post('/api/backups/:id/restore-plan', async (req, res) => {
-  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
+  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}), sourceTargetId: z.string().min(1).max(64).nullable().optional(), runtime: runtimeSchema.optional() }).parse(req.body);
   const plan = await planRestore(req.params.id, { ...data, sourceTargetId: data.sourceTargetId || null, mode: data.mode === 'copy' ? 'new-copy' : data.mode }).catch(sourceRefusal);
   // Where it restores from (docs/backup-copies.md): the main copy first, then copies newest-verified first.
   res.json({ plan, sources: plan.sources, source: plan.source });
@@ -537,7 +537,7 @@ app.post('/api/backups/:id/restore', async (req, res) => {
   if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the app name to confirm the restore.' });
   // Never trust the executable flag, capabilities or blockers submitted by a client.
   const sourceTargetId = data.sourceTargetId || (typeof data.plan.sourceTargetId === 'string' ? data.plan.sourceTargetId : null);
-  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId }).catch(sourceRefusal);
+  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId, runtime: runtimeSchema.optional().parse(data.plan.runtime) }).catch(sourceRefusal);
   res.status(202).json(await enqueueRestore(backup.id, plan, req.user.id));
 });
 app.patch('/api/maintenance', (req, res) => {

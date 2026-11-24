@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .runtime import (
-    RUNTIME_USER, MIN_RUNTIME_UID, Runtime, RuntimeRefused, parse_subid, using_runtime)
+    RESTORE_TEST_RUNTIME_OPERATIONS, RUNTIME_DATA_BASE, RUNTIME_USER, MIN_RUNTIME_UID, RUNTIME_OPERATIONS, Runtime, RuntimeRefused, remove_rootless_data_root, parse_subid, resolve_runtime, runtime_is_default, using_runtime)
 from .paths import (
     SITE_PATH, lexical, within)
 from .routing import (
@@ -510,9 +510,47 @@ def foreign_container(runtime,c):
 # self-heal-*, describe-containers and list-project-files take names) are blocked in Node (src/runtime.js hasForeignRuntime),
 # but the helper cannot see their engine yet. The restore PR must refuse a manifest whose runtime is not rootful Docker.
 RUNTIME_FREE_OPERATIONS=('discover','test','domain-routes','install-status')
+def request_runtime(request):
+    """The Runtime a request's app uses when this release can capture it (plan, readiness, capture), else None."""
+    config=request.get('config') if isinstance(request,dict) else None
+    spec=config.get('runtime') if isinstance(config,dict) else None
+    if request.get('operation') in RESTORE_TEST_RUNTIME_OPERATIONS:spec=request.get('runtime')
+    elif request.get('operation') not in RUNTIME_OPERATIONS:return None
+    if spec is None:return None
+    runtime=resolve_runtime(spec)
+    return None if runtime_is_default(runtime) else runtime
 def refuse_foreign_runtime(request):
     config=request.get('config') if isinstance(request,dict) else None
     runtime=config.get('runtime') if isinstance(config,dict) else None
     if runtime is None or request.get('operation') in RUNTIME_FREE_OPERATIONS:return
+    if request.get('operation') in RUNTIME_OPERATIONS:return  # resolved and checked by request_runtime
     if isinstance(runtime,dict) and runtime.get('engine')=='docker' and runtime.get('rootless') is False and not runtime.get('user') and runtime.get('uid') is None:return
     raise RuntimeRefused('Backups and restores of Podman and rootless apps are not available yet in this release.')
+
+def engine_facts(engines):
+    """The Docker version and CPU architecture the connection test reports. A server without usable rootful Docker (a
+    Podman-only server) reports the first engine it has instead, so it can still connect; without any engine the
+    original error stands."""
+    try:return {'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip()}
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):
+        if not engines:raise
+    runtime=engine_runtime(engines[0],engine_homes())
+    if runtime is None:raise ValueError('This server has no container engine DockNest can read.')
+    with using_runtime(runtime):return {'docker':None,'architecture':engine_architecture()}
+def runtime_restore_cleanup(request,base=RUNTIME_DATA_BASE,lstat=os.lstat,rmtree=shutil.rmtree):
+    """Removes the copy a restore into Podman or a rootless engine left: its containers (by the restore's own label) and,
+    for rootless, its data folder. Only a job's own label and folder are touched, and a folder that is a link, not root
+    owned or writable by others is left alone."""
+    job=request.get('job');uuid.UUID(job)
+    runtime=resolve_runtime(request.get('runtime'))
+    if runtime_is_default(runtime):raise RuntimeRefused('This is not a Podman or rootless restore.')
+    removed={'containers':0,'dataRoot':False}
+    with using_runtime(runtime):
+        ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
+        if ids and not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):raise RuntimeRefused('The engine answered with a container id DockNest cannot use.')
+        if ids:
+            docker('stop','--time','30',*ids)
+            docker('rm','-f',*ids)
+            removed['containers']=len(ids)
+    if runtime.rootless:removed['dataRoot']=remove_rootless_data_root(runtime,job,base,lstat,rmtree)
+    return removed

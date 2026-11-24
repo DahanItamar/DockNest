@@ -3,6 +3,8 @@
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
+from .runtime import (
+    check_runtime_source, current_runtime, engine_architecture, engine_save, engine_storage_root, host_id_map, runtime_is_default, systemd_unit)
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
@@ -168,6 +170,8 @@ def backup_plan(cfg,containers=None):
     if any(s['engine']=='generic' for s in services) and not cfg.get('cleanShutdownConfirmed'):
         raise ValueError('Application writers require explicit clean-shutdown confirmation regardless of the legacy shutdown profile')
     validate_database_contracts(services,containers)
+    # The native database adapters run `docker exec`, `logs` and `run` by name: rootful Docker only in this release.
+    if not runtime_is_default(current_runtime()) and any(s['engine']!='generic' for s in services):raise ValueError('Native database engines are available for rootful Docker only in this release. Use a generic app with a confirmed clean shutdown.')
     table=mount_table();sources=[];seen=set();exclusions=mount_exclusions(cfg,containers)
     if exclusions and any(s['engine']!='generic' for s in services):raise ValueError('Mount exclusions require reviewed generic application services; native database adapters retain full capture')
     for c in containers:
@@ -205,6 +209,7 @@ def public_plan(plan):
 def revalidate_sources(plan):
     table=mount_table()
     for source in plan['sources']:
+        check_runtime_source(current_runtime(),source['path'])
         if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
 DATABASE_IMAGE_WORDS=('postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch')
@@ -254,7 +259,7 @@ def service_contracts(cfg,containers):
         result.append({'container':c['Id'],'engine':engine,'version':version,'role':'database' if engine!='generic' else 'writer','dependsOn':dependencies,'database':declaration.get('database'),'user':declaration.get('user'),'checks':declaration.get('checks',[])})
         if declaration.get('sqliteFiles'):
             if engine!='generic':raise ValueError('SQLite file proof is limited to declared generic applications')
-            installed=run(['docker','exec',c['Id'],'python3','-c','import sqlite3;print(sqlite3.sqlite_version)'],timeout=10).decode().strip()
+            installed=run(current_runtime().argv('exec',c['Id'],'python3','-c','import sqlite3;print(sqlite3.sqlite_version)'),timeout=10).decode().strip()
             if not re.fullmatch(r'3\.\d+\.\d+',installed) or installed!=declaration.get('sqliteVersion'):raise ValueError('Installed SQLite version differs from the explicit file contract')
             item=result[-1];item.update(sqliteFiles=sorted(declaration['sqliteFiles']),sqliteVersion=installed,sqliteSigtermConfirmed=bool(declaration.get('sqliteSigtermConfirmed')))
             exclusions=mount_exclusions(cfg,containers)
@@ -413,11 +418,15 @@ def preflight(cfg):
     if cfg.get('kind')=='static':static_preflight(cfg);return []
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
+    if not runtime_is_default(current_runtime()) and cfg.get('kind')=='static':raise ValueError('A static website has no container engine')
     if not cfg.get('exclusiveSourcesConfirmed'):raise ValueError('Confirm no external processes write the selected data')
     profile=cfg.get('shutdownProfile','generic')
     if profile not in ['generic','postgres','mysql']:raise ValueError('Unsupported shutdown profile')
     if profile=='generic' and not cfg.get('cleanShutdownConfirmed'):raise ValueError('Generic shutdown requires explicit application clean-shutdown confirmation')
     cs=inspect(ids); selected={c['Id'] for c in cs};exclusions=mount_exclusions(cfg,cs)
+    # A container managed by systemd (a quadlet or a generated unit) is removed and recreated by its unit, so it cannot be
+    # stopped, copied and restarted like a plain container. Its unit would have to be stopped and started: not in this release.
+    if not runtime_is_default(current_runtime()) and any(systemd_unit(c) for c in cs):raise ValueError('A container managed by a systemd unit (a quadlet) cannot be backed up yet. Its unit would have to be stopped and started by DockNest.')
     others=docker('ps','-q').decode().split()
     mounts=[]
     for c in cs:
@@ -434,6 +443,7 @@ def preflight(cfg):
             src=m['Source']
             if src.startswith(('/proc','/sys','/dev','/run')) or src.endswith('docker.sock'):raise ValueError('System mount is not portable')
             if not os.path.exists(src) or not os.access(src,os.R_OK):raise ValueError('Unreadable mount source')
+            check_runtime_source(current_runtime(),src)
             scoped_classify(src,mount_table(),exclusions)
             if os.path.islink(src):raise ValueError('Mount source symlink requires a capture adapter')
             # A protected mount is not copied (an empty placeholder takes its place), so its contents are not walked.
@@ -454,6 +464,7 @@ def preflight(cfg):
                 if os.path.commonpath([a,b]) in [a,b]:raise ValueError('A running container outside the site shares a mount')
     refuse_protected_sources(cfg)
     for filename in cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
+        check_runtime_source(current_runtime(),filename)
         p=pathlib.Path(filename)
         if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink() or not os.access(p,os.R_OK):raise ValueError('Explicit configuration file is unreadable or invalid')
         classify_source(filename)
@@ -559,6 +570,7 @@ def capture(req,output=None):
         if output is not None:return capture_static_stream(req,output)
         return capture_static(req)
     inc=incremental_request(req)
+    if inc is not None and not runtime_is_default(current_runtime()):raise ValueError('Backups of Podman and rootless apps are not incremental yet.')
     cfg=req['config'];skip_refused_probes(cfg);cs=preflight(cfg);plan=backup_plan(cfg,cs)
     if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
@@ -613,7 +625,7 @@ def capture(req,output=None):
         if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     else:
         if shutil.disk_usage(root).free<1024**3:raise ValueError('Insufficient recovery journal capacity')
-        docker_root=docker('info','--format','{{.DockerRootDir}}').decode().strip()
+        docker_root=engine_storage_root()
         if shutil.disk_usage(docker_root).free<sum(c.get('SizeRw',0) or 0 for c in cs)+1024**3:raise ValueError('Insufficient Docker snapshot capacity')
         # images.tar is spooled once in the staging root; budget it before any service stops.
         image_bytes=sum(int(image.get('Size',0) or 0) for image in original_images)+sum(c.get('SizeRw',0) or 0 for c in cs)
@@ -718,7 +730,7 @@ def capture(req,output=None):
             # The inventory pass reads each archive once; the second pass must give the same bytes (SHA-256), so a key
             # read here is a key in the package.
             for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans,labels)
+            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv('save',*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
             # Streamed: the plaintext dump never stays in the staging folder.
             for service in plan['services']:
@@ -748,18 +760,23 @@ def capture(req,output=None):
           except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
     emit(stage='packing')
-    if output is None:docker('save','-o',str(root/'images.tar'),*saved_ids,*images)
+    if output is None:engine_save(root/'images.tar',*saved_ids,*images)
     snapshots=snapshot_records(increment) if increment else {}
     if increment and output is None:
         for key in increment['keys']:copy_private(increment['work']/(key+'.snar'),root/('snapshot-%s.snar'%key))
     if increment and output is not None:
         for key in increment['keys']:inventory['snapshot-%s.snar'%key]=stream_file(archive,'snapshot-%s.snar'%key,increment['work']/(key+'.snar'),snapshots[key])
     downtime=restarted-downtime_from if downtime_from is not None else 0
-    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':downtime,'containerDowntimeSeconds':downtime,'visitorDowntimeSeconds':restarted-visitor_start if visitor_start is not None else 0,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
+    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':downtime,'containerDowntimeSeconds':downtime,'visitorDowntimeSeconds':restarted-visitor_start if visitor_start is not None else 0,'architecture':engine_architecture(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     # Restore reads RAM folders from the container record; this list keeps backups restorable by older helpers.
     manifest['temporaryMemoryFolders']=[{'container':c.get('Name','').lstrip('/'),'destination':destination} for c in manifest['containers'] for destination,_ in temporary_mounts(c)]
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
     manifest['backupPlan']=plan if increment else v1_plan(plan)
+    if not runtime_is_default(current_runtime()):
+        # Format 3 (docs/podman-rootless.md): releases that predate it refuse it, so an older DockNest can never restore a
+        # rootless backup as root-owned rootful containers.
+        manifest['formatVersion']=3;manifest['runtime']=current_runtime().describe()
+        if current_runtime().rootless:manifest['idMap']=host_id_map(current_runtime())
     if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
     if exclusions:
         manifest['backupScope']='application-and-local-state'
@@ -823,4 +840,4 @@ def capture(req,output=None):
     # Hardening facts and the key proof travel beside the manifest, never inside the package, so the package format is
     # unchanged.
     proof=packaged_keys(key_request,key_found,root,output is not None,key_members,packaged,cfg,cs,exclusions)
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts(),'routing':proxy_routes(),**({'keys':proof} if proof else {})})
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs) if runtime_is_default(current_runtime()) else None,'certificates':certificate_facts(),'routing':proxy_routes(),**({'keys':proof} if proof else {})})

@@ -46,7 +46,7 @@ const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);
 // its own work never reads as a change made outside DockNest.
 export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
 const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!hasForeignRuntime(site.config)&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
-import { cleanEngines, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL } from './runtime.js';
+import { cleanEngines, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL, manifestRuntime, restoreRuntimeProblem } from './runtime.js';
 // Container names of this server's active apps that run in Podman or a rootless engine.
 const foreignNames=serverId=>new Set(db.prepare('SELECT config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>hasForeignRuntime(site.config)).flatMap(site=>site.config?.containers??[]));
 const refuseForeignNames=(server,names)=>{const foreign=foreignNames(server.id);if((names??[]).some(name=>foreign.has(name)))throw Object.assign(new Error(FOREIGN_REFUSAL),{status:409});};
@@ -237,7 +237,7 @@ async function sendPackage(server,item,remotePath,{signal,upload=transport.uploa
  try{await upload(server,pass,remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
  finally{signal?.removeEventListener('abort',stop);}
 }
-export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null}={}){
+export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null,runtime}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));
  if(!backup)throw new Error('Verified backup not found');
@@ -262,10 +262,14 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  }catch(error){blockers.push(error.message);}
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
  const staticSite=backup.manifest.kind==='static';
+ if(!staticSite&&!backup.manifest.runtime&&capabilities.docker==null)blockers.push('This server has no rootful Docker, which this backup needs');
+ // Podman and rootless apps (docs/podman-rootless.md): the target engine must be one the server reported, of the same kind.
+ const targetRuntime=backup.manifest.runtime?(runtime??backup.manifest.runtime):undefined;
+ {const problem=restoreRuntimeProblem(backup.manifest.runtime,runtime,capabilities,{containers:backup.manifest.containers?.length??0,chainLength});if(problem)blockers.push(problem);}
  if(!staticSite&&capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
  const grouped=(backup.manifest.containers?.length||0)>1;
  if(!staticSite&&(!backup.manifest.containers?.length||backup.manifest.containers.length>30))blockers.push('Restore requires 1 to 30 containers');
- if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
+ if(grouped&&!(Number.parseInt(capabilities.docker,10)>=28))blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  const externalOnly=Object.keys(mappings||{}).every(name=>name==='externalReadOnly')&&(!mappings.externalReadOnly||Array.isArray(mappings.externalReadOnly));
  if(!externalOnly)blockers.push('Custom port and writable host directory maps require reviewed offline restore');
@@ -277,7 +281,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
   catch{blockers.push('Required external storage is unavailable or not a reviewed read-only mount on the restore target.');}
  }
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
- return {backupId,serverId,mode,mappings,capabilities,...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,...(targetRuntime?{runtime:targetRuntime}:{}),...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id,actor);}
@@ -443,7 +447,7 @@ async function executeRestoreJob(job){
    audit('worker',details.sourceTargetId?'restore.source_chosen':'restore.source_fallback',backup.id,{job:job.id,targetId:source.targetId,targetName:source.name});
   }
   let result;
-  const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint};
+  const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint,...(restore.plan.runtime?{runtime:restore.plan.runtime}:{})};
   if(!chained){
    const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id});
    stage(job.id,'transferring');
@@ -471,6 +475,9 @@ async function executeRestoreJob(job){
    db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
    audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
  }catch(error){
+  // A restore into Podman or a rootless engine that failed leaves no copy behind: its containers (by this job's label) and its
+  // data folder are removed by the helper, whatever step failed. Best effort; the failure itself is what gets recorded.
+  if(restore?.plan?.runtime){try{await transport.remote(server,{operation:'runtime-restore-cleanup',job:job.id,runtime:restore.plan.runtime});}catch{console.error('Cleanup of a failed Podman or rootless restore did not finish.');}}
   if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
    for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
    db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
@@ -573,6 +580,7 @@ export async function executeJob(job){
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   manifest.deliveryMode=direct?'direct':'staged';
+  {const recorded=manifestRuntime(result.manifest,site.config?.runtime);if(recorded.error)throw new Error(recorded.error);Object.assign(manifest,recorded);}
   manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
   if(result.manifest.backupScope)manifest.backupScope=result.manifest.backupScope;
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;

@@ -105,7 +105,7 @@ def discover_keys(req,containers):
         except Exception:continue
     return {'keyScans':scans}
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED,RUNTIME
     # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
     if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:
         try:CLEANUP_SHARED=cleanup_shared()
@@ -134,13 +134,16 @@ def main(req):
         SNAPSHOT_FILTER='label=docknest.launch='+req['launchId'];watch_stdin()
     op=req['operation']
     refuse_foreign_runtime(req)
+    RUNTIME=request_runtime(req)  # None: rootful Docker, exactly as before
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engine_probe(),**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
+        engines=engine_probe()
+        emit(result={'helperVersion':VERSION,**engine_facts(engines),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engines,**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
+    elif op=='runtime-restore-cleanup':emit(result=runtime_restore_cleanup(req))
     elif op=='discover':
         cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.

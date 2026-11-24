@@ -133,7 +133,7 @@ class ContainerTests(unittest.TestCase):
 class RefusalTests(unittest.TestCase):
     def test_foreign_runtime_refused_for_running_operations(self):
         for runtime in ({'engine': 'podman', 'rootless': False}, {'engine': 'docker', 'rootless': True, 'user': 'alice', 'uid': 1001}, 'junk', {}):
-            for op in ('capture', 'capture-stream', 'plan', 'readiness', 'restore', 'maintenance', 'move-facts'):
+            for op in ('restore', 'maintenance', 'deploy-teardown', 'self-heal-restart', 'deploy-restore', 'restore-test-prepare', 'incremental-commit'):
                 with self.assertRaisesRegex(helper.RuntimeRefused, 'not available yet'): helper.refuse_foreign_runtime({'operation': op, 'config': {'runtime': runtime}})
     def test_allowed_cases(self):
         helper.refuse_foreign_runtime({'operation': 'capture', 'config': {}})
