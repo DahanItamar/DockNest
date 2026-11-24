@@ -101,6 +101,10 @@ class Runtime:
         # Only the user's own bus path (session_bus checked it): a caller cannot name another one.
         if bus is not None and self.engine=='podman' and bus=='unix:path=/run/user/%d/bus'%self.uid:environment.append('DBUS_SESSION_BUS_ADDRESS='+bus)
         return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
+    def save_arguments(self):
+        """`save` with the format DockNest reads back. Podman's own default can be an OCI archive, whose image names live in index.json; a
+        backup is always the docker archive (manifest.json), which is also what a Docker host writes and what a restore checks."""
+        return ['save','--format','docker-archive'] if self.engine=='podman' else ['save']
     def session_bus(self,lstat=os.lstat):
         """The user's session bus address for rootless Podman, or None. Podman runs a container's health check as a systemd timer of
         the user's session, which it reaches through this bus; without it a container started by DockNest never reports healthy.
@@ -440,7 +444,7 @@ def engine_save(path,*references):
     runtime=current_runtime()
     if runtime_is_default(runtime):return docker('save','-o',str(path),*references)
     fd=os.open(str(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
-    try:runtime.stream('save',*references,stdout=fd,timeout=STREAM_MAX_SECONDS)  # the size is not known before the engine writes it
+    try:runtime.stream(*runtime.save_arguments(),*references,stdout=fd,timeout=STREAM_MAX_SECONDS)  # the size is not known before the engine writes it
     except BaseException:
         os.close(fd);fd=None
         try:os.unlink(str(path))
