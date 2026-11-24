@@ -142,7 +142,7 @@ test('release.yml pushes only a commit tag and moves the version tags by digest 
 test('the image build pins its base by digest and sends only an allow-listed context', async () => {
   const dockerfile = (await readFile(new URL('../Dockerfile', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
   const froms = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map(match => match[1]);
-  assert.equal(froms.length, 2);
+  assert.equal(froms.length, 3, "build, pinned rclone download, runtime");
   for (const from of froms) assert.match(from, /^node:24-bookworm-slim@sha256:[a-f0-9]{64}$/);
   const ignore = (await readFile(new URL('../.dockerignore', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').split('\n').filter(line => line && !line.startsWith('#'));
   assert.equal(ignore[0], '*', 'everything is excluded first');
