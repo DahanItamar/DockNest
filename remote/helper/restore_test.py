@@ -238,6 +238,7 @@ def image_archive_names(archive):
     return list(dict.fromkeys(names))
 # Podman's `save` of an image that has no name writes one made from its ID: localhost/<id>:latest. Only that exact form, and only when
 # the ID in it is the ID of the image the archive's own manifest holds, is not a name: it can never collide with a real image.
+IMAGE_CONFIG_LIMIT=1024*1024  # an image config is a few kilobytes; more is not an image DockNest made
 ID_DERIVED_NAME=re.compile(r'(?:localhost/)?([0-9a-f]{64})(?::latest)?')
 def image_archive_id_names(archive):
     """The names in manifest.json that are only the ID of their own image (see ID_DERIVED_NAME). Anything else is not listed."""
@@ -247,13 +248,20 @@ def image_archive_id_names(archive):
         except KeyError:return allowed
         if not member.isfile() or member.size>4*1024*1024:return allowed
         data=json.loads(tar.extractfile(member).read())
-    for item in data if isinstance(data,list) else []:
-        if not isinstance(item,dict) or not isinstance(item.get('Config'),str):continue
-        config=re.fullmatch(r'(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?',item['Config'])
-        if not config:continue
-        for tag in item.get('RepoTags') or []:
-            named=ID_DERIVED_NAME.fullmatch(tag) if isinstance(tag,str) else None
-            if named and named.group(1)==config.group(1):allowed.add(tag)
+        for item in data if isinstance(data,list) else []:
+            if not isinstance(item,dict) or not isinstance(item.get('Config'),str):continue
+            config=re.fullmatch(r'(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?',item['Config'])
+            if not config:continue
+            # The ID of an image is the SHA-256 of its config file: the file itself must hash to the ID the name carries, not just be called that.
+            try:held=tar.getmember(item['Config'])
+            except KeyError:continue
+            if not held.isfile() or held.size>IMAGE_CONFIG_LIMIT:continue
+            digest=hashlib.sha256();source=tar.extractfile(held)
+            for chunk in iter(lambda:source.read(64*1024),b''):digest.update(chunk)
+            if digest.hexdigest()!=config.group(1):continue
+            for tag in item.get('RepoTags') or []:
+                named=ID_DERIVED_NAME.fullmatch(tag) if isinstance(tag,str) else None
+                if named and named.group(1)==config.group(1):allowed.add(tag)
     return allowed
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
