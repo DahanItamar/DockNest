@@ -25,7 +25,7 @@ class NasAppTests(unittest.TestCase):
         self.assertIsNone(parse_template(evil.encode('utf-16-le')))
         with tempfile.TemporaryDirectory() as root:
             root=pathlib.Path(root);(root/'etc').mkdir();(root/'usr/bin').mkdir(parents=True);(root/'usr/bin/midclt').write_text('')
-            for text,expect in (('TrueNAS-SCALE-24.10.2.1','24.10.2.1'),('TrueNAS-SCALE 25.04','25.04'),('TrueNAS-25.10.0\n','25.10.0'),('25.04.1','25.04.1'),('TrueNAS-SCALE-garbage',None)):
+            for text,expect in (('TrueNAS-SCALE-24.10.2','24.10.2'),('TrueNAS-SCALE 25.04','25.04'),('TrueNAS-25.10.0\n','25.10.0'),('25.04.1','25.04.1'),('TrueNAS-SCALE-garbage',None)):
                 (root/'etc/version').write_text(text)
                 facts=nas_version_facts(str(root));self.assertEqual(facts,{'kind':'truenas','version':expect},text)
                 if expect is None:
@@ -73,7 +73,7 @@ class NasAppTests(unittest.TestCase):
             self.assertEqual(str(caught.exception),TRUENAS_TOO_OLD)
             (root/'etc/version').write_text('TrueNAS-SCALE 25.10.0')
             self.assertEqual(attach_nas({'containers':[]},[],str(root))['nas']['kind'],'truenas')
-        for good in ('24.10','24.10.2.1','25.04.1'):self.assertTrue(truenas_supported(good))
+        for good in ('24.10','24.10.2','25.04.1'):self.assertTrue(truenas_supported(good))
         for bad in ('24.04.2','22.12.4','','x',None,'24.9'):self.assertFalse(truenas_supported(bad))
     def test_discovery_adds_the_template_as_a_configuration_file(self):
         with tempfile.TemporaryDirectory() as root:
