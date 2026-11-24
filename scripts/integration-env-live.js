@@ -91,7 +91,8 @@ async function createUser({ delegated }) {
   assert.equal(has, delegated, `delegation is ${delegated ? '' : 'not '}in place: ${controllers}`);
   return uid;
 }
-const asUser = (uid, command, args, extraEnv = {}) => sudo('-u', USER, '-H', 'env', `HOME=/home/${USER}`, `XDG_RUNTIME_DIR=/run/user/${uid}`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`, ...Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`), command, ...args);
+// A clean environment, like the one DockNest gives the engine: the runner's XDG_*, HOME and working folder must not leak into the user's tools.
+const asUser = (uid, command, args, extraEnv = {}) => sudo('-u', USER, '-H', 'env', '-i', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', `HOME=/home/${USER}`, `XDG_RUNTIME_DIR=/run/user/${uid}`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`, ...Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`), 'sh', '-c', 'cd "$HOME" && exec "$0" "$@"', command, ...args);
 
 // ---- the fake app ---------------------------------------------------------------------------------------------------------
 async function stageFixture() {
