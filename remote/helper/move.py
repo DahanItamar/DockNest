@@ -215,7 +215,7 @@ def env_findings(containers,files,tokens):
     return findings[:100]
 # Names a container's network list can hold that are modes, not networks to inspect: Docker's three, and Podman's `private`, `pasta`,
 # `slirp4netns` (with options after a colon), `ns:<path>` and `container:<id>`.
-NETWORK_MODES=('bridge','host','none','private','pasta','slirp4netns','default')
+NETWORK_MODES=('bridge','host','none','private','pasta','slirp4netns')
 def engine_network_mode(name):
     return name in NETWORK_MODES or str(name).startswith(('ns:','container:','pasta:','slirp4netns:'))
 def source_site_facts(cfg,tokens):
