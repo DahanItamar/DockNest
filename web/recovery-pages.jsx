@@ -10,6 +10,8 @@ import './sites.css';
 import {describeSchedule} from './schedule.js';
 import {recoveryStatus} from './verification.jsx';
 import {CopyLines} from './copies/CopyLines.jsx';
+import {RuntimeBadge} from './runtime-ui.jsx';
+import {isRootful,UNSUPPORTED_NOW} from './runtime-ui.js';
 import {siteStorageSummary} from './copies/model.js';
 import {ChainLine} from './incremental/ChainLine.jsx';
 import {isIncremental,toBackups} from './incremental/model.js';
@@ -47,6 +49,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Server</dt><dd>{name(site.serverId,'servers')}</dd></div>
      <div className="def-row"><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
+     {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="def-row"><dt>Engine</dt><dd><RuntimeBadge runtime={site.config.runtime}/><span className="t-caption runtime-row-note">{UNSUPPORTED_NOW}</span></dd></div>}
      <KeysRow site={site}/>
      <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
      {(summary=>summary&&<div className="def-row"><dt>Storage</dt><dd>{summary.main}<span className="t-caption">{summary.copies}</span>{summary.missing&&<StatusLabel state="needs-review">Copy missing</StatusLabel>}{user?.role==='admin'&&onStorage&&<button type="button" className="cp-link" aria-label={`Change storage for ${site.name}`} onClick={()=>onStorage(site)}>Change</button>}</dd></div>)(siteStorageSummary(site))}

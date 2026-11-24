@@ -5,6 +5,7 @@ import {DataTable} from '../data-table.jsx';
 import {RefreshCw} from '../icons.jsx';
 import {notWatching,WINDOWS,DEFAULT_RESTARTS,DEFAULT_WINDOW,MIN_RESTARTS,MAX_RESTARTS,validRestarts,RESULTS,rows,timeOf,saveError,windowLabel} from './model.js';
 import './self-heal.css';
+import {isRootful,UNSUPPORTED_NOW} from '../runtime-ui.js';
 
 const SESSION='Your session ended. Sign in again.';
 function Restarts({events,narrow,more,onMore,moreBusy}){
@@ -66,6 +67,7 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
     <select className="sh-window" aria-label="Time window" value={windowMinutes} disabled={fieldsOff} onChange={e=>{setError(null);setWindow(Number(e.target.value))}}>{options.map(([m,l])=><option key={m} value={m}>{l}</option>)}</select>
    </div>
   </div>
+  {site.config?.runtime&&!isRootful(site.config.runtime)&&<AlertPanel variant="info" title="Not available for this engine yet">{UNSUPPORTED_NOW} Self-heal works for apps on rootful Docker.</AlertPanel>}
   {noHc?<AlertPanel variant="warning">No container has a health check. Add one in Compose.</AlertPanel>:enabled&&notWatching(data.stream)?<AlertPanel variant="warning">{notWatching(data.stream)}</AlertPanel>:<AlertPanel variant="info">Only containers with a health check. {data.note}</AlertPanel>}
   {enabled&&!noHc&&!notWatching(data.stream)&&found.length>0&&<p className="t-caption sh-watched">Watching {found.map((w,i)=><React.Fragment key={w.name}>{i>0&&', '}<code>{w.name}</code></React.Fragment>)}</p>}
   {error&&<AlertPanel variant="error" title={error.title}>{error.text}</AlertPanel>}

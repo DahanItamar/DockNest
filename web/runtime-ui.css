@@ -1,0 +1,12 @@
+/* Container engines (docs/podman-rootless.md). Every colour, size, weight, radius and space is a product token. */
+.runtime-badge{display:inline-flex;align-items:center;gap:var(--dn-space-1);padding:var(--dn-space-1) var(--dn-space-2);border:1px solid var(--dn-brand-border);border-radius:var(--dn-radius-full);background:var(--dn-brand-surface);color:var(--dn-brand-text);font-size:var(--dn-text-xs);line-height:1.5;font-weight:var(--dn-weight-medium);white-space:nowrap;max-width:100%}
+.runtime-badge svg{flex:none}
+.runtime-badges{display:flex;flex-wrap:wrap;gap:var(--dn-space-2)}
+.runtime-list{display:flex;flex-direction:column;gap:var(--dn-space-1)}
+.site-wizard h3.engine-heading{margin:var(--dn-space-4) 0 var(--dn-space-2);font-size:var(--dn-text-sm);font-weight:var(--dn-weight-semibold);color:var(--dn-text-primary)}
+.site-wizard h3.engine-heading:first-child{margin-top:0}
+.application-group .alert-panel{margin:var(--dn-space-3)}
+.application-group[data-conflict] header button{opacity:.6}
+.runtime-note{margin:var(--dn-space-2) 0 0}
+.runtime-row-note{display:block}
+.rt-engine{display:flex;align-items:center;justify-content:space-between;gap:var(--dn-space-3);padding:var(--dn-space-2) 0;color:var(--dn-text-secondary);border-bottom:1px solid var(--dn-border-subtle)}
