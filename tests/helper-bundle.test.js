@@ -32,9 +32,9 @@ test('every operation runs through the server loader and answers only in JSON li
       const result = spawnSync(python, ['-c', loader], { cwd, encoding: 'utf8', timeout: 30000, input: helperSource().toString('base64') + '\n' + JSON.stringify({ operation }) + '\n' });
       if (result.error?.code === 'ENOENT') throw new Error('Python3 is required for remote helper verification');
       assert.ok([0, 1].includes(result.status), `${operation}: exit ${result.status}`);
-      // capture-stream keeps stdout for the backup bytes, so its events go to stderr (EVENT_STREAM in common.py).
-      const events = operation === 'capture-stream' ? result.stderr : result.stdout;
-      if (operation === 'capture-stream') assert.equal(result.stdout, '', 'no event may enter the backup stream');
+      // capture-stream and stage-read keep stdout for the package bytes, so their events go to stderr (EVENT_STREAM in common.py).
+      const streamsBytes = ['capture-stream', 'stage-read'].includes(operation), events = streamsBytes ? result.stderr : result.stdout;
+      if (streamsBytes) assert.equal(result.stdout, '', 'no event may enter the package stream');
       const lines = events.split('\n').filter(Boolean);
       assert.ok(lines.length, `${operation}: no answer`);
       for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), `${operation}: not JSON: ${line.slice(0, 80)}`);
