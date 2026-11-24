@@ -3,6 +3,8 @@ import { argvToCommand } from './command.js';
 import { capabilityFacts, checkNas } from './readiness.js';
 import { db } from '../db.js';
 import { synologyEnabled } from './synology-gate.js';
+import { bindSynologyGate } from './command.js';
+bindSynologyGate(() => synologyEnabled(db));
 
 // Runs one fixed argv on an open SSH connection. The command is every element single-quoted; the output is capped and
 // a stuck command is abandoned. stderr is dropped (it can hold secrets) and no stdin is sent.

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { detectNas } from '../src/nas/detect.js';
 import { checkNas } from '../src/nas/readiness.js';
 import { connectCapabilities, ConnectRefused } from '../src/nas/connect.js';
+import { identityFor } from '../src/nas/command.js';
 import { nasWizard } from '../src/nas/guidance.js';
 import { SYNOLOGY_ENABLED, SYNOLOGY_INFO, synologyEnabled, setSynologyEnabled, withoutSynology } from '../src/nas/synology-gate.js';
 import { nasTypes, NAS_TYPES } from '../web/nas/nas.js';
@@ -38,6 +39,13 @@ test('a non-root Synology user is refused with the info line while the gate is o
   const rootInspect = async () => checkNas({ run: fakeRun(), username: 'root' });
   const facts = await connectCapabilities({ username: 'root' }, { inspect: rootInspect, test: async probe => { assert.equal(probe.capabilities, '{}'); return { uid: 0 }; } });
   assert.equal(facts.nas, undefined);
+});
+
+test('a Synology server saved while the gate was on goes back to the normal identity when it is off', () => {
+  const server = { username: 'admin', capabilities: '{"nas":{"kind":"synology"},"helperRuntime":"container"}' };
+  assert.deepEqual(identityFor(server), { identity: 'root', runtime: 'host', nasKind: null });
+  assert.deepEqual(identityFor(server, { synology: true }), { identity: 'sudo', runtime: 'container', nasKind: 'synology' });
+  assert.equal(identityFor({ username: 'admin', capabilities: '{"nas":{"kind":"truenas"}}' }).identity, 'sudo');
 });
 
 test('screens and discovery hide Synology while the gate is off', () => {

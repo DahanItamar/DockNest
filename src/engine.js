@@ -1,5 +1,8 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
+import { bindSynologyGate } from './nas/command.js';
+import { synologyEnabled } from './nas/synology-gate.js';
+bindSynologyGate(() => synologyEnabled(db));
 import { config } from './config.js';
 import { helperSource } from './helper-bundle.js';
 import { deploymentHeld, requireNoDeploymentHold as requireNoHold } from './deployment-hold.js';
