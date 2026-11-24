@@ -27,6 +27,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
 - Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
 - Adding an app finds stacks that Portainer or Dockge manage, fills in their Compose file from the manager's stacks folder and shows the manager on the app card. DockNest only reads it and never changes Portainer or Dockge.
+- NAS support, first part (no screens yet): DockNest recognizes Unraid, Synology and TrueNAS servers, can connect as a non-root user with passwordless sudo on them, and can run its helper in a sealed container when the NAS has no Python. Servers that are not NAS systems are unchanged. See [NAS servers](docs/nas-servers.md).
 
 **Storage and backups**
 - Online database dumps (opt-in per app, a switch under Advanced backup settings; each database says whether it can stay running): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
