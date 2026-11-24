@@ -12,6 +12,7 @@ import helper
 
 R = helper.RuntimeRefused
 NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)
+FAKE_PID = 2 ** 31 - 2  # no real process or group has it, so a stray signal could never reach anything
 def rootless(engine='podman'): return helper.Runtime(engine, True, 'app', 1001, '/home/app')
 
 def popen(action=None, hang=0):
@@ -19,7 +20,7 @@ def popen(action=None, hang=0):
     calls = []
     class Process:
         def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False):
-            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid = argv, stdin, stdout, stderr, start_new_session, 4242
+            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid = argv, stdin, stdout, stderr, start_new_session, FAKE_PID
             self.returncode = None; self.waits = 0; self.terminated = False; self.killed = False; self.timeouts = []
             calls.append(self)
         def wait(self, timeout=None):
@@ -31,8 +32,17 @@ def popen(action=None, hang=0):
         def poll(self): return self.returncode
         def terminate(self): self.terminated = True; self.returncode = -15
         def kill(self): self.killed = True; self.returncode = -9
-    Process.calls = calls
+    Process.calls = calls; Process.signals = []
     return Process
+
+def group_signals(fake, ignore_term=False):
+    """A stand-in for os.killpg that models the process: SIGTERM ends it unless it ignores the signal, SIGKILL always does.
+    Patched in on every OS, so the tests never signal a real process or group."""
+    def killpg(pid, sig):
+        process = fake.calls[-1]; fake.signals.append((pid, sig))
+        if sig == 9: process.killed = True; process.returncode = -9
+        elif not ignore_term: process.terminated = True; process.returncode = -15
+    return killpg
 
 class DefaultPathTests(unittest.TestCase):
     def test_rootful_docker_commands_are_unchanged(self):
@@ -99,9 +109,16 @@ class LoadTests(unittest.TestCase):
         self.assertGreater(seen[1], helper.STREAM_MIN_SECONDS)
 
 class WatchTests(unittest.TestCase):
-    def stream(self, fake, **kw):
-        with patch.object(subprocess, 'Popen', fake), helper.using_runtime(rootless()):
+    def stream(self, fake, ignore_term=False, **kw):
+        with patch.object(subprocess, 'Popen', fake), patch.object(helper.os, 'killpg', group_signals(fake, ignore_term), create=True), \
+             patch.object(signal, 'SIGKILL', 9, create=True), helper.using_runtime(rootless()):
             helper.current_runtime().stream('load', poll=0.01, **kw)
+    def stop_after(self, fake, waits=2):
+        real = fake.wait
+        def wait(self, timeout=None):
+            if self.waits == waits: helper.STOPPING = True
+            return real(self, timeout)
+        fake.wait = wait
     def test_a_failing_engine_keeps_only_a_capped_error_tail(self):
         def action(process):
             os.write(process.stderr.fileno(), b'x' * 5000 + b'the last words'); return 125
@@ -110,73 +127,42 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(error.returncode, 125); self.assertLessEqual(len(error.stderr), helper.STREAM_ERROR_TAIL); self.assertTrue(error.stderr.endswith(b'the last words'))
         self.assertNotIn('the last words', str(error), 'the tail is never part of the message that gets printed or sent')
         self.assertEqual(error.cmd, ['runuser'], 'only the command name is kept, never its arguments')
-    def test_a_stop_during_the_call_ends_the_engine_cleanly(self):
-        fake = popen(hang=10 ** 6)
-        real = fake.wait
-        def wait(self, timeout=None):
-            if self.waits == 2: helper.STOPPING = True
-            return real(self, timeout)
-        fake.wait = wait
+    def test_the_engine_runs_in_its_own_group_and_a_stop_ends_the_whole_group(self):
+        fake = popen(hang=10 ** 6); self.stop_after(fake)
         try:
             with self.assertRaisesRegex(ValueError, 'stopped'): self.stream(fake)
         finally: helper.STOPPING = False
         process = fake.calls[0]
-        self.assertTrue(process.terminated); self.assertLessEqual(process.waits, 5)
-    def test_an_engine_that_ignores_terminate_is_killed(self):
-        fake = popen(hang=10 ** 6)
-        fake.terminate = lambda self: setattr(self, 'terminated', True)  # ignores the signal: still running
-        real = fake.wait
-        def wait(self, timeout=None):
-            if self.terminated and timeout == 10: raise subprocess.TimeoutExpired(self.argv, timeout)
-            if self.waits == 2: helper.STOPPING = True
-            return real(self, timeout)
-        fake.wait = wait
+        self.assertTrue(process.new_session, 'its own session, so its children share one group')
+        self.assertEqual(fake.signals, [(FAKE_PID, signal.SIGTERM)]); self.assertTrue(process.terminated); self.assertFalse(process.killed)
+    def test_a_group_that_ignores_terminate_gets_kill(self):
+        fake = popen(hang=10 ** 6); self.stop_after(fake)
         try:
-            with self.assertRaises(ValueError): self.stream(fake)
+            with self.assertRaises(ValueError): self.stream(fake, ignore_term=True)
         finally: helper.STOPPING = False
-        self.assertTrue(fake.calls[0].killed)
-    def test_a_run_longer_than_allowed_is_a_timeout_and_the_engine_is_ended(self):
+        self.assertEqual([sig for _, sig in fake.signals], [signal.SIGTERM, 9]); self.assertTrue(fake.calls[0].killed)
+    def test_a_run_longer_than_allowed_is_a_timeout_and_the_group_is_ended(self):
         fake = popen(hang=10 ** 6)
         with self.assertRaises(subprocess.TimeoutExpired): self.stream(fake, timeout=0.05)
-        self.assertTrue(fake.calls[0].terminated)
-    def test_the_engine_runs_in_its_own_group_and_a_stop_ends_the_whole_group(self):
-        import signal
-        fake = popen(hang=10 ** 6)
-        sent = []
-        def killpg(pid, sig):
-            sent.append((pid, sig)); fake.calls[0].returncode = -sig
-        real = fake.wait
-        def wait(self, timeout=None):
-            if self.waits == 2: helper.STOPPING = True
-            return real(self, timeout)
-        fake.wait = wait
-        try:
-            with patch.object(helper.os, 'killpg', killpg, create=True), self.assertRaises(ValueError): self.stream(fake)
-        finally: helper.STOPPING = False
-        process = fake.calls[0]
-        self.assertTrue(process.new_session, 'its own session, so its children share one group')
-        self.assertEqual(sent, [(4242, signal.SIGTERM)]); self.assertFalse(process.terminated, 'the group is signalled, not only the leader')
-    def test_a_group_that_ignores_terminate_gets_kill(self):
-        import signal
-        fake = popen(hang=10 ** 6)
-        sent = []
-        def killpg(pid, sig):
-            sent.append(sig)
-            if sig == 9: fake.calls[0].returncode = -9
-        real = fake.wait
-        def wait(self, timeout=None):
-            if self.returncode is None and timeout == 10: raise subprocess.TimeoutExpired(self.argv, timeout)
-            if self.waits == 2: helper.STOPPING = True
-            return real(self, timeout)
-        fake.wait = wait
-        try:
-            with patch.object(helper.os, 'killpg', killpg, create=True), patch.object(signal, 'SIGKILL', 9, create=True), self.assertRaises(ValueError): self.stream(fake)
-        finally: helper.STOPPING = False
-        self.assertEqual(sent, [signal.SIGTERM, 9])
+        self.assertEqual(fake.signals, [(FAKE_PID, signal.SIGTERM)]); self.assertTrue(fake.calls[0].terminated)
     def test_a_group_already_gone_is_fine(self):
         fake = popen(hang=10 ** 6)
-        def killpg(pid, sig): fake.calls[0].returncode = -15; raise ProcessLookupError()
-        with patch.object(helper.os, 'killpg', killpg, create=True), patch.object(signal, 'SIGKILL', 9, create=True), self.assertRaises(subprocess.TimeoutExpired): self.stream(fake, timeout=0.05)
+        def killpg(pid, sig): fake.calls[-1].returncode = -15; raise ProcessLookupError()
+        with patch.object(subprocess, 'Popen', fake), patch.object(helper.os, 'killpg', killpg, create=True), helper.using_runtime(rootless()), self.assertRaises(subprocess.TimeoutExpired):
+            helper.current_runtime().stream('load', poll=0.01, timeout=0.05)
+    def test_without_process_groups_the_child_itself_is_ended(self):
+        fake = popen(hang=10 ** 6); self.stop_after(fake)
+        fake.terminate = lambda self: setattr(self, 'terminated', True)  # ignores the signal: still running
+        real_wait = fake.wait
+        def wait(self, timeout=None):
+            if self.terminated and not self.killed and timeout == 10: raise subprocess.TimeoutExpired(self.argv, timeout)
+            return real_wait(self, timeout)
+        fake.wait = wait
+        try:
+            with patch.object(subprocess, 'Popen', fake), patch.object(helper.os, 'killpg', None, create=True), helper.using_runtime(rootless()), self.assertRaises(ValueError):
+                helper.current_runtime().stream('load', poll=0.01)
+        finally: helper.STOPPING = False
+        self.assertTrue(fake.calls[0].terminated and fake.calls[0].killed)
     def test_a_step_already_stopped_never_starts_the_engine(self):
         fake = popen()
         with patch.object(helper, 'STOPPING', True), patch.object(subprocess, 'Popen', fake), helper.using_runtime(rootless()), self.assertRaises(ValueError):
@@ -215,7 +201,7 @@ class SaveTests(unittest.TestCase):
             def action(process): os.write(process.stdout, b'partial'); return 1
             with patch.object(subprocess, 'Popen', popen(action)), helper.using_runtime(rootless()), self.assertRaises(subprocess.CalledProcessError): helper.engine_save(target, 'x')
             self.assertFalse(target.exists())
-            with patch.object(helper, 'STOPPING', True), patch.object(subprocess, 'Popen', popen()), helper.using_runtime(rootless()), self.assertRaises(ValueError): helper.engine_save(target, 'x')
+            with patch.object(helper, 'STOPPING', True), patch.object(subprocess, 'Popen', popen()), patch.object(helper.os, 'killpg', lambda *a: None, create=True), helper.using_runtime(rootless()), self.assertRaises(ValueError): helper.engine_save(target, 'x')
             self.assertFalse(target.exists())
 
 class WiringTests(unittest.TestCase):
