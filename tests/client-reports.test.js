@@ -29,15 +29,15 @@ const now = () => new Date().toISOString();
 const NOV = { from: '2026-11-01', to: '2026-11-30' };
 
 test('migration 27 is additive and compatible: a 2.16 database upgrades in place and keeps its rows', () => {
-  assert.equal(schemaVersion, 27);
-  assert.deepEqual(migrations.at(-1), { version: 27, name: 'client-reports', compatible: true, up: migrations.at(-1).up });
-  assert.equal(compatFloor(migrations), compatFloor(migrations, 26), 'compat floor is unchanged, so 2.16 code keeps running on a v27 database');
+  assert.ok(schemaVersion >= 27);
+  const m27 = migrations.find(item => item.version === 27); assert.deepEqual(m27, { version: 27, name: 'client-reports', compatible: true, up: m27.up });
+  assert.equal(compatFloor(migrations, 27), compatFloor(migrations, 26), 'compat floor is unchanged, so 2.16 code keeps running on a v27 database');
   const old = new DatabaseSync(':memory:');
   old.exec('PRAGMA foreign_keys=ON');
   migrate(old, { file: join(root, 'old.sqlite'), list: migrations.filter(item => item.version <= 26), now: () => new Date('2026-11-01T00:00:00Z'), log: () => {} });
   old.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('s','fixture','host.example.invalid',22,'root','sealed','SHA256:x','2026-01-01')").run();
   old.prepare("INSERT INTO sites VALUES('a','s','App','{}','2026-01-01')").run();
-  migrate(old, { file: join(root, 'old.sqlite'), now: () => new Date('2026-11-02T00:00:00Z'), log: () => {} });
+  migrate(old, { file: join(root, 'old.sqlite'), list: migrations.filter(item => item.version <= 27), now: () => new Date('2026-11-02T00:00:00Z'), log: () => {} });
   assert.equal(old.prepare('PRAGMA user_version').get().user_version, 27);
   assert.equal(old.prepare('SELECT COUNT(*) AS n FROM sites').get().n, 1);
   for (const table of ['clients', 'client_apps', 'client_reports']) assert.equal(old.prepare('SELECT COUNT(*) AS n FROM sqlite_master WHERE name=?').get(table).n, 1, table);

@@ -11,6 +11,7 @@ import { getConnection, openSecret, recordConnectionSend, privateAllowed } from 
 import { provider } from './providers/index.js';
 import { plainText } from './providers/common.js';
 import { sendMail, SmtpError } from './smtp.js';
+import { notify } from '../notifications/store.js';
 import { outboundRequest, OutboundError, retryAfterMs, outboundLimits } from './outbound.js';
 
 // pendingCap: pending items per Connection before new ones fold into one "N more alerts" item. maxAgeMs: an item older
@@ -118,6 +119,8 @@ export async function sendTest(channelId, actor) {
 export function emit(event, { at = Date.now() } = {}) {
   const stamped = { ...event, at: event.at ?? new Date(at).toISOString() }, text = messageFor(stamped), template = templateFor(stamped); if (!text || !template) return 0;
   const payload = JSON.stringify(template);
+  // The in-app notification centre gets the same event, for every administrator, whatever the alert rules say.
+  notify(stamped, { at });
   // Dedup per Connection: one message per Connection and event, however many nodes and lines lead to it. An
   // every-channel event goes to each node that has a Connection, with or without a rule.
   const targets = new Map();
