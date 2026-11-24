@@ -141,7 +141,8 @@ class FakeTree:
         kind, uid, gid = node[:3]
         ino = node[3] if len(node) > 3 else hash(self.path(dir_fd, name))
         links = sum(1 for other in self.nodes.values() if len(other) > 3 and other[3] == ino) if len(node) > 3 else 1
-        return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=0, st_dev=1, st_ino=ino, st_nlink=links)
+        mode = {'dir': stat.S_IFDIR, 'link': stat.S_IFLNK}.get(kind, stat.S_IFREG)
+        return SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode, st_dev=1, st_ino=ino, st_nlink=links + getattr(self, 'outside', {}).get(ino, 0))
     def chown(self, name, uid, gid, dir_fd=None, follow_symlinks=True):
         assert dir_fd is not None and follow_symlinks is False, 'a chown by path follows links'
         path = self.path(dir_fd, name); self.chowns.append(path)
@@ -182,6 +183,32 @@ class TranslateTreeTests(unittest.TestCase):
                 node = fs.nodes[other]; fs.nodes[other] = (node[0], 0, 0) + tuple(node[3:])
         with self.assertRaisesRegex(R, 'changed while'):
             helper.translate_tree('/data', SOURCE, TARGET, chown=chown, fwalk=fs.fwalk, stat_at=fs.stat_at, opener=fs.opener)
+    def test_a_name_outside_the_restore_folder_refuses_the_restore(self):
+        # The file has three links but only two names inside the folder: the third is somewhere else on the server.
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7)})
+        fs.outside = {7: 1}
+        with self.assertRaisesRegex(R, 'linked from outside'): fs.run()
+        self.assertEqual(fs.chowns, [], 'nothing is re-owned')
+        # A single name with a link elsewhere is the same case.
+        solo = tree({'/data/sub/only': ('file', 100005, 100005, 9)})
+        solo.outside = {9: 1}
+        with self.assertRaisesRegex(R, 'linked from outside'): solo.run()
+        self.assertEqual(solo.chowns, [])
+        # Directories always have more links than names counted: they are not files with names.
+        self.assertEqual(tree().run(), 5, 'a tree with directories and no extra links is fine')
+    def test_a_name_whose_inode_was_swapped_after_the_first_chown_is_refused(self):
+        fs = tree({'/data/sub/one': ('file', 100005, 100005, 7), '/data/sub/two': ('file', 100005, 100005, 7)})
+        real_stat = fs.stat_at
+        seen = {'n': 0}
+        def stat_at(name, dir_fd=None, follow_symlinks=True):
+            info = real_stat(name, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+            if fs.walks == 2 and name in ('one', 'two'):
+                seen['n'] += 1
+                if seen['n'] == 2: info.st_ino = 99  # the second name is now a different file that happens to carry the new owner
+                if seen['n'] == 2: info.st_uid, info.st_gid = 300005, 300005
+            return info
+        with self.assertRaisesRegex(R, 'changed while'):
+            helper.translate_tree('/data', SOURCE, TARGET, chown=fs.chown, fwalk=fs.fwalk, stat_at=stat_at, opener=fs.opener)
     def test_a_link_is_reowned_as_a_link_never_followed(self):
         fs = tree({'/etc-shadow': ('file', 0, 0)})
         fs.run()
