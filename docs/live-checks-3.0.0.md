@@ -25,17 +25,17 @@ called validated. A real backup or restore is not marked validated without a Lin
 
 ## Podman and rootless Docker (docs/podman-rootless-adr.md)
 
-- [ ] Rootless Podman on a VM: discover, backup, restore test and restore, including user ID translation.
-- [ ] Rootless Docker: the same.
-- [ ] Backups of these apps are written as format 3 and refused by 2.16.
-- [ ] Moving an app between container engines is blocked with the plain message.
-- [ ] A server with Podman and no Docker connects, shows its engines, and backs up a Podman app.
-- [ ] A rootless user without memory and CPU delegation: the restore test says it cannot limit memory and does not run.
-- [ ] A restore into a second user with a different subordinate ID range translates owners; one file owned by an unmappable ID refuses the whole restore.
-- [ ] Image copies (load on standard input, save to a file) work for rootless Docker and rootless Podman, and a stopped step ends the engine.
-- [ ] A failed rootless restore leaves no container and no data folder; Server cleanup lists a leftover restore folder.
-- [ ] An app managed by a systemd unit (quadlet), an app with a native database engine and a Compose project split over two engines are each refused with their plain message.
-- [ ] Moves: the preflight blocks ports below the system limit and warns when linger is off.
+- [x] Rootless Podman on a VM: discover, backup, restore test and restore, including user ID translation.
+- [x] Rootless Docker: the same.
+- [x] Backups of these apps are written as format 3 and refused by 2.16.
+- [ ] Moving an app between container engines is blocked with the plain message (live: the move is blocked with the "not available yet" message; the cross-engine rule itself is unit-tested only).
+- [x] A server with Podman and no Docker connects, shows its engines, and backs up a Podman app.
+- [x] A rootless user without memory and CPU delegation: the restore test says it cannot limit memory and does not run.
+- [x] A restore into a second user with a different subordinate ID range translates owners; one file owned by an unmappable ID refuses the whole restore.
+- [x] Image copies (load on standard input, save to a file) work for rootless Docker and rootless Podman (a stopped step ending the engine: unit tests only).
+- [x] A failed rootless restore leaves no container and no data folder; Server cleanup lists a leftover restore folder.
+- [x] An app managed by a systemd unit (quadlet), an app with a native database engine and a Compose project split over two engines are each refused with their plain message.
+- [x] Moves: the preflight blocks ports below the system limit and warns when linger is off.
 
 ## Client reports and recovery time
 
@@ -102,3 +102,25 @@ Bug 1 above is fixed; bug 2 is by design; bug 3 (the red maintenance message) is
 
 - Password at first-admin setup is limited to 16 characters (`src/auth.js`, setup schema).
 - The lab fixture app must exit with code 0 on SIGTERM, or the clean shutdown check fails by design ("running, nonzero exit or OOM").
+
+## Results of the manual environment runs (workflow `Environment live checks`, 2026-11-24)
+
+Run from `.github/workflows/env-live.yml` (manual only, never a gate) on GitHub-hosted Ubuntu runners, plus the Fedora lab VM, with fake data. The scenarios are in `scripts/integration-env-live.js`.
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| WebDAV through the pinned rclone | PASS | Adapter probe, a backup stored through the adapter, a restore read back with matching data, and a wrong password refused. |
+| SMB (a Samba container, through rclone) | PASS | Backup stored on and restored from the share. |
+| Rootless Podman (runner) | PASS | Real user with linger and delegation: discover, format 3 backup with runtime and ID map, restore copy, restore test, cleanup, health check. |
+| Rootless without memory and CPU delegation | PASS | The restore test says it cannot limit memory for user apps, does not run, and leaves nothing behind. |
+| Podman with no Docker daemon | PASS | The server connects, lists rootful Podman, and a Podman app is backed up and restored. |
+| Second user with a different subordinate ID range | PASS | Restore into the second user translates owners; a file owned by an unmappable ID refuses the whole restore and leaves nothing behind. |
+| Server cleanup of a leftover restore folder | PASS | Listed and removed. |
+| Quadlet app, native database engine, Compose project split over two engines | PASS | Each is refused with its plain message. |
+| 2.16.4 helper against a format 3 backup | PASS | The older release refuses it. |
+| Move preflight | PASS | A port below the system limit is blocked (names 8081); the move itself is blocked; with linger off the preview warns. Systemd removes the user's runtime folder when linger is off and no session is left, so the helper now refuses an engine call in that state with the linger hint (unit-tested). |
+| Rootless Docker (runner) | env-blocked on the runner | Docker's rootless installer does not complete there: the runner's own runtime folder leaks into the user's units, so the user's engine never starts. |
+| Rootless Docker on Fedora 45 lab VM (SELinux enforcing) | PASS (Fedora lab) | Discover, format 3 backup, restore copy, restore test (19 to 22 s) and a second user. |
+| TrueNAS SCALE 24.04 refused with the Kubernetes message | PASS (lab) | Refused as documented. |
+| Cross-engine move rule, stopped step ending the engine | Unit tests only | Not exercised live. |
+| Synology | Not run | Beta and unverified. |

@@ -188,7 +188,7 @@ test('release-validation.yml validates a main commit privately and names the run
 
 test('every action in every workflow is pinned to a full commit SHA', async () => {
   // ci.yml too: the release gate trusts its Verify result, so a moved action tag there could fake a green check.
-  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml', 'env-live.yml']) {
     const uses = [...(await workflow(name)).matchAll(/uses: (\S+)/g)].map(match => match[1]);
     assert.ok(uses.length > 0, name);
     for (const action of uses) assert.match(action, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${name}: ${action}`);
@@ -196,7 +196,7 @@ test('every action in every workflow is pinned to a full commit SHA', async () =
 });
 
 test('no workflow checkout leaves the job token in .git/config', async () => {
-  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml', 'env-live.yml']) {
     const text = (await workflow(name)).replace(/\r\n/g, '\n');
     const checkouts = [...text.matchAll(/uses: actions\/checkout@\S+[^\n]*\n((?: {8,}[^\n]*\n)*)/g)];
     assert.ok(checkouts.length > 0, name);
@@ -210,4 +210,14 @@ test('a candidate is released as v + its final package version', () => {
   assert.throws(() => candidateTag(sha, ''), /Cannot read package\.json/);
   assert.throws(() => candidateTag('abc1234', JSON.stringify({ version: '2.2.0' })), /full 40-character/);
   assert.throws(() => candidateTag('A'.repeat(40), JSON.stringify({ version: '2.2.0' })), /full 40-character/);
+});
+
+test('env-live.yml is manual only, read-only and outside both gates', async () => {
+  const text = await workflow('env-live.yml'), on = text.slice(text.indexOf('\non:'), text.indexOf('\npermissions:'));
+  assert.match(on, /^\non:\n {2}workflow_dispatch:\n/);
+  assert.doesNotMatch(on, /pull_request|push|schedule|workflow_run/);
+  assert.match(text, /\npermissions:\n {2}contents: read\n/);
+  assert.doesNotMatch(text, /contents: write|id-token|pull-requests: write|secrets\./);
+  for (const name of ['ci.yml', 'release.yml', 'release-validation.yml']) assert.ok(!(await workflow(name)).includes('env-live'), name + ' does not depend on the live checks');
+  for (const job of ['rootless-docker', 'rootless-docker-apt', 'rootless-podman', 'no-delegation', 'webdav', 'podman-extras', 'podman-only', 'smb']) assert.match(text, new RegExp(`\\n {2}${job}:\\n {4}if: inputs\\.only == 'all' \\|\\| inputs\\.only == '${job}'\\n`), job);
 });
