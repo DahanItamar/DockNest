@@ -19,6 +19,29 @@ class NasAppTests(unittest.TestCase):
         self.assertIsNone(parse_template(b'<Container><Name>a</Name>'+b' '*(TEMPLATE_LIMIT+1)+b'</Container>'))
         self.assertIsNone(parse_template(b'<Container><Name>a&#1;b</Name></Container>'))
         self.assertIsNone(parse_template(b'not xml'))
+    def test_hidden_encodings_and_formats(self):
+        for data in (template().decode().encode('utf-16'),template().decode().encode('utf-32'),b'<Container><Name>a</Name>\x00</Container>',b'\xff\xfe<Container><Name>a</Name></Container>'):self.assertIsNone(parse_template(data))
+        evil='<!DOCTYPE x [<!ENTITY a "b">]><Container><Name>a</Name></Container>'
+        self.assertIsNone(parse_template(evil.encode('utf-16-le')))
+        with tempfile.TemporaryDirectory() as root:
+            root=pathlib.Path(root);(root/'etc').mkdir();(root/'usr/bin').mkdir(parents=True);(root/'usr/bin/midclt').write_text('')
+            for text,expect in (('TrueNAS-SCALE-24.10.2.1','24.10.2.1'),('TrueNAS-SCALE 25.04','25.04'),('TrueNAS-25.10.0\n','25.10.0'),('25.04.1','25.04.1'),('TrueNAS-SCALE-garbage',None)):
+                (root/'etc/version').write_text(text)
+                facts=nas_version_facts(str(root));self.assertEqual(facts,{'kind':'truenas','version':expect},text)
+                if expect is None:
+                    with self.assertRaises(ValueError):attach_nas({'containers':[]},[],str(root))
+            (root/'etc/version').write_text('TrueNAS-SCALE-24.04.2')
+            with self.assertRaises(ValueError):attach_nas({'containers':[]},[],str(root))
+            (root/'etc/version').write_text('Debian 12.5')
+            self.assertIsNone(nas_version_facts(str(root)))
+    def test_put_back_keeps_a_file_that_appears_and_leaves_no_temporary(self):
+        with tempfile.TemporaryDirectory() as work:
+            work=pathlib.Path(work);folder=work/'templates';folder.mkdir();posix=folder.as_posix()
+            source=work/'my-fakeapp.xml';source.write_bytes(template())
+            archive=work/'config-0.tar'
+            with tarfile.open(archive,'w') as tar:tar.add(source,arcname='my-fakeapp.xml')
+            self.assertEqual(put_back_template(archive,posix+'/my-fakeapp.xml',work/'s1',posix)['status'],'restored')
+            self.assertEqual([item.name for item in folder.iterdir()],['my-fakeapp.xml'])
     def test_unraid_templates_are_matched_by_name_and_bounded(self):
         with tempfile.TemporaryDirectory() as folder:
             pathlib.Path(folder,'my-fakeapp.xml').write_bytes(template())

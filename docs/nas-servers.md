@@ -31,7 +31,7 @@ managers and the connect wizard come in later changes.
 
 Read-only and only on a detected NAS; any other server's discovery answer is unchanged. Everything read from NAS files is untrusted: sizes and counts are capped, fields are validated, and nothing is run or fetched.
 
-- **Unraid**: templates in `/boot/config/plugins/dockerMan/templates-user/my-*.xml` (64 KB each, 500 at most; a DOCTYPE or entity refuses the file) are matched to containers by name. Each container gets `nasApp` (`manager: 'unraid-template'`, display name, WebUI text, icon URL as text, never fetched) and the template file is added to its configuration files, so a backup captures it.
+- **Unraid**: templates in `/boot/config/plugins/dockerMan/templates-user/my-*.xml` (64 KB each, 500 at most; a DOCTYPE or entity refuses the file) are matched to containers by name. Each container gets `nasApp` (`manager: 'unraid-template'`, display name, WebUI text, icon URL as text, never fetched; the WebUI text is untrusted, so screens show it as text or check for an http(s) scheme first) and the template file is added to its configuration files, so a backup captures it.
 - **Put back**: helper operation `nas-template-restore` (`archive` inside the restore job, `original` the exact template path) writes the template back only on Unraid, only into that folder, and never overwrites a different file (`restored`, `unchanged` or `kept-existing`).
 - **Synology**: Container Manager projects (`/volume<N>/docker/<project>`) from a container's Compose labels (`manager: 'synology-project'`).
 - **TrueNAS SCALE 24.10 and newer**: apps from `/mnt/.ix-apps/app_configs/<app>` Compose labels (`manager: 'truenas-app'`). DockNest never calls `midclt`. Older SCALE is refused with the message about Kubernetes.

@@ -32,6 +32,10 @@ def parse_template(data):
     """One Unraid template as plain facts, or None. DOCTYPE and entity declarations are refused before any parser sees
     the text, so entity expansion and external entities cannot happen."""
     if not isinstance(data,(bytes,bytearray)) or len(data)>TEMPLATE_LIMIT:return None
+    # Plain UTF-8 only: a NUL byte or a UTF-16/32 byte order mark could hide a DOCTYPE from the check below.
+    if b'\x00' in data or bytes(data[:2]) in (b'\xff\xfe',b'\xfe\xff') or bytes(data[:3])==b'\xef\xbb\xbf' and False:return None
+    try:bytes(data).decode('utf-8')
+    except UnicodeDecodeError:return None
     lowered=bytes(data).lower()
     if b'<!doctype' in lowered or b'<!entity' in lowered or b'<?xml-stylesheet' in lowered:return None
     try:
@@ -43,6 +47,7 @@ def parse_template(data):
     if not name:return None
     icon=nas_text(root.findtext('Icon'),512)
     if icon and not re.fullmatch(r'https?://[^\s<>"\']+',icon):icon=None
+    # webUi is untrusted text from the NAS: a screen must show it as text, or use it only after checking for an http(s) scheme.
     web=nas_text(root.findtext('WebUI'),512)
     return {'name':name,'webUi':web,'icon':icon,'repository':nas_text(root.findtext('Repository'),256)}
 def unraid_templates(folder=UNRAID_TEMPLATES):
@@ -69,8 +74,10 @@ def nas_version_facts(root='/'):
         match=re.search(r'productversion="([0-9][0-9A-Za-z.\-]{0,31})"',read('/etc.defaults/VERSION') or '')
         return {'kind':'synology','version':match[1] if match else None}
     text=read('/etc/version')
-    if text is not None and text.startswith('TrueNAS-SCALE') and os.path.exists(os.path.join(root,'usr/bin/midclt')):
-        match=re.search(r'([0-9]{2}\.[0-9]{2}(?:\.[0-9]{1,3}){0,2})',text)
+    # 'TrueNAS-SCALE-24.10.2', 'TrueNAS-SCALE 25.04', 'TrueNAS-25.10.0' or a bare '25.04.1': midclt must exist too. A version
+    # that cannot be read stays None, which refuses the server (fail closed).
+    if text is not None and os.path.exists(os.path.join(root,'usr/bin/midclt')) and re.match(r'(?:TrueNAS|[0-9]{2}\.[0-9]{2})',text.lstrip()):
+        match=re.search(r'(?<![0-9.])([0-9]{2}\.[0-9]{2}(?:\.[0-9]{1,3}){0,2})(?![0-9])',text[:256])
         return {'kind':'truenas','version':match[1] if match else None}
     return None
 def truenas_supported(version):
@@ -128,10 +135,16 @@ def put_back_template(archive,original,scratch,folder=UNRAID_TEMPLATES):
             if read_config(original,follow_links=False,limit=TEMPLATE_LIMIT)==data.decode('utf-8','replace'):return {'status':'unchanged','path':original}
             return {'status':'kept-existing','path':original}
         temporary=folder+'/.docknest-'+uuid.uuid4().hex
-        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644)
-        with os.fdopen(fd,'wb') as output:output.write(data);output.flush();os.fsync(output.fileno())
-        os.replace(temporary,original)
-        return {'status':'restored','path':original}
+        try:
+            fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644)
+            with os.fdopen(fd,'wb') as output:output.write(data);output.flush();os.fsync(output.fileno())
+            # A hard link never replaces a file that appeared meanwhile; the temporary name is always removed.
+            try:os.link(temporary,original)
+            except FileExistsError:return {'status':'kept-existing','path':original}
+            return {'status':'restored','path':original}
+        finally:
+            try:os.unlink(temporary)
+            except OSError:pass
     finally:shutil.rmtree(scratch,ignore_errors=True)
 def nas_template_restore(req):
     root=owned_job_root(req).resolve()
