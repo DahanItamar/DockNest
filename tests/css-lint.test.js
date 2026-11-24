@@ -54,7 +54,7 @@ test('keyframes are on the allowlist', () => {
 
 // The one allowed Beta tag is the Synology support switch in Settings (owner decision for 3.0.0).
 test('no Beta label in the UI', () => {
-  assert.deepEqual(hits(/\bBeta\b/g, jsx), []);
+  assert.deepEqual(hits(/\bBeta\b/g, jsx.filter(({ name }) => !/SynologySetting[.]jsx$/.test(name))), []);
 });
 
 test('!important count never grows', () => {
