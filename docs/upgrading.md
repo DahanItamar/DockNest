@@ -354,7 +354,7 @@ If `git status` lists a modified file, move the change into one of these, then r
 
 Applies to an install on 2.16.x (the oldest upgrade `minUpgradeFrom` allows is still 2.0.0, see below). 3.0.0 is not released yet; this section describes the 3.0.0 development line (`integration/2.16.5`) and is updated as it changes. Upgrade the usual way: the Update Center, or `scripts/upgrade.sh`. Take no other step: the `.env` file, secrets, Compose services and volumes are unchanged, and the only addition to the image is the bundled dashboard fonts.
 
-**Database migrations.** From 2.16.4 (schema 18) the database moves to schema 25 in one start. Every one of these migrations only adds tables and is marked `compatible: true`:
+**Database migrations.** From 2.16.4 (schema 18) the database moves to schema 27 in one start. Every one of these migrations only adds tables and is marked `compatible: true`:
 
 | Migration | Adds |
 | --- | --- |
@@ -371,9 +371,10 @@ Open pull requests add more if they are included in 3.0.0. At the time of writin
 | Pull request | Migration | Adds |
 | --- | --- | --- |
 | Restore test from a backup copy (#230) | 26 `restore-test-source`, compatible | An empty-by-default "Test from" choice on restore test settings |
+| Client reports (#249) | 27 `client-reports`, compatible | Clients, their apps and report history (the tables `clients`, `client_apps`, `client_reports`) |
 | Portainer and Dockge stacks (#229), capacity auto-fill (#231), append-only SFTP (#232), online database dumps (#233) | none | These add no migration |
 
-If #230 is not included, the schema ends at 25. If more migrations land before the release, they are added here.
+If more migrations land before the release, they are added here. If more migrations land before the release, they are added here.
 
 **What changes for you.**
 
@@ -384,6 +385,13 @@ If #230 is not included, the schema ends at 25. If more migrations land before t
 - Domain checks, backup coverage, linked apps and the restore check's extra findings. They read your servers only when you ask or after a scan, readiness check or backup.
 - A "Backup missed" alert when a scheduled backup could not start on time. It uses your existing channels and alert lines for failed backups.
 - If included: Portainer and Dockge stacks in Add app, restore tests from a backup copy, capacity auto-fill for SFTP, append-only SFTP storage, and opt-in online dumps for PostgreSQL, MySQL and MariaDB. Each is off or unchanged until you use it.
+
+**Also new in 3.0.0.**
+
+- Backup format 3 (`formatVersion: 3`) is written only for Podman and rootless apps. Docker apps keep the older format. DockNest 2.16 and older refuse to restore format 3.
+- Cloud drives use a bundled rclone, `linux/amd64` only. Other CPU architectures get no cloud drive destinations.
+- NAS servers (Unraid, Synology, TrueNAS) connect as root, or as a non-root SSH user with passwordless sudo.
+- Moving an app between container engines is not supported yet and is blocked.
 
 **Beta labels stay.** Features labelled beta in 2.16 (for example incremental backups, launching apps and safe changes) keep their label in 3.0.0 until the soak period on the owner's own servers ends. The label is removed in a later release, not by the upgrade.
 
