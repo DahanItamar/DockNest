@@ -77,7 +77,6 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Fixed
 - A server where Docker is installed but not running no longer fails a scan: the app list still shows the other engines, the scan names the stopped Docker engine, and the readiness check says "Docker is installed but not running". The TrueNAS-before-24.10 refusal no longer repeats its last sentence. Release note: A stopped Docker is reported plainly instead of failing the scan.
-
 - The Recovery Guide shows the whole install command instead of cutting it off.
 - The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
 - The move preview dialog no longer has an empty gap above its buttons.
