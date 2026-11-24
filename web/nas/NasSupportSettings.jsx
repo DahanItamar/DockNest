@@ -17,8 +17,8 @@ export function NasSupportSettings({api}){
   catch(e){setError(e.message||'The setting could not be saved.');}
   finally{setBusy(false);}
  }
- return <>
+ return <div data-early-access="">
   {ROWS.map(({kind,label,help})=><SwitchRow key={kind} id={'nas-'+kind} label={<>{label} <span className="nas-label nas-beta">Beta</span></>} help={help} checked={Boolean(gates?.[kind])} disabled={!gates||busy} onChange={on=>change(kind,on)}/>)}
   {error&&<p className="t-caption bad" role="alert">{error}</p>}
- </>;
+ </div>;
 }
