@@ -757,7 +757,9 @@ def capture(req,output=None):
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
-          except Exception:raise ValueError('RESTART_FAILED: '+restart_reason(running))
+          except Exception:
+            reason=restart_reason(running)
+            raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json' if reason is None else 'RESTART_FAILED: '+reason)
     restarted=time.time()
     emit(stage='packing')
     if output is None:engine_save(root/'images.tar',*saved_ids,*images)
