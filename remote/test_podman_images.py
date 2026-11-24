@@ -4,7 +4,7 @@ regular file only) and streams it to `load` on standard input, and `save` writes
 creates (new, 0600). Rootful Docker keeps its exact `-i` and `-o` commands. The call is watched: a stopped step ends it,
 the time allowed grows with the archive, and a failure keeps only a capped tail of the engine's error output.
 Fake engines; data flows through descriptors."""
-import os, pathlib, stat, subprocess, sys, tempfile, unittest
+import os, pathlib, signal, stat, subprocess, sys, tempfile, unittest
 from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it)
@@ -18,8 +18,8 @@ def popen(action=None, hang=0):
     """A fake subprocess.Popen: wait() times out `hang` times, then `action(process)` runs and its result is the exit code."""
     calls = []
     class Process:
-        def __init__(self, argv, stdin=None, stdout=None, stderr=None):
-            self.argv, self.stdin, self.stdout, self.stderr = argv, stdin, stdout, stderr
+        def __init__(self, argv, stdin=None, stdout=None, stderr=None, start_new_session=False):
+            self.argv, self.stdin, self.stdout, self.stderr, self.new_session, self.pid = argv, stdin, stdout, stderr, start_new_session, 4242
             self.returncode = None; self.waits = 0; self.terminated = False; self.killed = False; self.timeouts = []
             calls.append(self)
         def wait(self, timeout=None):
@@ -139,6 +139,44 @@ class WatchTests(unittest.TestCase):
         fake = popen(hang=10 ** 6)
         with self.assertRaises(subprocess.TimeoutExpired): self.stream(fake, timeout=0.05)
         self.assertTrue(fake.calls[0].terminated)
+    def test_the_engine_runs_in_its_own_group_and_a_stop_ends_the_whole_group(self):
+        import signal
+        fake = popen(hang=10 ** 6)
+        sent = []
+        def killpg(pid, sig):
+            sent.append((pid, sig)); fake.calls[0].returncode = -sig
+        real = fake.wait
+        def wait(self, timeout=None):
+            if self.waits == 2: helper.STOPPING = True
+            return real(self, timeout)
+        fake.wait = wait
+        try:
+            with patch.object(helper.os, 'killpg', killpg, create=True), self.assertRaises(ValueError): self.stream(fake)
+        finally: helper.STOPPING = False
+        process = fake.calls[0]
+        self.assertTrue(process.new_session, 'its own session, so its children share one group')
+        self.assertEqual(sent, [(4242, signal.SIGTERM)]); self.assertFalse(process.terminated, 'the group is signalled, not only the leader')
+    def test_a_group_that_ignores_terminate_gets_kill(self):
+        import signal
+        fake = popen(hang=10 ** 6)
+        sent = []
+        def killpg(pid, sig):
+            sent.append(sig)
+            if sig == 9: fake.calls[0].returncode = -9
+        real = fake.wait
+        def wait(self, timeout=None):
+            if self.returncode is None and timeout == 10: raise subprocess.TimeoutExpired(self.argv, timeout)
+            if self.waits == 2: helper.STOPPING = True
+            return real(self, timeout)
+        fake.wait = wait
+        try:
+            with patch.object(helper.os, 'killpg', killpg, create=True), patch.object(signal, 'SIGKILL', 9, create=True), self.assertRaises(ValueError): self.stream(fake)
+        finally: helper.STOPPING = False
+        self.assertEqual(sent, [signal.SIGTERM, 9])
+    def test_a_group_already_gone_is_fine(self):
+        fake = popen(hang=10 ** 6)
+        def killpg(pid, sig): fake.calls[0].returncode = -15; raise ProcessLookupError()
+        with patch.object(helper.os, 'killpg', killpg, create=True), patch.object(signal, 'SIGKILL', 9, create=True), self.assertRaises(subprocess.TimeoutExpired): self.stream(fake, timeout=0.05)
     def test_a_step_already_stopped_never_starts_the_engine(self):
         fake = popen()
         with patch.object(helper, 'STOPPING', True), patch.object(subprocess, 'Popen', fake), helper.using_runtime(rootless()), self.assertRaises(ValueError):

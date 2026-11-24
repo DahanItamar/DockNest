@@ -2,7 +2,7 @@
 # <build:header>
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
-import sys,json,subprocess,os,time,pathlib,re,posixpath,stat
+import sys,json,subprocess,os,time,pathlib,re,posixpath,stat,signal
 from .common import docker, run
 # STOPPING (common.py) is read at call time as a bare global: the one namespace of the built helper always holds its current value.
 # </build:header>
@@ -115,12 +115,19 @@ class Runtime:
         if self.engine=='docker' and self.rootless:self.check_socket()
         import tempfile
         with tempfile.TemporaryFile() as errors:
-            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors)
+            # Its own session and process group: the engine child cannot outlive runuser, and a stop ends the whole group.
+            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True)
             deadline=time.monotonic()+timeout
+            def end(forced):
+                group=getattr(os,'killpg',None)
+                if group is None:
+                    (process.kill if forced else process.terminate)();return
+                try:group(process.pid,signal.SIGKILL if forced else signal.SIGTERM)
+                except ProcessLookupError:pass  # the group is already gone
             def finish():
-                process.terminate()
+                end(False)
                 try:process.wait(timeout=10)
-                except subprocess.TimeoutExpired:process.kill();process.wait()
+                except subprocess.TimeoutExpired:end(True);process.wait()
             try:
                 while True:
                     try:code=process.wait(timeout=poll);break
