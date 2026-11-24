@@ -16,7 +16,7 @@ import { loadChain, ChainError } from '../incremental.js';
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 // "sftp:<target id>:/path" or "s3:<target id>:key": the destination and the path inside it. A local or legacy path has none.
 export function locationOf(stored) {
-  const match = /^(sftp|s3):([^:]+):(.+)$/.exec(String(stored ?? ''));
+  const match = /^(sftp|s3|rclone|folder):([^:]+):(.+)$/.exec(String(stored ?? ''));
   return match && match[2] !== 'env' ? { targetId: match[2], path: match[3] } : null;
 }
 
@@ -24,6 +24,9 @@ export const runbookState = () => db.prepare('SELECT * FROM runbook_state WHERE 
 
 function storageTarget(row, logins) {
   const settings = json(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings, null);
+  // A cloud drive has no address or login a command could use: only its kind and folder, never its token.
+  if (row.auth_type === 'rclone') return { id: row.id, name: row.name, mode: 'rclone', backend: settings?.backend ?? '', root: row.root };
+  if (row.auth_type === 'local') return { id: row.id, name: row.name, mode: 'folder', root: row.root };
   const mode = row.auth_type === 's3-access-key' ? 's3' : 'sftp';
   const base = mode === 's3'
     ? { id: row.id, name: row.name, mode, endpoint: settings?.endpoint ?? '', region: settings?.region ?? '', bucket: settings?.bucket ?? '', pathStyle: Boolean(settings?.pathStyle), root: row.root }

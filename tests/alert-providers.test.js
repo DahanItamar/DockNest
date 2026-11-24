@@ -637,6 +637,7 @@ test('template: every event has a title, a catalogue reason, the names the owner
     'launch.needs_you': ['Launch needs you', 'A failed launch could not remove everything it made. Open DockNest and press Try again.'],
     'selfbackup.kit_check_failed': ['Self Backup kit check failed', 'The newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.'],
     'config.changed': ['Configuration changed', 'The Compose or env files changed outside Safe Edit. Open DockNest to review them.'],
+    'storage.reconnect_needed': ['Storage needs you', 'Sign in again to the copy destination. Backups to it fail until you press Reconnect in DockNest.'],
     'runbook.outdated': ['Recovery Guide out of date', 'Apps, servers, storage or the emergency kit changed since the Recovery Guide was made. Make a new one and replace the printed copy.'],
   };
   assert.deepEqual(Object.keys(expected).sort(), [...events.EVENTS].sort(), 'the catalogue covers every event');
