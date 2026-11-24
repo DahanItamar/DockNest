@@ -23,6 +23,12 @@ export function groupManager(containers) {
   for (const container of containers || []) { const manager = container?.nasApp?.manager; if (Object.hasOwn(MANAGER_LABELS, manager)) return manager; }
   return null;
 }
+// Group headings in Discover: shown only when the groups come from two or more managers.
+export const MANAGER_HEADINGS = Object.freeze({ 'unraid-template': 'Unraid templates', 'unraid-compose-manager': 'Compose Manager', 'synology-project': 'Container Manager projects', 'truenas-app': 'TrueNAS apps', other: 'Other apps' });
+export const headingKey = group => (Object.hasOwn(MANAGER_LABELS, group?.nasManager) ? group.nasManager : 'other');
+export const managerCount = groups => new Set((groups || []).map(headingKey)).size;
+// The heading to print before groups[at], or null. `all` is every group of the list, so a page never decides alone.
+export const headingBefore = (groups, at, all = groups) => (managerCount(all) >= 2 && (at === 0 || headingKey(groups[at - 1]) !== headingKey(groups[at])) ? MANAGER_HEADINGS[headingKey(groups[at])] : null);
 export const managerCaption = manager => (manager ? `${MANAGER_LABELS[manager]} · ${MANAGER_NOTES[manager]}` : '');
 // Plain text of the WebUI field, shortened. It is shown as text only.
 export const webUiText = container => { const value = container?.nasApp?.webUi; return typeof value === 'string' && value ? value.slice(0, 200) : ''; };

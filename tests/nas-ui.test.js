@@ -58,3 +58,14 @@ test('Recovery Guide digest: only an app with a measured time adds a part, so ol
   assert.notEqual(digestOf(measured), digestOf(inventoryParts(inventory({ seconds: 1500, provenAt: at }))));
   assert.deepEqual(changesBetween(measured, inventoryParts(inventory({ seconds: 1500, provenAt: at }))).map(change => change.code), ['recovery_changed']);
 });
+
+test('Discover prints a heading per manager only when two or more managers are present', async () => {
+  const { headingBefore, managerCount } = await import('../web/nas/nas.js');
+  const one = [{ nasManager: 'unraid-template' }, { nasManager: 'unraid-template' }];
+  assert.equal(managerCount(one), 1); assert.equal(headingBefore(one, 0), null); assert.equal(headingBefore(one, 1), null);
+  const two = [{ nasManager: 'unraid-template' }, { nasManager: 'unraid-template' }, { nasManager: 'unraid-compose-manager' }, { nasManager: null }];
+  assert.equal(headingBefore(two, 0), 'Unraid templates'); assert.equal(headingBefore(two, 1), null);
+  assert.equal(headingBefore(two, 2), 'Compose Manager'); assert.equal(headingBefore(two, 3), 'Other apps');
+  // A page of a longer list still follows the whole list: one manager on this page, two overall.
+  assert.equal(headingBefore(one, 0, two), 'Unraid templates');
+});

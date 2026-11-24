@@ -4,7 +4,7 @@ import {AlertPanel,Stepper} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups,suggestedGroups,STACK_MANAGERS} from './container-groups.js';
-import {MANAGER_LABELS,managerCaption,webUiText,TRUENAS_OLD} from './nas/nas.js';
+import {MANAGER_LABELS,managerCaption,webUiText,TRUENAS_OLD,headingBefore} from './nas/nas.js';
 import {RunDefinition} from './backup-coverage/RunDefinition.jsx';
 import {normalizeDomain} from '../shared/domains.js';
 import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
@@ -137,14 +137,15 @@ export function SiteWizard({canSetUpMaintenance=false,engines=[],api,Field,serve
      <p>Choose a Docker project or static nginx website. Docker projects include their services; static websites include their files without stopping nginx.</p>
      <Field label="Find an app" value={siteSearch} onChange={event=>setSiteSearch(event.target.value)} help="Search a domain, project or container name."/>
      {!!hidden.length&&<p className="t-caption" role="note">{hiddenCaption(hidden)}</p>}
-     <Paginated rows={siteChoices.filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered apps" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map(group=>{
+     <Paginated rows={siteChoices.filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered apps" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map((group,at)=>{
       const names=group.containers.map(containerName);
       const chosen=group.kind==='static'?staticRoot===group.documentRoot:!isStatic&&names.length===selected.length&&names.every(name=>selected.includes(name));
-      return <section className={'application-group'+(chosen?' chosen':'')} key={group.id} aria-label={group.name}>
+      const nasHeading=headingBefore(visible,at,siteChoices);
+      return <React.Fragment key={group.id}>{nasHeading&&<h3 className="nas-group-heading">{nasHeading}</h3>}<section className={'application-group'+(chosen?' chosen':'')} aria-label={group.name}>
        <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{group.manager&&<p className="stack-manager"><Layers size={16} aria-hidden="true"/><span>Managed by {STACK_MANAGERS[group.manager]}</span></p>}{group.nasManager&&Object.hasOwn(MANAGER_LABELS,group.nasManager)&&<p className="stack-manager nas-manager"><Layers size={16} aria-hidden="true"/><span>{managerCaption(group.nasManager)}</span></p>}{group.containers.some(webUiText)&&<p className="t-caption nas-webui">Web page setting: {group.containers.map(webUiText).find(Boolean)}</p>}{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
        <p className="site-services">{group.kind==='static'?group.documentRoot:group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
        {group.kind!=='static'&&<details className="site-service-review"><summary>Review services in {group.name}</summary><div className="container-list">{group.containers.map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" aria-label={'Include '+name} checked={selected.includes(name)} disabled={!selected.includes(name)&&selected.length>=30} onChange={event=>toggleGrouped(name,event.target.checked)}/><div><b>{container.service||name}</b><small>{name} / {container.image||container.Config?.Image||'Image unavailable'}</small></div><span className="container-state">{containerStatus(container)}</span></label>;})}</div></details>}
-      </section>;
+      </section></React.Fragment>;
      })}</div>:<p role="status">No apps match this search.</p>}</Paginated>
      <div className="selection-summary" role="status"><b>{hasSelection?settings.name||primary:'No app selected'}</b><span>{isStatic?staticRoot:selected.length?selected.length+' services included: '+selected.join(', '):'Use Select app on one of the cards above.'}</span>{hasSelection&&<button type="button" onClick={()=>selectNames([])}>Clear selection</button>}</div>
      <details className="manual-container-picker"><summary>My app needs a custom selection</summary>

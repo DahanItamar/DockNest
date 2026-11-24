@@ -28,7 +28,7 @@ export function NasReadiness({api,server,onSessionExpired}){
  const {loading,error,result}=state,checks=sortChecks(result?.checks);
  return <section className="map-sec nas-readiness" aria-label="NAS readiness">
   <h3 className="map-group-title">Readiness</h3>
-  <div role="status" aria-live="polite">{loading&&<p className="map-caption">Checking this NAS{'…'}</p>}</div>
+  {loading&&<p className="map-caption" role="status">Checking this NAS{'…'}</p>}
   {error&&<p className="map-caption bad" role="alert">{error}</p>}
   {!loading&&!error&&result&&!result.nas&&<p className="map-caption">This server is not a Unraid, Synology or TrueNAS system.</p>}
   {!loading&&!error&&result?.nas&&<>

@@ -32,6 +32,16 @@ const containers = [
   { name: 'notes', image: 'example/notes', state: 'running', running: true, labels: {}, mounts: [], ports: {}, nasApp: { manager: 'unraid-template', displayName: 'Notes', webUi: '<b>x</b>', icon: null }, backupConfiguration: { configFiles: [] } },
   { name: 'wiki-web', image: 'example/wiki', state: 'running', running: true, labels: { 'com.docker.compose.project': 'wiki' }, mounts: [], ports: {}, nasApp: { manager: 'unraid-compose-manager', displayName: 'wiki', project: 'wiki' }, backupConfiguration: { configFiles: [] } },
 ];
+const guide = {
+  made: true, madeAt: '2026-11-20T10:00:00.000Z', madeBy: 'UI Reviewer', outdated: false, changes: [], notes: '',
+  guide: {
+    apps: [{ id: 'a1', name: 'Wiki', status: 'verified' }, { id: 'a2', name: 'Notes', status: 'verified' }],
+    startHere: { server: [], install: [], storage: [] }, order: [],
+    fleet: { about: 'DockNest backs up the apps below.', whoToAsk: '', servers: [{ name: 'Server 1', apps: ['Wiki', 'Notes'], note: '' }],
+      apps: [{ name: 'Wiki', server: 'Server 1', lastBackup: '20 Nov 2026', recovery: 'About 12 min (proven on 20 Nov 2026).', lastTest: 'Passed on 20 Nov 2026.' }, { name: 'Notes', server: 'Server 1', lastBackup: '20 Nov 2026', recovery: 'Not measured yet. Run a restore test to measure it.', lastTest: 'No restore test yet.' }],
+      storage: [], kit: { summary: 'No emergency kit split.', details: [] } },
+  },
+};
 const errors = [];
 async function newPage(scheme, width) {
   const context = await browser.newContext({ viewport: { width, height: width > 600 ? 800 : 844 }, reducedMotion: 'reduce', colorScheme: scheme });
@@ -46,6 +56,7 @@ async function newPage(scheme, width) {
     if (endpoint === '/api/servers/nas1/discover') return route.fulfill({ json: { nas: unraidCaps.nas, containers, staticSites: [], volumes: null } });
     if (endpoint === '/api/servers/truenas/discover') return route.fulfill({ status: 500, json: { error: 'TrueNAS apps before 24.10 run on Kubernetes, which DockNest does not back up. Update TrueNAS to 24.10 or newer.' } });
     if (endpoint === '/api/servers/onboarding') return route.fulfill({ json: { reportCommand: 'echo report', nas: NAS_WIZARD } });
+    if (endpoint === '/api/runbook') return route.fulfill({ json: guide });
     if (endpoint === '/api/auth/activity') return route.fulfill({ json: {} });
     if (endpoint === '/api/storage-targets') return route.fulfill({ json: { targets: [], active: [] } });
     return route.fulfill({ json: {} });
@@ -76,6 +87,7 @@ for (const scheme of ['light', 'dark']) for (const width of [1280, 390]) {
     assert.ok(await dialog.getByText('Web page setting: http://[IP]:[PORT:8096]/').count() === 1);
     assert.equal(await dialog.locator('b', { hasText: 'x' }).count(), 0, 'WebUI markup is shown as text');
     assert.equal(await dialog.locator('a[href*="IP"]').count(), 0, 'WebUI is never a link');
+    assert.equal(await dialog.getByRole('heading', { name: 'Unraid templates' }).count(), 1, 'a heading per manager when there are two or more');
     await shot(page, 'N2-nas-discover', scheme, width);
     await page.getByRole('button', { name: 'Close dialog' }).click();
     // Unsupported TrueNAS: its own title and the exact message.
@@ -104,6 +116,18 @@ for (const scheme of ['light', 'dark']) for (const width of [1280, 390]) {
     assert.equal(await panel.locator('dt', { hasText: /^(Helper runtime|Staging folder)$/ }).count(), 0, 'no Helper runtime or Staging folder rows in Details');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
     await shot(page, 'N1-nas-readiness', scheme, width);
+    // Recovery Guide: the new column, and the table never makes the page scroll sideways.
+    await page.keyboard.press('Escape');
+    await nav(page, 'Recovery Guide');
+    await page.getByText('About 12 min (proven on 20 Nov 2026).').first().waitFor();
+    assert.ok(await page.getByText('Not measured yet. Run a restore test to measure it.').count() >= 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'the guide table stays inside its card');
+    const apps = page.locator('section', { has: page.getByRole('heading', { name: 'Your apps' }) });
+    await apps.scrollIntoViewIfNeeded();
+    const box = await apps.boundingBox(), paper = await page.locator('.rb-paper').boundingBox();
+    assert.ok(box.x >= paper.x - 1 && box.x + box.width <= paper.x + paper.width + 1, 'the apps table stays inside its card');
+    if (shots) await apps.screenshot({ path: path.join(shots, `R4-guide-table-${width}-${scheme}.png`) });
+    await shot(page, 'R4-guide', scheme, width);
   } finally { await context.close(); }
 }
 await browser.close();
