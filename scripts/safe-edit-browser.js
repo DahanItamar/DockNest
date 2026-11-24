@@ -568,6 +568,7 @@ async function roles(){
  mock.view=viewFor({kind:'container',files:[],env:[{file:'container',keys:[{key:'TAG',set:true}]}],services:[{name:'web',image:'shop:${TAG}',ports:[port(8080,8080)],frozen:false,healthcheck:true}],usable:{compose:false,env:true,ports:true,image:false},reasons:{compose:{code:'NO_COMPOSE',message:'This app has no Compose file to edit.'},image:{code:'IMAGE_FROM_ENV',message:'Edit TAG in Environment.'}}});
  ({context,page}=await open({width:1280}));
  await startEdit(page,1280);
+ await dlg(page).getByRole('tab',{name:'Image'}).waitFor();
  assert.equal(await dlg(page).getByRole('tab',{name:'Compose'}).count(),0);
  await dlg(page).getByRole('tab',{name:'Image'}).click();
  await dlg(page).getByText('Edit TAG in Environment.').waitFor();

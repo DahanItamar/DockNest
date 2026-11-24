@@ -206,7 +206,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
  const tabBar=<div className="map-tabs" role="tablist" aria-label="Edit sections">{tabs.map(n=><button key={n} type="button" role="tab" aria-selected={n===tab} className={n===tab?'on':''} onClick={()=>setTab(n)}>{n}</button>)}</div>;
  const title='Edit '+site.name;
 
- if(stage==='loading')return <Shell onClose={onClose} title={title} actions={<Foot a="Cancel" onA={onClose} b="Review" disabled/>}>{tabBar}{guard.prompt||<div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Reading files</StatusLabel></div>}</Shell>;
+ if(stage==='loading')return <Shell onClose={onClose} title={title} actions={<Foot a="Cancel" onA={onClose} b="Review" disabled/>}>{view&&tabBar}{guard.prompt||<div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Reading files</StatusLabel></div>}</Shell>;
  if(stage==='loadfail')return <Shell onClose={onClose} title={title} actions={<Foot a="Cancel" onA={onClose} b="Review" disabled/>}><AlertPanel variant="error" action={<div className="rp-actions"><button type="button" onClick={load}>Try again</button></div>}>{error||'Could not read the files.'}</AlertPanel></Shell>;
  if(stage==='edit')return <Shell onClose={onClose} title={title} actions={<Foot a="Cancel" onA={onClose} b="Review" onB={startReview} disabled={!dirty||!!problem||busy}/>}>
   {tabBar}
