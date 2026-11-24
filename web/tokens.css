@@ -176,7 +176,7 @@
  --dn-danger-solid:var(--dn-red-solid);--dn-danger-solid-hover:var(--dn-red-solid-hover);--dn-danger-text:var(--dn-red-text);--dn-danger-surface:var(--dn-red-surface);--dn-danger-border:var(--dn-red-border);
  --dn-info-solid:var(--dn-chrome-solid-step);--dn-info-solid-hover:var(--dn-chrome-solid-hover-step);--dn-info-text:var(--dn-chrome-text-step);--dn-info-surface:var(--dn-chrome-2);--dn-info-border:var(--dn-chrome-5);
  /* Controls */
- --dn-switch-track-off:var(--dn-neutral-9);--dn-switch-track-on:var(--dn-brand-solid);--dn-switch-thumb:var(--dn-white);
+ --dn-switch-track-off:var(--dn-border-strong);--dn-switch-track-on:var(--dn-brand-solid);--dn-switch-thumb:var(--dn-white);
  /* Focus: ONE ring everywhere, :focus-visible only */
  --dn-focus-color:var(--dn-brand-ui);--dn-focus-width:2px;--dn-focus-offset:2px;
  --dn-focus-ring:var(--dn-focus-width) solid var(--dn-focus-color);
@@ -194,7 +194,7 @@
  --dn-chrome-text:var(--dn-chrome-text-step);--dn-chrome-surface:var(--dn-chrome-3);--dn-chrome-surface-hover:var(--dn-chrome-4);--dn-chrome-border:var(--dn-chrome-6);
  --dn-chrome-indicator:var(--dn-chrome-text-step);--dn-brand-chip:var(--dn-brand-4);--dn-chrome-chip:var(--dn-chrome-4);
  --dn-info-text:var(--dn-chrome-text-step);--dn-info-surface:var(--dn-chrome-2);--dn-info-border:var(--dn-chrome-6);
- --dn-switch-track-off:var(--dn-neutral-9);
+ --dn-switch-track-off:var(--dn-border-strong);
  --dn-focus-color:var(--dn-brand-text-step);
 }
 

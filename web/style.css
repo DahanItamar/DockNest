@@ -6,7 +6,7 @@
 button,.button,.icon-button{display:inline-flex;align-items:center;justify-content:center;gap:var(--dn-space-2);min-height:var(--dn-control-h);height:var(--dn-control-h);padding:0 var(--dn-space-4);border:1px solid var(--dn-border-strong);border-radius:var(--dn-radius-md);background:var(--dn-bg-surface);color:var(--dn-text-primary);font-size:var(--dn-text-sm);line-height:var(--lh-button);font-weight:500;text-decoration:none;cursor:pointer;transition:background-color var(--dn-dur-fast) var(--dn-ease-standard),border-color var(--dn-dur-fast) var(--dn-ease-standard),color var(--dn-dur-fast) var(--dn-ease-standard);white-space:nowrap}
 @media(hover:hover){button:hover:not(:disabled,[aria-disabled=true]),.button:hover:not([aria-disabled=true]){background:var(--dn-bg-hover)}}
 button:active:not(:disabled,[aria-disabled=true]),.button:active:not([aria-disabled=true]){background:var(--dn-bg-pressed)}
-button:is(:disabled,[aria-disabled=true]),.button[aria-disabled=true]{background:var(--dn-bg-subtle);border-color:var(--dn-border-subtle);color:var(--dn-text-disabled);cursor:not-allowed}
+button:is(:disabled,[aria-disabled=true]),.button[aria-disabled=true]{background:var(--dn-bg-hover);border-color:var(--dn-border-subtle);color:var(--dn-text-disabled);cursor:not-allowed}
 button[aria-busy=true]{cursor:progress}
 .primary{color:var(--dn-text-on-solid);background:var(--dn-brand-solid);border-color:var(--dn-brand-solid)}
 @media(hover:hover){.primary:hover:not(:disabled,[aria-disabled=true]){color:var(--dn-text-on-solid);background:var(--dn-brand-solid-hover);border-color:var(--dn-brand-solid-hover)}}
