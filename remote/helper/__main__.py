@@ -147,13 +147,17 @@ def main(req):
         emit(result={'helperVersion':VERSION,**engine_facts(engines),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engines,**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
     elif op=='runtime-restore-cleanup':emit(result=runtime_restore_cleanup(req))
     elif op=='discover':
-        cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
+        engine_errors=[]
+        try:cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):
+            # Rootful Docker is installed but stopped: say so (never an empty list that looks like "no apps"), and still list the other engines.
+            if not rootful_docker_down():raise
+            cs,uninspected=[],[];engine_errors.append({'runtime':{'engine':'docker','rootless':False},'reason':'failed'})
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs);managers=stack_managers(cs)
         engines=engine_probe();homes=engine_homes()
-        engine_errors=[]
         foreign=other_engine_containers(engines,homes,engine_errors)
         emit(result=attach_nas({**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'engineErrors':engine_errors,'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)},cs))
     elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})

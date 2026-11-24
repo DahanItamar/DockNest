@@ -11,7 +11,9 @@ const NOT_NAS_MESSAGE = 'SSH connected as a user that is not root. A non-root ac
 
 const refusal = result => {
   const failed = result?.checks?.find(check => check.status === 'fail');
-  return new ConnectRefused(failed ? `${failed.message} ${failed.fix ?? ''}`.trim() : 'This NAS is not ready.', failed?.fix ?? SUDO_FIX);
+  // The message already ends with the fix for some checks (TrueNAS before 24.10): say it once.
+  const text = failed ? (failed.fix && !String(failed.message).includes(failed.fix) ? `${failed.message} ${failed.fix}` : failed.message) : 'This NAS is not ready.';
+  return new ConnectRefused(text, failed?.fix ?? SUDO_FIX);
 };
 
 export async function connectCapabilities(server, { inspect, test }) {
