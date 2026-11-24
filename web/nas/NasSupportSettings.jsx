@@ -4,8 +4,8 @@ import {SwitchRow} from '../connections/parts.jsx';
 // Settings > NAS servers: Synology and Unraid support, each off by default. Early access: an administrator opts in here.
 // The switches only change what DockNest offers; nothing on a server changes.
 const ROWS=[
- {kind:'synology',label:'Synology support',help:'Early access for Synology DSM 7.2 with Container Manager. Share feedback through Report a problem.'},
- {kind:'unraid',label:'Unraid support',help:'Early access for Unraid 7 with Docker templates. Share feedback through Report a problem.'},
+ {kind:'synology',label:'Synology support',help:'Early access. Send feedback with Report a problem.'},
+ {kind:'unraid',label:'Unraid support',help:'Early access. Send feedback with Report a problem.'},
 ];
 export function NasSupportSettings({api}){
  const [gates,setGates]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
