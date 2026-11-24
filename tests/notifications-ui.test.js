@@ -59,7 +59,7 @@ test('links: only a job id or a known page shape is followed', () => {
 test('tabs, badge and the page reload signature', () => {
   assert.deepEqual(TABS.map(tab => tab[1]), ['All', 'Needs action', 'Backups & restores', 'Storage', 'System', 'Archived']);
   assert.equal(tabCount({ unread: { all: 4 } }, 'all'), 4); assert.equal(tabCount(undefined, 'all'), 0);
-  assert.equal(badgeText(0), '0'); assert.equal(badgeText(7), '7'); assert.equal(badgeText(120), '99+');
+  assert.equal(badgeText(0), '0'); assert.equal(badgeText(7), '7'); assert.equal(badgeText(9), '9'); assert.equal(badgeText(10), '9+'); assert.equal(badgeText(120), '9+');
   assert.notEqual(signature({ unread: 1, newestId: 2, recent: [{ lastAt: 'a', count: 1 }] }), signature({ unread: 1, newestId: 2, recent: [{ lastAt: 'b', count: 2 }] }));
   assert.equal(signature(undefined), '');
 });

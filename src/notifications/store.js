@@ -5,16 +5,28 @@ import { db } from '../db.js';
 import { messageFor, templateFor } from '../alerts/events.js';
 import { profileOf, linkFor, NOTIFY_ONLY, NEEDS_ACTION, FOLD_WINDOW_MS, RETENTION_DAYS } from './catalog.js';
 
-// Last line of defence: whatever a builder returns, no address, URL, path or long token-like string reaches a row.
+// Last line of defence: whatever a builder returns, no email address, IP address, URL, path or long token-like string reaches
+// a row. Names the owner typed (servers, apps, domains of their own sites) are kept: they are labels, and a certificate
+// message must still say which site it is about.
 export function scrub(text, max) {
   return String(text ?? '')
     .replace(/[‪-‮⁦-⁩]/g, '').replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\S+@\S+\.\S+/g, '[email]')
     .replace(/\bhttps?:\/\/\S+/gi, '[link]').replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[address]').replace(/\b(?:[0-9a-f]{0,4}:){3,7}[0-9a-f]{0,4}\b/gi, '[address]')
     .replace(/(?:^|\s)(?:[A-Za-z]:)?[\\/](?:[\w.@-]+[\\/])+[\w.@-]*/g, ' [path]').replace(/\b[A-Za-z0-9_-]{32,}\b/g, '[hidden]')
     .replace(/\s+/g, ' ').trim().slice(0, max);
 }
 // The alert sentences end with "Open DockNest to ..." because they leave the app; inside it that is noise.
-const inApp = text => text.replace(/\s*Open DockNest[^.]*\.?$/, '').replace(/\s*Check certbot on the server\.$/, '').trim();
+// The body is the detail only: the title is not repeated, and the time is shown by the app in the viewer's own zone.
+const inApp = (text, title) => {
+  let out = text.replace(/\s*Open DockNest[^.]*\.?$/, '').replace(/\s*Check certbot on the server\.$/, '').replace(/\s+at \d{2}:\d{2}(?: [A-Z][A-Za-z0-9+:-]*)?(?=[.\s]|$)/, '').trim();
+  const cut = out.indexOf(': ');
+  const lead = out.slice(0, cut), low = String(title).toLowerCase();
+  if (cut > 0 && lead.toLowerCase() === low) out = out.slice(cut + 2).trim();
+  // "Low disk space on Server 2: 3.2 GB free" -> "Server 2: 3.2 GB free": the title words go, the name stays.
+  else if (cut > 0 && lead.toLowerCase().startsWith(low + ' on ')) out = lead.slice(low.length + 4) + ': ' + out.slice(cut + 2).trim();
+  return out;
+};
 
 export function notificationFor(event) {
   const profile = profileOf(event); if (!profile) return null;
@@ -25,7 +37,7 @@ export function notificationFor(event) {
     title = extra.title; body = extra.text(parts);
   } else {
     const template = templateFor(event), text = messageFor(event); if (!template || !text) return null;
-    title = template.title; body = inApp(text);
+    title = template.title; body = inApp(text, title);
   }
   return { event_key: event.type, severity: profile.severity, category: profile.category, title: scrub(title, 120), body: scrub(body, 400), link: linkFor(event) };
 }

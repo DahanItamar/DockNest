@@ -64,9 +64,11 @@ try {
     await page.getByRole('main').waitFor();
     return { context, page };
   };
+  // Wide screens have folder tabs; narrow ones one selector that opens a sheet.
+  const folder = async (page, name) => { const tab = page.getByRole('tab', { name }); if (await tab.count()) { await tab.click(); return; } await page.locator('.nc-folder').click(); await page.getByRole('radio', { name }).click(); };
   const shot = async (page, name, scheme, width) => { await page.waitForTimeout(400); if (shots) await page.screenshot({ path: join(shots, `${name}-${width}-${scheme}.png`) }); };
 
-  for (const [width, scheme] of [[1280, 'light'], [1280, 'dark'], [390, 'light']]) {
+  for (const [width, scheme] of [[1280, 'light'], [768, 'light'], [1280, 'dark'], [390, 'light'], [390, 'dark']]) {
     await call('POST', '/notifications/read-all'); // start each pass the same way
     db.prepare("UPDATE notifications SET read_at=NULL,archived_at=NULL WHERE title NOT IN ('Update available','Restore test passed again')").run();
     const { context, page } = await open({ width, scheme });
@@ -93,13 +95,22 @@ try {
     const menu = page.getByRole('button', { name: 'Open navigation' }); if (await menu.isVisible()) await menu.click();
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Notifications/ }).click();
     await page.getByRole('heading', { name: 'Notification center' }).waitFor();
-    await page.getByRole('tab', { name: /^All/ }).waitFor();
+    await page.locator('.nc-toolbar').first().waitFor();
     assert.ok(await page.locator('.nc-row').count() >= 8, 'rows listed');
-    await shot(page, 'center', scheme, width);
-    await page.getByRole('tab', { name: /^Needs action/ }).click();
+    await shot(page, 'v2-center', scheme, width);
+    await folder(page, /^Needs action/);
     await page.waitForTimeout(400);
     assert.equal(await page.locator('.nc-row .nc-sev-success, .nc-row .nc-sev-info').count(), 0, 'only errors and warnings need action');
-    await page.getByRole('tab', { name: /^All/ }).click();
+    await folder(page, /^All/);
+    if (width < 640) {
+      assert.equal(await page.locator('[role=tab]').count(), 0, 'one folder selector instead of tabs');
+      const row = await page.locator('.nc-toolbar-narrow').boundingBox(); assert.ok(row.height <= 64, 'one line toolbar');
+      await page.getByRole('button', { name: 'Filter' }).click(); await shot(page, 'v2-filter', scheme, width);
+      await page.getByRole('radio', { name: 'Error' }).click(); await page.getByRole('switch', { name: 'Unread only' }).click(); await page.getByRole('button', { name: 'Done' }).click(); await page.waitForTimeout(400);
+      assert.ok(await page.getByRole('button', { name: 'Filter, active' }).count(), 'active filter is marked');
+      await page.getByRole('button', { name: 'Filter, active' }).click(); await page.getByRole('radio', { name: 'All severities' }).click(); await page.getByRole('switch', { name: 'Unread only' }).click(); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+      await page.locator('.nc-folder').click(); await shot(page, 'v2-folders', scheme, width); await page.keyboard.press('Escape');
+    }
     if (scheme === 'light' && width === 1280) {
       await page.getByLabel('Severity').selectOption('error'); await page.waitForTimeout(400);
       assert.ok(await page.locator('.nc-row').count() >= 1); assert.equal(await page.locator('.nc-row-meta .nc-sev-label:not(.nc-sev-error)').count(), 0);
@@ -109,10 +120,10 @@ try {
       assert.equal(await unread(), before - 1, 'Mark read');
       const title = await page.locator('.nc-row').first().locator('b').innerText();
       await page.locator('.nc-row').first().getByRole('button', { name: 'Archive' }).click(); await page.waitForTimeout(500);
-      await page.getByRole('tab', { name: /^Archived/ }).click(); await page.waitForTimeout(400);
+      await folder(page, /^Archived/); await page.waitForTimeout(400);
       assert.ok(await page.locator('.nc-row', { hasText: title }).count(), 'archived row is in Archived');
       await page.locator('.nc-row').first().getByRole('button', { name: 'Unarchive' }).click(); await page.waitForTimeout(400);
-      await page.getByRole('tab', { name: /^All/ }).click();
+      await folder(page, /^All/);
       await page.locator('.nc-row').first().getByRole('button', { name: /Open|View job/ }).first().click();
       await page.getByRole('heading', { name: /Job Activity|Jobs/ }).first().waitFor();
     }

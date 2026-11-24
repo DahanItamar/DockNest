@@ -43,6 +43,6 @@ export function linkTarget(link) {
 export const TABS = Object.freeze([['all', 'All'], ['needs_action', 'Needs action'], ['backups', 'Backups & restores'], ['storage', 'Storage'], ['system', 'System'], ['archived', 'Archived']]);
 export const tabCount = (counts, tab) => counts?.unread?.[tab] ?? 0;
 // "99+" keeps the bell badge a fixed width.
-export const badgeText = count => count > 99 ? '99+' : String(Math.max(0, count | 0));
+export const badgeText = count => count > 9 ? '9+' : String(Math.max(0, count | 0));
 // The page reloads its list when this changes; it comes from the state the app already polls.
 export const signature = summary => summary ? `${summary.unread}:${summary.newestId}:${summary.recent?.[0]?.lastAt ?? ''}:${summary.recent?.[0]?.count ?? ''}` : '';

@@ -72,7 +72,7 @@ test('emit feeds every administrator, and only administrators; a repeat folds in
   assert.equal(rows(A).length, 1); assert.equal(rows(B).length, 1); assert.equal(rows(V).length, 0, 'a viewer gets none');
   const first = rows(A)[0];
   assert.deepEqual([first.severity, first.category, first.count, first.link, first.read_at], ['error', 'backups', 1, 'job:job-0001-aaaa', null]);
-  assert.match(first.body, /^Backup failed: Shop on Main/); assert.doesNotMatch(first.body, /Open DockNest/);
+  assert.equal(first.body, 'Shop on Main.'); assert.doesNotMatch(first.body, /Open DockNest| at dd:dd/);
   store.markRead(A.id, [first.id]); store.archive(A.id, [first.id]);
   emit(failed(), { at: Date.parse('2026-11-20T11:00:00Z') });
   const folded = rows(A);
@@ -99,6 +99,7 @@ test('titles and bodies never hold secrets, addresses, paths or URLs, whatever a
   emit({ type: 'backup.failed', key: 'site:leak', siteName: 'Shop 203.0.113.9 /srv/data/shop https://x.example.com/?token=abc ' + 'A'.repeat(40), serverName: 'Main' });
   const row = rows(A)[0], text = `${row.title} ${row.body}`;
   for (const pattern of [/203\.0\.113/, /\/srv\//, /https?:/, /A{32}/, /token=/]) assert.doesNotMatch(text, pattern);
+  assert.equal(store.scrub('mail ops@example.com or <a.b+c@mail.example.org> now', 100), 'mail [email] or [email] now');
   assert.match(store.scrub('see C:\\Users\\me\\key.pem and /etc/ssh/id_rsa now', 100), /^see \[path\] and \[path\] now$/);
   assert.equal(store.scrub('word '.repeat(200), 400).length, 400);
   assert.ok(validLink('job:job-0001-aaaa') && validLink('route:Jobs') && validLink(null)); assert.ok(!validLink('route:Evil') && !validLink('https://example.com') && !validLink('javascript:alert(1)'));
@@ -187,5 +188,5 @@ test('restores, restore tests that passed and stale recovery times are noticed f
   const before = rows(A).length; detect.detectJobsAndMoves('2026-11-20T10:10:00.000Z'); assert.equal(rows(A).length, before, 'a second pass adds nothing');
   assert.equal(store.notify({ type: 'recovery_time.stale', key: 'occ:rto:x:1', siteName: 'Shop' }), 2);
   assert.equal(store.notify({ type: 'restore_test.passed', key: 'occ:restore-test:q:passed', siteName: 'Shop', serverName: 'Test box' }), 2);
-  assert.match(rows(A).at(-1).body, /^Restore test passed: Shop on Test box/);
+  assert.equal(rows(A).at(-1).body, 'Shop on Test box');
 });

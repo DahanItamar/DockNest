@@ -6,10 +6,10 @@ export const CATEGORIES = Object.freeze(['backups', 'restore_tests', 'storage', 
 // Events only the notification centre shows (no external alert): a restore finishing, a restore test that passed without
 // recovering from a failure, and a recovery-time proof that went stale.
 export const NOTIFY_ONLY = Object.freeze({
-  'restore.succeeded': { title: 'Restore finished', severity: 'success', category: 'backups', text: ({ site, server, when }) => `Restore finished: ${site} on ${server}${when}.` },
-  'restore.failed': { title: 'Restore failed', severity: 'error', category: 'backups', text: ({ site, server, when }) => `Restore failed: ${site} on ${server}${when}.` },
-  'restore_test.passed': { title: 'Restore test passed', severity: 'success', category: 'restore_tests', text: ({ site, server, when }) => `Restore test passed: ${site} on ${server}${when}.` },
-  'recovery_time.stale': { title: 'Recovery time is out of date', severity: 'warning', category: 'restore_tests', text: ({ site }) => `The recovery time proven for ${site} is old. Run a new restore test.` },
+  'restore.succeeded': { title: 'Restore finished', severity: 'success', category: 'backups', text: ({ site, server }) => `${site} on ${server}` },
+  'restore.failed': { title: 'Restore failed', severity: 'error', category: 'backups', text: ({ site, server }) => `${site} on ${server}` },
+  'restore_test.passed': { title: 'Restore test passed', severity: 'success', category: 'restore_tests', text: ({ site, server }) => `${site} on ${server}` },
+  'recovery_time.stale': { title: 'Recovery time is out of date', severity: 'warning', category: 'restore_tests', text: ({ site }) => `${site}: run a new restore test.` },
 });
 const S = 'success', E = 'error', W = 'warning', I = 'info';
 // type -> [severity, category]. A function picks the severity from the event's code or detail.
