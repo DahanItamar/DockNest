@@ -18,4 +18,4 @@
 .dr-code-head{min-height:0;display:flex;align-items:center;justify-content:space-between;padding:var(--dn-space-1) var(--spacing) var(--dn-space-1) var(--edge);background:var(--surface-muted);color:var(--text-muted);font-size:var(--fs-caption)}
 .dr-code pre{margin:0;padding:var(--spacing) var(--edge) var(--edge);overflow:auto;font-family:var(--dn-font-mono);font-size:var(--fs-caption)}
 .dr-note{display:flex;align-items:flex-start;gap:var(--spacing);margin:0}.dr-note svg{flex:none;margin-top:2px}
-.dr-trash{font-family:var(--dn-font-sans);margin:0;padding:var(--edge);background:var(--surface-muted);border-radius:var(--dn-radius-md)}
+.storage-card-content>p.dr-trash{font-family:var(--dn-font-sans);margin:0;padding:var(--edge);background:var(--surface-muted);border-radius:var(--dn-radius-md)}
