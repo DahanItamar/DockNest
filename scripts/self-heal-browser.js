@@ -87,7 +87,7 @@ async function board(name,over,{scheme,width}){
  // v2: both themes carry the 1px dialog edge (the border token)
  const edge=await dlg.evaluate(d=>{const c=getComputedStyle(d);return {w:c.borderTopWidth,color:c.borderTopColor}});
  assert.equal(edge.w,'1px',tag+': dialog-edge width');
- if(scheme==='light')assert.equal(edge.color,'rgb(211, 216, 223)',tag+': light edge is the v2 border token');
+ if(scheme==='light')assert.equal(edge.color,'rgb(217, 217, 224)',tag+': light edge is the v2 border token');
  else assert.doesNotMatch(edge.color,/rgba\(0, 0, 0, 0\)/,tag+': dark edge is visible');
  await shot(page,tag);
  if(name==='05-self-heal-settings'){

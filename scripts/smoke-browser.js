@@ -17,7 +17,8 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
 
   assert.equal(await page.locator('input').count(), 1, 'Step one has only the password input');assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).count(),1);
-  assert.equal(await page.locator('.auth-card .brand-lockup,.auth-header .brand-lockup').count(),0,'Login uses the monochrome mask logo, not the app lockup');
+  assert.equal(await page.locator('.auth-page .brand-image').evaluateAll(images=>images.length>0&&images.every(image=>image.alt==='DockNest'&&/\/brand\/logo-teal-(light|dark)-600-/.test(image.getAttribute('src')))),true,'Login shows the full-colour accent logo with an accessible name');
+  assert.equal(await page.locator('.auth-page .brand-lockup small').count(),0,'The app-header tagline is not shown on the sign-in screens');
   assert.equal(await page.locator('.brand-image').count(),2,'Panel logo and phone logo');
   assert.equal(await page.locator('.alert,.alert-panel').count(),0,'No alert box on the sign-in page');
   assert.equal(await page.title(),'DockNest — Backup & Restore for Self-Hosted Apps');
