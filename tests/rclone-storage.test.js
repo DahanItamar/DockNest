@@ -552,12 +552,23 @@ test('changing the Google app on a destination with backups needs a confirmation
   assert.equal(body.error, 'Earlier backups on this destination will no longer be visible to DockNest.');
   assert.equal(db.prepare('SELECT status FROM storage_targets WHERE id=?').get(kept).status, 'needs_reconnect', 'nothing changed');
   assert.equal((await post('/storage-targets/' + kept + '/reconnect', { sessionId, confirmHidden: true })).status, 200);
+  const stamp = JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(kept).settings).clientChangedAt;
+  assert.ok(Number.isFinite(Date.parse(stamp)), 'the change is stamped on the destination');
   // The same Google app again (or none changed) needs no confirmation.
   const same = make();
   db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES('fixture-backup-2',?,?,'verified',0,?,?)").run(same, 'rclone:' + same + ':/docknest/y.enc', at, at);
   const again = await (await post('/storage-targets/rclone/authorize', { backend: 'drive', flow: 'token', clientId: 'old-client-id-1234', clientSecret: 'old-client-secret' })).json();
   await post('/storage-targets/rclone/authorize/' + again.sessionId, { pasted: JSON.stringify(TOKEN) });
   assert.equal((await post('/storage-targets/' + same + '/reconnect', { sessionId: again.sessionId })).status, 200);
+  assert.equal(JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(same).settings).clientChangedAt, undefined, 'no stamp when the app is the same');
+  // Only packages older than the stamp are hidden by the change; newer or unstamped ones that are missing stay a real problem.
+  const { hiddenByClientChange } = await import('../src/storage/rclone-state.js');
+  const before = new Date(Date.parse(stamp) - 60_000).toISOString(), after = new Date(Date.parse(stamp) + 60_000).toISOString();
+  assert.equal(hiddenByClientChange('rclone:' + kept + ':/docknest/a.enc', before), true);
+  assert.equal(hiddenByClientChange('rclone:' + kept + ':/docknest/a.enc', after), false, 'uploaded after the change');
+  assert.equal(hiddenByClientChange('rclone:' + same + ':/docknest/a.enc', before), false, 'the app never changed');
+  assert.equal(hiddenByClientChange('/data/backups/a.enc', before), false);
+  assert.equal(hiddenByClientChange('rclone:' + kept + ':/docknest/a.enc', null), false);
 });
 test('a Google Drive file that is not found is not damage: the scrub says it was uploaded by another app', async () => {
   const { classify, notVisibleOnProvider, NOT_VISIBLE_MESSAGE } = await import('../src/storage/rclone-errors.js');

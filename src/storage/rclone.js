@@ -127,7 +127,6 @@ async function launch(options, args, { input = false } = {}) {
     }).then(async result => {
       try { await writeBack(options, file, secrets); } catch { /* the old token stays; the next operation refreshes again */ }
       if (result.code === 0 && options.persist !== false && options.id && !options.settings?.account) learnAccount(options.id).catch(() => {});
-      if (result.code === 0 && options.persist !== false && options.id && !options.settings?.account) learnAccount(options.id).catch(() => {});
       try { await rm(folder, { recursive: true, force: true }); } finally { release(); }
       return result;
     });

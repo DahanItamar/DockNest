@@ -169,7 +169,7 @@ rcloneRoutes.post('/:id/reconnect', requireRecentAuth, rateLimit('rclone-connect
   // The account is asked again: a reconnect can be to another account, and the card shows it masked.
   const account = await rclone.account(options);
   transaction(() => {
-    if (settings.backend === 'drive') saveSettings(row.id, { rootFolderId: options.settings.rootFolderId ?? null });
+    if (settings.backend === 'drive') saveSettings(row.id, { rootFolderId: options.settings.rootFolderId ?? null, ...((taken.client?.clientId ?? null) !== (old?.clientId ?? null) ? { clientChangedAt: new Date().toISOString() } : {}) });
     if (account) saveSettings(row.id, { account });
     replaceToken(row.id, options.secrets.token, taken.client, req.user.id);
     db.prepare('UPDATE storage_targets SET last_tested_at=? WHERE id=?').run(new Date().toISOString(), row.id);

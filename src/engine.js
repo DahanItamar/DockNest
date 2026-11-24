@@ -31,6 +31,7 @@ import { takeRouting, withoutRouting } from './domains/check.js';
 import { parseCapabilities } from './nas/command.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 import { NOT_VISIBLE_MESSAGE, notVisibleOnProvider } from './storage/rclone-errors.js';
+import { hiddenByClientChange } from './storage/rclone-state.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
@@ -156,7 +157,7 @@ async function executeScrub(job){
   if(chainError)throw chainError;
   for(const member of members??[backup]){
    // Google Drive hides files another app (or access level) uploaded: that is not damage, and nothing is marked failed or unverified.
-   const sum=await verifyEncrypted(packagePath(member)).catch(error=>{if(notVisibleOnProvider(error))invisible=error;return null;});
+   const sum=await verifyEncrypted(packagePath(member)).catch(error=>{if(notVisibleOnProvider(error)&&hiddenByClientChange(packagePath(member),member.created_at))invisible=error;return null;});
    if(invisible)break;
    if(sum!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}
   }
