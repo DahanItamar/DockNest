@@ -38,6 +38,36 @@ def staging_base(cfg):
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts or str(base) in FORBIDDEN_STAGING:raise ValueError('Use a dedicated absolute staging directory')
     return base
+RAM_FILESYSTEMS={'tmpfs','ramfs','rootfs'}
+def filesystem_type(path):
+    """Filesystem type of the longest /proc/mounts entry that holds the path. '' when it cannot be told (callers refuse)."""
+    best,kind='',''
+    try:
+        with open('/proc/mounts',encoding='utf8',errors='replace') as table:
+            for line in table:
+                fields=line.split()
+                if len(fields)<3:continue
+                point=re.sub(r'\\([0-7]{3})',lambda m:chr(int(m.group(1),8)),fields[1])
+                if (str(path)==point or str(path).startswith(point.rstrip('/')+'/')) and len(point)>=len(best):best,kind=point,fields[2]
+    except OSError:return ''
+    return kind
+def nas_staging_facts(base):
+    """NAS only: the persistent working folder DockNest chose at connect. Free space is read there, never from '/'
+    (Unraid keeps '/' in RAM). Refuses a link, a folder that is not ours alone, a RAM filesystem or an unknown one."""
+    path=staging_base({'stagingRoot':base})
+    if str(path.parent) in ('/','/mnt','/var','/tmp'):raise ValueError('The NAS staging folder must be inside a storage pool or volume')
+    path.mkdir(parents=True,exist_ok=True,mode=0o700)
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        info=os.fstat(fd)
+        if path.resolve()!=path:raise ValueError('The NAS staging folder cannot be a symbolic link')
+        if info.st_uid!=os.geteuid():raise ValueError('The NAS staging folder must be owned by the account DockNest runs as')
+        if stat.S_IMODE(info.st_mode)&0o077:os.fchmod(fd,0o700)
+        kind=filesystem_type(path)
+        if not kind or kind in RAM_FILESYSTEMS:raise ValueError('The NAS staging folder is on memory storage or an unknown filesystem')
+        usage=os.statvfs(fd)
+        return {'stagingBase':str(path),'freeBytes':usage.f_bavail*usage.f_frsize,'stagingWritable':os.access(path,os.W_OK),'stagingFilesystem':kind}
+    finally:os.close(fd)
 def is_regular(path):
     try:return stat.S_ISREG(os.lstat(path).st_mode)
     except OSError:return False
