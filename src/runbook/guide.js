@@ -2,6 +2,7 @@
 // the inventory when it is asked for. Sections, in order: Start here, Restore everything in this order, Fleet overview
 // and one page per app. Short sentences, one action per step, each starting with a verb; expert detail is in the
 // command boxes and the linked docs. Addresses and login details appear only when `include` says so.
+import { formatRecoveryTime } from '../../shared/recovery-time.js';
 import { installCommands, restoreCommands, checkCommands, storageCheckCommand, trusted, revealer } from './commands.js';
 
 export const INCLUDE_DEFAULTS = Object.freeze({ addresses: false, logins: false, commands: true, tests: true, schedules: true, notes: true });
@@ -20,6 +21,12 @@ export function statusText(app) {
   if (app.backup?.verified) return `Verified: a restore test passed on ${formatDate(app.backup.verified.at)}, from the ${app.backup.verified.source === 'copy' ? 'off-site copy' : 'main backup'}.`;
   return app.backup ? 'Backed up, not tested yet.' : 'Not backed up yet.';
 }
+// "Expected time to recover" (docs/recovery-time-adr.md): measured by a passed restore test, never guessed.
+export const recoveryText = time => {
+  if (!time) return 'Not measured yet. Run a restore test to measure it.';
+  const length = formatRecoveryTime(time.seconds);
+  return `${length === 'under 2 min' ? 'Under 2 min' : 'About ' + length} (proven on ${formatDate(time.provenAt)}).${time.stale ? ' This test is old: run a new one.' : ''}${time.mayBeLow ? ' The app has grown since: it may take longer.' : ''}`;
+};
 const testText = test => (!test ? 'No restore test yet.' : test.result === 'passed' ? `Passed on ${formatDate(test.finishedAt)}.` : test.result === 'failed' ? `Failed on ${formatDate(test.finishedAt)}.` : `Could not run on ${formatDate(test.finishedAt)}.`);
 // Keys safe: how many of the app's keys the newest backup holds (docs/keys-safe.md).
 const keysText = keys => (keys.total ? `App keys: ${keys.inBackup} of ${keys.total} in the newest backup${keys.verified ? `, ${keys.verified} verified in a restore test` : ''}.` : null);
@@ -118,7 +125,7 @@ export function buildGuide(inventory, { appIds, include: chosen = {}, version, m
         name: server.name, apps: apps.filter(app => app.serverId === server.id).map(app => app.name), note: server.note || '',
         ...(include.addresses ? { address: `${server.host}:${server.port}` } : {}),
       })),
-      apps: apps.map(app => ({ name: app.name, server: serverName(app.serverId), lastBackup: app.backup ? formatDate(app.backup.capturedAt) : 'None yet', status: statusText(app), ...(include.tests ? { lastTest: testText(app.lastTest) } : {}) })),
+      apps: apps.map(app => ({ name: app.name, server: serverName(app.serverId), lastBackup: app.backup ? formatDate(app.backup.capturedAt) : 'None yet', status: statusText(app), recovery: recoveryText(app.recoveryTime), ...(include.tests ? { lastTest: testText(app.lastTest) } : {}) })),
       storage: inventory.storage.map(storage => ({
         name: storage.name, kind: storage.mode === 's3' ? 'S3 bucket' : storage.mode === 'rclone' ? 'Cloud drive or network share' : storage.mode === 'folder' ? 'Local folder' : 'SFTP server',
         holds: [...(storage.id === inventory.defaultTarget ? ['the main backups'] : []), ...(apps.some(app => app.copyTargetIds.includes(storage.id)) ? ['off-site copies'] : []), ...(storage.id === kitStorage?.id ? ['the recovery kit and this guide, in the folder docknest-recovery'] : [])],
@@ -148,7 +155,7 @@ export function guideBlocks(guide) {
   if (guide.fleet.whoToAsk) blocks.push({ type: 'heading', level: 2, text: 'Who to ask' }, { type: 'paragraph', text: guide.fleet.whoToAsk });
   const address = guide.include.addresses;
   blocks.push({ type: 'heading', level: 2, text: 'Servers' }, { type: 'table', columns: ['Server', 'What runs there', ...(address ? ['Address'] : []), 'Note'], rows: guide.fleet.servers.map(server => [server.name, server.apps.join(', '), ...(address ? [server.address] : []), server.note]) });
-  blocks.push({ type: 'heading', level: 2, text: 'Apps' }, { type: 'table', columns: ['App', 'Server', 'Last good backup', guide.include.tests ? 'Last restore test' : 'State'], rows: guide.fleet.apps.map(app => [app.name, app.server, app.lastBackup, guide.include.tests ? app.lastTest : app.status]) });
+  blocks.push({ type: 'heading', level: 2, text: 'Apps' }, { type: 'table', columns: ['App', 'Server', 'Last good backup', 'Expected time to recover', guide.include.tests ? 'Last restore test' : 'State'], rows: guide.fleet.apps.map(app => [app.name, app.server, app.lastBackup, app.recovery, guide.include.tests ? app.lastTest : app.status]) });
   blocks.push({ type: 'heading', level: 2, text: 'Where the backups are' }, { type: 'table', columns: ['Storage', 'Kind', ...(address ? ['Address'] : []), 'Holds'], rows: guide.fleet.storage.map(storage => [storage.name, storage.kind, ...(address ? [storage.address] : []), storage.holds.join(', ') || 'Nothing in this guide']) });
   for (const storage of guide.fleet.storage.filter(item => item.login)) {
     blocks.push({ type: 'paragraph', text: `Login details for ${storage.name}:`, tone: 'warning' });

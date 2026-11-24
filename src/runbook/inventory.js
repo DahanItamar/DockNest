@@ -11,6 +11,7 @@ import { activeEmergencyKey, emergencyKits } from '../emergency/kits.js';
 import { appsWithLoginNotes, openLoginNotes } from './login-notes.js';
 import { serverLinksView } from '../server-links.js';
 import { keysView } from '../keys-safe/padlock.js';
+import { recoveryBySite } from '../restore-tests/views.js';
 import { loadChain, ChainError } from '../incremental.js';
 
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
@@ -91,6 +92,8 @@ export function loadInventory({ logins = false, digestOnly = false } = {}) {
   const serverById = new Map(servers.map(server => [server.id, server]));
   const noted = appsWithLoginNotes(), notes = logins ? openLoginNotes() : new Map();
   const defaultTarget = db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get()?.value ?? null;
+  // Measured recovery time of each app (docs/recovery-time-adr.md): from its newest passed restore test, null when none.
+  const times = recoveryBySite();
   const apps = db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at,id').all().map(parse).filter(site => serverById.has(site.server_id)).map(site => {
     const config = site.config ?? {}, policy = db.prepare('SELECT enabled,schedule,timezone FROM policies WHERE site_id=?').get(site.id);
     const test = db.prepare('SELECT result,finished_at FROM restore_tests WHERE site_id=? AND result IS NOT NULL ORDER BY finished_at DESC,id DESC LIMIT 1').get(site.id);
@@ -103,6 +106,7 @@ export function loadInventory({ logins = false, digestOnly = false } = {}) {
       copyTargetIds: db.prepare('SELECT target_id FROM site_storage_copies WHERE site_id=? ORDER BY target_id').all(site.id).map(row => row.target_id),
       schedule: policy ? { enabled: Boolean(policy.enabled), schedule: policy.schedule, timezone: policy.timezone } : null,
       lastTest: test ? { result: test.result, finishedAt: test.finished_at } : null,
+      recoveryTime: times.has(site.id) ? (({ seconds, provenAt, stale, mayBeLow }) => ({ seconds, provenAt, stale, mayBeLow }))(times.get(site.id)) : null,
       ...(digestOnly ? {} : { backup: newestBackup(site.id), ...appKeys(site.id) }),
       hasLoginNote: noted.has(site.id), ...(logins && notes.has(site.id) ? { loginNote: notes.get(site.id) } : {}),
     };
