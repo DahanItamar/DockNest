@@ -8,8 +8,8 @@ An administrator changes an app's Compose file, environment values, published po
 Saving takes a verified backup first, applies the change, checks the app comes up, and puts the previous version back
 by itself when it does not. Every change is audited.
 
-Real Safe Edit counts as validated only when the Linux integration test below passes (see AGENTS.md). Until then it
-ships with the "beta" label, like moves and restore tests did.
+Real Safe Edit counts as validated only when the Linux integration test below passes (see AGENTS.md). Until then it is
+not claimed as validated.
 
 ## Goals
 
