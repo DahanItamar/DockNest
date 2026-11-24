@@ -164,3 +164,13 @@ test('staged package movers: confined to the staging folders, no links, checked 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for staged package verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Podman health checks: DockNest runs `podman healthcheck run` itself through the user path, Docker untouched',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_health.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Podman health verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('Podman image names: only the exact ID-derived name of the archive own image is accepted, near misses and real tags stay refused',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_podman_image_names.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for image name verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

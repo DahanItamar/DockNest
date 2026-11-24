@@ -87,7 +87,7 @@ class Runtime:
         self.engine,self.rootless,self.user,self.uid,self.home=engine,rootless,user,uid,home
     def describe(self):
         return {'engine':self.engine,'rootless':self.rootless,**({'user':self.user,'uid':self.uid} if self.rootless else {})}
-    def argv(self,*args):
+    def argv(self,*args,bus=None):
         """The command line for one engine call. Rootful Docker is exactly ['docker', ...args]."""
         args=[str(a) for a in args]
         if self.engine=='docker' and not self.rootless:return ['docker',*args]
@@ -98,7 +98,25 @@ class Runtime:
         # pulls an image (the images come from the backup).
         environment=['PATH='+RUNTIME_PATH,'XDG_RUNTIME_DIR=/run/user/%d'%self.uid,'HOME='+self.home]
         if self.engine=='docker':environment.append('DOCKER_HOST=unix:///run/user/%d/docker.sock'%self.uid)
+        # Only the user's own bus path (session_bus checked it): a caller cannot name another one.
+        if bus is not None and self.engine=='podman' and bus=='unix:path=/run/user/%d/bus'%self.uid:environment.append('DBUS_SESSION_BUS_ADDRESS='+bus)
         return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
+    def save_arguments(self,references=1):
+        """`save` with the format DockNest reads back. Podman's own default can be an OCI archive, whose image names live in index.json; a
+        backup is always the docker archive (manifest.json), which is also what a Docker host writes and what a restore checks."""
+        # Podman writes several images into a docker archive only with --multi-image-archive; without it the others become tags of the
+        # first. A backup saves the original image and the committed one of every container, so it is nearly always more than one.
+        if self.engine!='podman':return ['save']
+        return ['save','--format','docker-archive',*(['--multi-image-archive'] if references>1 else [])]
+    def session_bus(self,lstat=os.lstat):
+        """The user's session bus address for rootless Podman, or None. Podman runs a container's health check as a systemd timer of
+        the user's session, which it reaches through this bus; without it a container started by DockNest never reports healthy.
+        Added only when the socket really is a socket of this user."""
+        if self.engine!='podman' or not self.rootless:return None
+        path='/run/user/%d/bus'%self.uid
+        try:info=lstat(path)
+        except OSError:return None
+        return 'unix:path='+path if stat.S_ISSOCK(info.st_mode) and info.st_uid==self.uid else None
     def check_socket(self,lstat=os.lstat):
         """A rootless Docker socket is checked again right before each use: it must still be a socket of this user."""
         path='/run/user/%d/docker.sock'%self.uid
@@ -116,7 +134,8 @@ class Runtime:
         import tempfile
         with tempfile.TemporaryFile() as errors:
             # Its own session and process group: the engine child cannot outlive runuser, and a stop ends the whole group.
-            process=subprocess.Popen(self.argv(*args),stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True)
+            command=self.argv(*args,bus=self.session_bus())
+            process=subprocess.Popen(command,stdin=stdin,stdout=stdout if stdout is not None else subprocess.DEVNULL,stderr=errors,start_new_session=True,cwd=self.workdir())
             deadline=time.monotonic()+timeout
             def end(forced):
                 group=getattr(os,'killpg',None)
@@ -133,16 +152,21 @@ class Runtime:
                     try:code=process.wait(timeout=poll);break
                     except subprocess.TimeoutExpired:pass
                     if STOPPING:finish();raise ValueError('DockNest stopped this step.')
-                    if time.monotonic()>=deadline:finish();raise subprocess.TimeoutExpired(self.argv(*args)[:1],timeout)
+                    if time.monotonic()>=deadline:finish();raise subprocess.TimeoutExpired(command[:1],timeout)
             except BaseException:
                 if process.poll() is None:finish()
                 raise
             if code!=0:
                 errors.seek(0,2);size=errors.tell();errors.seek(max(0,size-STREAM_ERROR_TAIL))
-                raise subprocess.CalledProcessError(code,self.argv(*args)[:1],stderr=errors.read(STREAM_ERROR_TAIL))
+                raise subprocess.CalledProcessError(code,command[:1],stderr=errors.read(STREAM_ERROR_TAIL))
+    def workdir(self):
+        """The folder an engine of another user starts in: the helper's own working folder (root's home) is closed to that user, and
+        a rootless engine that cannot enter it fails (podman ps, for one). Rootful Docker keeps the folder it always had."""
+        return '/' if self.rootless else None
     def cli(self,*args,**options):
         if self.engine=='docker' and self.rootless:self.check_socket()
-        return run(self.argv(*args),**options)
+        if self.workdir() is not None:options.setdefault('cwd',self.workdir())
+        return run(self.argv(*args,bus=self.session_bus()),**options)
     def inspect(self,ids):return json.loads(self.cli('inspect',*ids))
     def compose(self,*args):
         """Compose through the same engine: `docker compose` or `podman compose` (which runs the installed provider)."""
@@ -307,13 +331,16 @@ def translate_tree(directory,source,target,chown=None,fwalk=None,stat_at=None,op
     try:top=opener(directory)
     except OSError:raise RuntimeRefused('A restore folder cannot be a link or missing.')
     try:
-        plan=[];first=None;count=0
+        plan=[];first=None;count=0;links={}
         for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
             for name in files+dirs:
                 count+=1
                 if count>limit:raise RuntimeRefused('A backup holds too many files to restore with ID translation.')
                 info=stat_at(name,dir_fd=fd,follow_symlinks=False)
-                try:plan.append((dirpath,name,info.st_uid,info.st_gid)+owner(info))
+                # A file with several names (a hard link) is one inode: re-owning it through one name re-owns all of them.
+                key=(info.st_dev,info.st_ino) if getattr(info,'st_nlink',1)>1 and not stat.S_ISDIR(info.st_mode) else None
+                if key is not None:links[key]=(links.get(key,(0,info.st_nlink))[0]+1,info.st_nlink)
+                try:plan.append((dirpath,name,info.st_uid,info.st_gid)+owner(info)+(key,))
                 except RuntimeRefused:
                     if first is None:first=posixpath.join(dirpath,name)
         rootinfo=stat_at('.',dir_fd=top,follow_symlinks=False)
@@ -323,14 +350,22 @@ def translate_tree(directory,source,target,chown=None,fwalk=None,stat_at=None,op
         if first is not None:
             relative=posixpath.relpath(first,directory)
             raise RuntimeRefused(UNMAPPABLE+' First file: '+(relative if len(relative)<=200 else relative[:200]))
-        wanted={(dirpath,name):(uid,gid,new_uid,new_gid) for dirpath,name,uid,gid,new_uid,new_gid in plan}
-        changed=0
+        # Every name of a multiply linked file must be inside this folder: a name outside it (the file's inode is shared with something
+        # else on the server) would be re-owned too, which a restore never does.
+        if any(nlink>seen for seen,nlink in links.values()):raise RuntimeRefused('A restored file is also linked from outside the restore folder.')
+        wanted={(dirpath,name):(uid,gid,new_uid,new_gid,key) for dirpath,name,uid,gid,new_uid,new_gid,key in plan}
+        changed=0;done={}
         for dirpath,dirs,files,fd in fwalk(directory,topdown=False,follow_symlinks=False):
             for name in files+dirs:
-                uid,gid,new_uid,new_gid=wanted.get((dirpath,name),(None,)*4)
+                uid,gid,new_uid,new_gid,key=wanted.get((dirpath,name),(None,)*5)
                 info=stat_at(name,dir_fd=fd,follow_symlinks=False)
+                if key is not None and key in done:
+                    # Another name of this inode was re-owned a moment ago: it must now carry exactly the new owner.
+                    if (info.st_dev,info.st_ino)!=key or (info.st_uid,info.st_gid)!=done[key]:raise RuntimeRefused('The restored files changed while their owners were being translated.')
+                    continue
                 if uid is None or (info.st_uid,info.st_gid)!=(uid,gid):raise RuntimeRefused('The restored files changed while their owners were being translated.')
                 chown(name,new_uid,new_gid,dir_fd=fd,follow_symlinks=False);changed+=1
+                if key is not None:done[key]=(new_uid,new_gid)
         chown('.',root_owner[0],root_owner[1],dir_fd=top,follow_symlinks=False)
         return changed+1
     finally:
@@ -423,7 +458,7 @@ def engine_save(path,*references):
     runtime=current_runtime()
     if runtime_is_default(runtime):return docker('save','-o',str(path),*references)
     fd=os.open(str(path),os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
-    try:runtime.stream('save',*references,stdout=fd,timeout=STREAM_MAX_SECONDS)  # the size is not known before the engine writes it
+    try:runtime.stream(*runtime.save_arguments(len(references)),*references,stdout=fd,timeout=STREAM_MAX_SECONDS)  # the size is not known before the engine writes it
     except BaseException:
         os.close(fd);fd=None
         try:os.unlink(str(path))

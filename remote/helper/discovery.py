@@ -477,23 +477,30 @@ def engine_runtime(engine,homes):
     except (RuntimeRefused,KeyError,TypeError,AttributeError):return None
 ENGINE_CONTAINER_LIMIT=200
 ENGINE_OUTPUT_LIMIT=8*1024*1024
-def other_engine_containers(engines,homes):
+ENGINE_ERRORS=('timeout','failed','too-large','unreadable')  # fixed reasons: never an engine's own text
+def other_engine_containers(engines,homes,errors=None):
     """(runtime, inspect record) for every container of every non-default engine. A broken, slow or oversized engine
     adds nothing: a rootless user controls its engine's answers, so time, size and count are all capped."""
     tagged=[]
     for engine in engines[:ENGINE_LIST_LIMIT]:
         runtime=engine_runtime(engine,homes)
         if runtime is None or (runtime.engine=='docker' and not runtime.rootless):continue
+        def failed(reason):
+            # A failing engine is reported as an error, never as an empty list of containers.
+            if errors is not None and len(errors)<ENGINE_LIST_LIMIT:errors.append({'runtime':runtime.describe(),'reason':reason})
         try:
             listing=runtime.cli('ps','-aq',timeout=30)
-            if len(listing)>ENGINE_OUTPUT_LIMIT:continue
+            if len(listing)>ENGINE_OUTPUT_LIMIT:failed('too-large');continue
             ids=listing.decode('utf-8','replace').split()[:ENGINE_CONTAINER_LIMIT]
-            if not ids or not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):continue
+            if not ids:continue  # an engine with no containers is fine
+            if not all(re.fullmatch(r'[0-9a-f]{12,64}',i) for i in ids):failed('unreadable');continue
             answer=runtime.cli('inspect',*ids,timeout=60)
-            if len(answer)>ENGINE_OUTPUT_LIMIT:continue
+            if len(answer)>ENGINE_OUTPUT_LIMIT:failed('too-large');continue
             records=json.loads(answer)
-        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):continue
-        if not isinstance(records,list):continue
+        except subprocess.TimeoutExpired:failed('timeout');continue
+        except (subprocess.CalledProcessError,OSError):failed('failed');continue
+        except ValueError:failed('unreadable');continue
+        if not isinstance(records,list):failed('unreadable');continue
         tagged+=[(runtime,c) for c in records[:ENGINE_CONTAINER_LIMIT] if isinstance(c,dict) and isinstance(c.get('Id'),str)]
     return tagged[:ENGINE_CONTAINER_LIMIT]
 def foreign_container(runtime,c):
