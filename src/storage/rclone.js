@@ -158,7 +158,7 @@ async function run(options, args, { input, stdin, limit = MAX_OUTPUT } = {}) {
   child.stdout.on('data', chunk => { size += chunk.length; if (size > limit) { overflow = true; child.kill('SIGKILL'); } else chunks.push(chunk); });
   if (stdin !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(stdin); }
   const result = await finished;
-  if (overflow) throw rcloneError({ reason: 'failed', message: `${backendLabel(options.backend)} returned more data than DockNest accepts.` });
+  if (overflow) throw rcloneError({ reason: 'failed', message: `${backendLabel(options.backend)} returned more data than DockNest accepts.` }, { backend: options.backend });
   if (result.code !== 0) throw failure(options, result);
   return Buffer.concat(chunks).toString('utf8');
 }
@@ -207,11 +207,11 @@ const attributes = item => {
 };
 async function lsjson(options, value, extra = []) {
   const text = await run(options, ['lsjson', ...extra, remoteOf(options, value)]);
-  try { return JSON.parse(text || 'null'); } catch { throw rcloneError({ reason: 'failed', message: `${backendLabel(options.backend)} gave an answer DockNest could not read.` }); }
+  try { return JSON.parse(text || 'null'); } catch { throw rcloneError({ reason: 'failed', message: `${backendLabel(options.backend)} gave an answer DockNest could not read.` }, { backend: options.backend }); }
 }
 export async function statFile(options, value, { hash = false } = {}) {
   const item = await lsjson(options, value, ['--stat', ...(hash ? ['--hash'] : [])]);
-  if (!item || Array.isArray(item)) throw rcloneError({ reason: 'not_found', missing: true, message: `The file or folder is not on ${backendLabel(options.backend)}.` });
+  if (!item || Array.isArray(item)) throw rcloneError({ reason: 'not_found', missing: true, message: `The file or folder is not on ${backendLabel(options.backend)}.` }, { backend: options.backend });
   if (item.IsDir) throw new Error('Backup path is not a file');
   return attributes(item);
 }

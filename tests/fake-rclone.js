@@ -59,7 +59,7 @@ switch (command) {
   case 'obscure': process.stdout.write('OBS' + Buffer.from((await readStdin()).toString()).toString('base64url') + '\n'); break;
   case 'lsjson': {
     const target = remoteFile(positional[1]);
-    if (flags['--stat']) { if (!fs.existsSync(target)) fail('error: object not found', 3); process.stdout.write(JSON.stringify(info(target, path.dirname(target)))); break; }
+    if (flags['--stat']) { if (control().statNull) { process.stdout.write('null'); break; } if (!fs.existsSync(target)) fail('error: object not found', 3); process.stdout.write(JSON.stringify(info(target, path.dirname(target)))); break; }
     if (!fs.existsSync(target)) fail('error listing: directory not found', 3);
     const out = [];
     const walk = dir => { for (const name of fs.readdirSync(dir).sort()) { const file = path.join(dir, name), item = info(file, target); if (item.IsDir) { if (!flags['--files-only']) out.push(item); if (flags['--recursive']) walk(file); } else { out.push(item); for (const dup of control().duplicates ?? []) if (dup === name) out.push(item); } } };
