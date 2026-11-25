@@ -177,7 +177,8 @@ test('sensitive administration requires recent own-factor proof and password rot
   const pendingProof=await request('/auth/invite-start',{token:token(pending),password});
   assert.equal(pendingProof.status,200);
   const pendingLogin=await request('/auth/login',{password});
-  for(const newPassword of ['123','12345678901234567']) {
+  // New system passwords are 12 to 128 characters: too short and too long are refused, the longest allowed is accepted below.
+  for(const newPassword of ['123','12345678901','x'.repeat(129)]) {
     assert.equal((await request('/access/password',{currentPassword:password,newPassword},admin)).status,400);
   }
   const changed=await request('/access/password',{currentPassword:password,newPassword:'rotated-1234'},admin);
