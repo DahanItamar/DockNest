@@ -182,12 +182,27 @@ test('server cleanup knows the Podman and rootless kinds', async () => {
   for (const kind of ['containers', 'images', 'volumes', 'buildCache', 'runtimeData', 'runtimeContainers']) assert.ok(CLEANUP_KINDS.includes(kind), kind);
 });
 
+test('a restore into another user keeps the requested runtime when it is enqueued, and an unknown user is refused', async () => {
+  const { freshPlanOptions } = await import('../src/engine.js');
+  const bob = { engine: 'podman', rootless: true, user: 'bob', uid: 1002 };
+  const plan = { serverId: 's', mode: 'new-copy', mappings: {}, sourceTargetId: null, runtime: bob, executable: true, blockers: [], extra: 'ignored' };
+  assert.deepEqual(freshPlanOptions(plan), { serverId: 's', mode: 'new-copy', mappings: {}, sourceTargetId: null, runtime: bob }, 'the requested user is kept; nothing else of the client plan is');
+  assert.deepEqual(freshPlanOptions({ serverId: 's', mode: 'new-copy' }), { serverId: 's', mode: 'new-copy', mappings: undefined, sourceTargetId: null }, 'no runtime asked, none added');
+  assert.equal('runtime' in freshPlanOptions({ serverId: 's', runtime: undefined }), false);
+  // The fresh plan checks what was kept: only a user the server reported is accepted, whatever the client plan said.
+  const caps = { engines: [{ ...alice, version: '5.2.1', cgroupDelegated: true }, { ...bob, version: '5.2.1', cgroupDelegated: true }] };
+  assert.equal(restoreRuntimeProblem(alice, freshPlanOptions(plan).runtime, caps), '');
+  for (const unknown of [{ ...bob, user: 'mallory', uid: 1500 }, { ...bob, uid: 1003 }, { engine: 'podman', rootless: false }, { engine: 'docker', rootless: true, user: 'bob', uid: 1002 }, 'junk', { ...bob, extra: 1 }])
+    assert.notEqual(restoreRuntimeProblem(alice, freshPlanOptions({ runtime: unknown }).runtime, caps), '', JSON.stringify(unknown));
+  assert.match(restoreRuntimeProblem(alice, freshPlanOptions({ runtime: { ...bob, user: 'mallory', uid: 1500 } }).runtime, caps), /does not have that container engine/);
+});
 test('engines whose container list failed are reported with a fixed reason, only for reported engines', () => {
   const caps = { engines: reported };
   assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'failed' }]);
-  for (const bad of [{ runtime: alice, reason: 'the engine said secret things' }, { runtime: { ...alice, uid: 1003 }, reason: 'failed' }, { runtime: { engine: 'docker', rootless: false }, reason: 'failed' }, { runtime: 'x', reason: 'failed' }, null, 5])
+  for (const bad of [{ runtime: alice, reason: 'the engine said secret things' }, { runtime: { ...alice, uid: 1003 }, reason: 'failed' }, { runtime: { engine: 'docker', rootless: false }, reason: 'the engine said secret things' }, { runtime: { engine: 'docker', rootless: false }, reason: 'timeout' }, { runtime: 'x', reason: 'failed' }, null, 5])
     assert.deepEqual(cleanEngineErrors([bad], caps), [], JSON.stringify(bad));
   assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'timeout' }, { runtime: alice, reason: 'failed' }], caps), [{ runtime: alice, reason: 'timeout' }], 'one entry per engine');
+  assert.deepEqual(cleanEngineErrors([{ runtime: { engine: 'docker', rootless: false }, reason: 'failed' }], caps), [{ runtime: { engine: 'docker', rootless: false }, reason: 'failed' }], 'stopped rootful Docker is reported');
   assert.deepEqual(cleanEngineErrors('x', caps), []); assert.deepEqual(cleanEngineErrors([{ runtime: alice, reason: 'failed' }], {}), []);
 });
 

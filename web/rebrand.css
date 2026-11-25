@@ -28,7 +28,7 @@
 .rebrand-page td>small{font-size:var(--fs-caption);line-height:1.5}
 .rebrand-page .table-wrap{max-width:100%;overflow:auto}
 .rebrand-page .table-wrap table{min-width:720px}
-.rebrand-page .badge{font-size:var(--fs-caption);line-height:1.5;padding:4px 8px;border-radius:6px}
+.rebrand-page .badge{font-size:var(--fs-caption);line-height:1.5}
 .rebrand-page .job-name{display:flex;align-items:center;gap:12px}
 .rebrand-page .job-name>div{min-width:0}
 .rebrand-page .job-name small{display:block;font-size:var(--fs-caption);color:var(--text-secondary);margin-top:4px}

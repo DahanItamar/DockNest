@@ -9,8 +9,12 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 ### Fixed
 
 - Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
+- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard.
 
 ### Added
+
+- New look: slate neutrals and a teal accent. Settings > Appearance has an accent colour choice (Teal by default, Blue, Indigo, Orange or Pink), saved per account in this browser. The logo, buttons, links and charts follow it. Switching accent or light/dark fades smoothly (about 0.2 s, colours only, instant with reduced motion). The dashboard tiles are solid accent cards. Status colours stay green, amber and red, and text on buttons meets contrast in every accent and in light and dark.
+- Unraid and Synology support are hidden until they can be tested on real hardware: such a server connects as a normal Linux server with Docker, with one plain info line. 3.0.0 NAS support is TrueNAS SCALE. Early-access "Unraid support" and "Synology support" switches (off by default, with a Beta tag) are under Settings; problem reports from those servers carry a "unraid" or "synology" tag.
 
 **Recovery**
 - Recovery time: DockNest now measures how long each app takes to come back, from its newest passed restore test (get the backup, restore data, start and check). Existing restore tests already count, so there is a number on day one. It shows under the last test on the dashboard ("Back in about 12 min, proven 3 days ago"), on the app panel in the Map with its three parts, and at the top of Restore tests with the recent tests. An old test is greyed and says "not recent"; after the backups grow a note says the number may be low.
@@ -25,7 +29,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 **Apps and servers**
 - Podman and rootless Docker groundwork: the server helper now has one place that decides how DockNest talks to the container engine, with strict checks on users, ID ranges and systemd units. Nothing changes for existing apps, which keep using rootful Docker; Podman and rootless apps follow in later 3.0.0 changes.
-- NAS servers (backend): connect a Unraid, Synology or TrueNAS system with a non-root SSH user that has passwordless sudo, or with root. Other servers still need root. The helper works in the NAS's persistent working folder and reads free space there, not from memory storage. Connect answers say which identity is used and the one fix when sudo asks for a password. Release note: Connecting a NAS no longer needs root SSH.
+- NAS servers (backend): connect a Unraid or TrueNAS system with a non-root SSH user that has passwordless sudo, or with root. Other servers still need root. The helper works in the NAS's persistent working folder and reads free space there, not from memory storage. Connect answers say which identity is used and the one fix when sudo asks for a password. Release note: Connecting a NAS no longer needs root SSH.
 - Podman and rootless Docker discovery: Test connection now lists the container engines a server runs (Docker, Podman, and rootless Docker or Podman for users with their own container storage), and Discover tags each container with its engine. An app can be saved with its engine only when the server reported it. Backups and restores of such apps are refused with a plain message until they arrive in a later 3.0.0 change; existing apps are unchanged.
 - Podman and rootless Docker backups: an app that runs in Podman or rootless Docker can be backed up and restored into the same kind of engine, as a new isolated copy. The backup records the container engine and the user ID ranges, and a restore for another user translates every file owner, refusing the whole restore if one cannot be mapped. A backup of such an app cannot be opened by older releases. Not yet supported: apps managed by systemd units (quadlets), native database engines, several containers in one restore, incremental backups, restore tests and moves.
 - Restore tests for Podman and rootless Docker apps: the test runs in the same kind of engine, as one isolated container with the usual memory and CPU limits, and only on a server where those limits can be set for that user. The copy and its data folder are always removed, also by the safety reaper and when a restore fails. Not yet: internet tests, apps with several containers, the internal web check, and a custom seccomp profile on rootless.
@@ -67,6 +71,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - Before a move, DockNest checks the new server for owner and permission problems: remapped Docker user IDs, files whose setuid, ACL or extended attributes the new file system would drop, and folders on read-only, noexec, nosuid or root-squashed mounts. A check that cannot run stops the move with a plain message instead of passing quietly. What the checks find about owners and permissions is a warning: you tick "I checked these" before the move can start.
 
 ### Changed
+- Sign-in hardening: a new system password (first setup, or when you change it) must be 12 to 128 characters instead of 4 to 16. Existing passwords keep working; nobody is locked out. After 20 failed sign-ins from anyone within 15 minutes, sign-in pauses for a short, growing time (30 seconds up to 15 minutes) with a plain message, then continues by itself. Release note: New system passwords need 12 to 128 characters, and repeated failed sign-ins now pause sign-in briefly.
 
 - Secondary actions everywhere are quiet text links; each screen and dialog has one clear main button.
 - Map: lines curve smoothly between connection points, like a workflow canvas.
@@ -80,7 +85,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
 
 ### Fixed
-
+- A server where Docker is installed but not running no longer fails a scan: the app list still shows the other engines, the scan names the stopped Docker engine, and the readiness check says "Docker is installed but not running". The TrueNAS-before-24.10 refusal no longer repeats its last sentence. Release note: A stopped Docker is reported plainly instead of failing the scan.
 - The Recovery Guide shows the whole install command instead of cutting it off.
 - The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
 - The move preview dialog no longer has an empty gap above its buttons.

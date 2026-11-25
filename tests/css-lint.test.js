@@ -20,7 +20,7 @@ const css = load('.css', true);
 const jsx = load('.jsx', false);
 
 // Spinner, progress and skeleton motion only. Add here deliberately, never to silence the gate.
-const ALLOWED_KEYFRAMES = new Set(['dn-spin', 'map-spin', 'dn-orbit', 'dn-skeleton', 'dn-progress', 'pw-pop', 'pw-autofill', 'otp-in', 'otp-blink']);
+const ALLOWED_KEYFRAMES = new Set(['dn-spin', 'map-spin', 'dn-orbit', 'dn-skeleton', 'dn-progress', 'pw-pop', 'pw-autofill', 'otp-in', 'otp-blink', 'lg-rot']);
 // Never raise this number. Lower it when you remove an !important.
 const IMPORTANT_BASELINE = 41;
 
@@ -52,8 +52,9 @@ test('keyframes are on the allowlist', () => {
   assert.deepEqual(bad, []);
 });
 
+// The one allowed Beta tag is the Synology and Unraid support switches in Settings (owner decision for 3.0.0).
 test('no Beta label in the UI', () => {
-  assert.deepEqual(hits(/\bBeta\b/g, jsx), []);
+  assert.deepEqual(hits(/\bBeta\b/g, jsx.filter(({ name }) => !/NasSupportSettings[.]jsx$/.test(name))), []);
 });
 
 test('!important count never grows', () => {

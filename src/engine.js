@@ -1,5 +1,8 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
+import { bindNasGate, identityFor } from './nas/command.js';
+import { nasEnabled } from './nas/gate.js';
+bindNasGate(kind => nasEnabled(kind, db));
 import { config } from './config.js';
 import { helperSource } from './helper-bundle.js';
 import { deploymentHeld, requireNoDeploymentHold as requireNoHold } from './deployment-hold.js';
@@ -36,7 +39,7 @@ const now=()=>new Date().toISOString();
 // facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
 // other roles only read.
 // A NAS server also names its persistent working folder, so free space is read there and not from '/' (RAM on Unraid).
-const nasStagingBase=server=>{const base=parseCapabilities(server)?.stagingBase;return typeof base==='string'&&/^\/[A-Za-z0-9_@. \/-]{1,200}$/.test(base)&&!base.includes('..')?base:null;};
+const nasStagingBase=server=>{const base=identityFor(server).nasKind?parseCapabilities(server)?.stagingBase:null;return typeof base==='string'&&/^\/[A-Za-z0-9_@. \/-]{1,200}$/.test(base)&&!base.includes('..')?base:null;};
 // The engines a server reports are checked again here (rootless users control part of that answer): anything off-shape is dropped.
 export const testServer=async server=>{const stagingBase=nasStagingBase(server);const result=takeCertificates({serverId:server.id},await remote(server,{operation:'test',...(stagingBase?{stagingBase}:{})}));return {...result,engines:cleanEngines(result?.engines)};};
 // App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
@@ -283,9 +286,12 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
  return {backupId,serverId,mode,mappings,capabilities,...(targetRuntime?{runtime:targetRuntime}:{}),...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
+// What a client plan may ask for again at enqueue time: nothing else of it is trusted, and a requested runtime (the user of a Podman or
+// rootless restore) is kept so the fresh plan re-checks it against the engines the target server reported (an unknown user is a blocker).
+export const freshPlanOptions=plan=>({serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null,...(plan?.runtime!==undefined?{runtime:plan.runtime}:{})});
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id,actor);}
- const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null});
+ const fresh=await planRestore(backupId,freshPlanOptions(plan));
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  const restoreId=id(),jobId=id();
@@ -464,7 +470,7 @@ async function executeRestoreJob(job){
   }
   // Unraid only, and only after the app restored: put the saved template back so the Unraid Docker page keeps managing the app.
   // Best effort and never overwriting a different file; a failure is a note on the result, never a failed restore.
-  if(parseCapabilities(server)?.nas?.kind==='unraid'){
+  if(identityFor(server).nasKind==='unraid'){
    try{const put=await transport.remote(server,{operation:'nas-template-restore',job:job.id});const templates=Array.isArray(put?.templates)?put.templates.slice(0,20).map(item=>({status:String(item?.status??'').slice(0,20)})):[];result={...result,nasTemplates:templates};audit('worker','restore.nas_template',backup.id,{job:job.id,statuses:templates.map(item=>item.status)});}
    catch{result={...result,nasTemplates:[{status:'failed'}]};}
   }

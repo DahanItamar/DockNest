@@ -1232,7 +1232,8 @@ try{
     assert.deepEqual(s.boxed,[],L+': no boxed secondary buttons in the server panel');
     assert.equal(s.status,0,L+': server status shows once, in the header line');assert.equal(s.cols,'104px',L+': server label column');
     assert.ok(s.sw<=w&&s.pw<=s.cw+1,L+': server panel has no horizontal overflow');
-    assert.equal(await page.getByText(/\bBeta\b/).count(),0,L+': no Beta label');
+    // Only the NAS early-access rows in Settings (data-early-access) may carry a Beta tag.
+    assert.equal(await page.getByText(/\bBeta\b/).evaluateAll(nodes=>nodes.filter(node=>!node.closest('[data-early-access]')).length),0,L+': no Beta label');
     if(process.env.PANEL_SHOTS)await sp.screenshot({path:path.join(process.env.PANEL_SHOTS,'server-missing-'+w+'-'+scheme+'.png')});
     await context.close();
    }

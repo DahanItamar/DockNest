@@ -135,7 +135,9 @@ export function cleanEngineErrors(list, capabilities) {
   const engines = cleanEngines(capabilities?.engines), clean = [];
   for (const item of list.slice(0, MAX_ENGINES)) {
     const parsed = runtimeSchema.safeParse(item?.runtime);
-    if (!parsed.success || isRootfulDocker(parsed.data) || !ENGINE_ERROR_REASONS.has(item?.reason) || !engines.some(engine => sameEngine(engine, parsed.data))) continue;
+    // Rootful Docker that is installed but stopped is not in the probed list (it answered nothing): it is reported as 'failed' only.
+    if (!parsed.success || !ENGINE_ERROR_REASONS.has(item?.reason)) continue;
+    if (isRootfulDocker(parsed.data) ? item.reason !== 'failed' : !engines.some(engine => sameEngine(engine, parsed.data))) continue;
     if (!clean.some(known => sameEngine(known.runtime, parsed.data))) clean.push({ runtime: parsed.data, reason: item.reason });
   }
   return clean;
