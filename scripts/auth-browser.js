@@ -39,14 +39,12 @@ for(const theme of ['light','dark']){
  await signIn(page);
  assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
  const panel=page.locator('.lg-brandpanel');await panel.waitFor();
- assert.match(await panel.innerText(),/Backups you can prove\.\s*Servers you can move\./);
- assert.match(await panel.innerText(),/Self-hosted Docker backup and restore/);
+ assert.match(await panel.innerText(),/Worry less\. Sleep more\.\s*Restore anytime\./);
+ assert.doesNotMatch(await panel.innerText(),/Backups that test themselves/);
  assert.equal(await page.locator('.lg-brandpanel .lg-path').count(),40,'twenty lines in each set');
  assert.deepEqual(await page.locator(".lg-pg").evaluateAll(g=>g.map(x=>getComputedStyle(x).animationName)),["none","none"],"v2: the background lines no longer drift");
  assert.equal(await page.locator('.lg-paths path').evaluateAll(p=>p.every(x=>getComputedStyle(x).animationName==='none')),true,'only transforms move, never the path data');
- assert.match(await colour(page,'.lg-brandpanel .lg-logo','maskImage'),/\/brand\/logo\.png/);
- const heading=await page.locator('.lg-title').evaluate(el=>getComputedStyle(el).color);
- assert.equal(await colour(page,'.lg-brandpanel .lg-logo','backgroundColor'),heading,'monochrome logo uses the heading colour');
+ assert.match(await page.locator('.lg-brandpanel .brand-image').getAttribute('src'),/\/brand\/logo-teal-(light|dark)-600-/,'full-colour accent logo, never a monochrome mask');
  await password(page).fill('secret1');
  assert.equal(await page.locator('button.primary.wide').getAttribute('aria-disabled'),null,'primary is at full emphasis once a password is typed');
  const brand=await page.evaluate(()=>{const e=document.createElement("i");e.style.color="var(--dn-brand-solid)";document.body.append(e);const c=getComputedStyle(e).color;e.remove();return c});
@@ -54,8 +52,10 @@ for(const theme of ['light','dark']){
  assert.equal(await colour(page,"button.primary.wide","backgroundColor"),brand,"v2 primary button uses the brand solid");
  assert.equal(await page.locator(".lg-rise").evaluateAll(e=>e.every(x=>getComputedStyle(x).animationName==="none")),true,"v2: the form does not rise in");
  await noBox(page);await fit(page,'sign-in '+theme);
- assert.equal(await page.locator('.lg-head-logo').isVisible(),false,'top-bar wordmark hidden on desktop');
- {const [w,t]=await Promise.all([page.locator('.lg-bp-top .lg-logo').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);assert.ok(Math.abs((w.y+w.height/2)-(t.y+t.height/2))<=1,'wordmark and theme toggle share one row on desktop');}
+ assert.equal(await page.locator('.lg-head-brand').isVisible(),false,'top-bar wordmark hidden on desktop');
+ {const [logo,slogan]=await Promise.all([page.locator('.lg-bp-top .brand-image').boundingBox(),page.locator('.lg-bp-top .lg-bp-line').boundingBox()]);assert.ok(slogan.y>logo.y+logo.height,'the slogan sits directly under the logo block');}
+ assert.equal(await page.locator('.lg-rotator').getAttribute('aria-hidden'),'true','the rotating line is hidden from screen readers');
+ assert.equal(await page.locator('ul.sr-only li').count(),6,'screen readers get the six highlights once');
  const pw=page.getByLabel('Password',{exact:true});assert.equal(await pw.getAttribute('type'),'password');
  await page.getByRole('button',{name:'Show password'}).click();assert.equal(await pw.getAttribute('type'),'text');
  await page.getByRole('button',{name:'Hide password'}).click();assert.equal(await pw.getAttribute('type'),'password');
@@ -116,8 +116,8 @@ for(const theme of ['light','dark']){
  const {context,page}=await open({theme,width:390,height:844,verify:401});
  await signIn(page);
  assert.equal(await page.locator('.lg-brandpanel').isVisible(),false,'no side panel under 1024');
- assert.equal(await page.locator('.lg-head-logo').isVisible(),true,'wordmark in the top bar');
- const [lg,tg]=await Promise.all([page.locator('.lg-head-logo').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);
+ assert.equal(await page.locator('.lg-head-brand').isVisible(),true,'wordmark in the top bar');
+ const [lg,tg]=await Promise.all([page.locator('.lg-head-brand .brand-image').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);
  assert.ok(Math.abs((lg.y+lg.height/2)-(tg.y+tg.height/2))<=1,'wordmark and theme toggle share one row');
  assert.equal(await page.locator('.lg-mark').count(),0,'no second logo above the title');
  await fit(page,'phone sign-in');
@@ -172,12 +172,12 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  await page.getByRole('alert').getByText('Too many attempts. Try again later.',{exact:true}).waitFor();await context.close();
 }
 
-// 6. The app is unchanged: outside .auth-page the primary button keeps the purple token.
+// 6. The app is unchanged: outside .auth-page the primary button keeps the accent token (teal by default).
 {
  const {context,page}=await open({status:{authenticated:false,message:'Your session ended. Sign in again.'}});
  await page.goto(base);await page.getByText('Your session ended. Sign in again.').first().waitFor();
  assert.equal(await page.locator('.auth-page').count(),0);
- assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(94, 53, 177)','app primary button is still purple');
+ assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(13, 120, 108)','app primary button uses the default teal accent');
  await context.close();
 }
 // 7. Two-step flow: use cases.

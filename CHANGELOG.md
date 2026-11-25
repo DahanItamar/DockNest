@@ -13,6 +13,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 
 ### Added
 
+- New look: slate neutrals and a teal accent. Settings > Appearance has an accent colour choice (Teal by default, Blue, Indigo, Orange or Pink), saved per account in this browser. The logo, buttons, links and charts follow it. Switching accent or light/dark fades smoothly (about 0.2 s, colours only, instant with reduced motion). The dashboard tiles are solid accent cards. Status colours stay green, amber and red, and text on buttons meets contrast in every accent and in light and dark.
 - Unraid and Synology support are hidden until they can be tested on real hardware: such a server connects as a normal Linux server with Docker, with one plain info line. 3.0.0 NAS support is TrueNAS SCALE. Early-access "Unraid support" and "Synology support" switches (off by default, with a Beta tag) are under Settings; problem reports from those servers carry a "unraid" or "synology" tag.
 
 **Recovery**

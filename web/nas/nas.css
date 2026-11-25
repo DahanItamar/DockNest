@@ -1,5 +1,5 @@
 /* NAS label, readiness list and app-manager caption. Tokens only; status is always text plus an icon. */
-.nas-label{display:inline-flex;align-items:center;align-self:flex-start;min-height:var(--dn-space-6);padding:0 var(--dn-space-3);border-radius:var(--dn-radius-full);border:1px solid var(--border-subtle);background:var(--accent-soft);color:var(--accent);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:var(--dn-weight-medium);white-space:nowrap}
+.nas-label{display:inline-flex;align-items:center;align-self:flex-start;color:var(--accent);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:var(--dn-weight-medium);white-space:nowrap}
 .nas-readiness{gap:var(--dn-space-1)}
 .nas-checks{list-style:none;margin:0;padding:0}
 .nas-check{display:flex;gap:var(--dn-space-3);align-items:flex-start;padding:var(--dn-space-3) 0;border-top:1px solid var(--border-subtle)}

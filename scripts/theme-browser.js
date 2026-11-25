@@ -18,12 +18,12 @@ try{
  await contrast();const toggle=page.getByRole('button',{name:'Switch to dark theme'});await toggle.hover();await page.waitForTimeout(280);assert.equal(await toggle.locator('.theme-symbol').evaluate(el=>getComputedStyle(el).transform),'none');
  await page.evaluate(()=>{const start=document.startViewTransition.bind(document);document.startViewTransition=update=>{const transition=start(update);window.themeFade=transition;return transition}});
  await toggle.click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
- assert.equal(await page.evaluate(async()=>{await window.themeFade.ready;return getComputedStyle(document.documentElement,'::view-transition-new(root)').animationDuration}),'0.15s');await contrast();
- assert.match(await page.locator('.brand-image').getAttribute('src'),/logo-blue/);await page.waitForFunction(()=>document.querySelector('.brand-image').complete&&document.querySelector('.brand-image').naturalWidth>0);
+ assert.equal(await page.evaluate(async()=>{await window.themeFade.ready;return getComputedStyle(document.documentElement,'::view-transition-new(root)').animationDuration}),'0.2s');await contrast();
+ assert.match(await page.locator('.brand-image').getAttribute('src'),/logo-teal-dark/);await page.waitForFunction(()=>document.querySelector('.brand-image').complete&&document.querySelector('.brand-image').naturalWidth>0);
  await page.getByRole('button',{name:'Switch to light theme'}).hover();await page.waitForTimeout(280);assert.equal(await page.locator('.theme-symbol').first().evaluate(el=>getComputedStyle(el).transform),'none');
  // Hold the React bundle to verify the saved dark preference is applied before it runs.
  let release;const gate=new Promise(r=>release=r);await page.route('**/assets/index-*.js',async r=>{await gate;await r.continue()});
- await page.reload({waitUntil:'commit'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),'rgb(26, 25, 28)');release();await page.locator('.dash-metrics').waitFor();await page.unroute('**/assets/index-*.js');
+ await page.reload({waitUntil:'commit'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),'rgb(24, 25, 27)');release();await page.locator('.dash-metrics').waitFor();await page.unroute('**/assets/index-*.js');
  const other=await context.newPage();await other.goto(base);await other.locator('.dash-metrics').waitFor();await other.getByRole('button',{name:'Switch to light theme'}).click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');await other.close();
  await page.getByRole('button',{name:'Switch to dark theme'}).focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
  // Bare header controls, a real fade, System tracking, and saved account choices.
