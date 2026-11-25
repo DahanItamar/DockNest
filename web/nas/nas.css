@@ -1,0 +1,22 @@
+/* NAS label, readiness list and app-manager caption. Tokens only; status is always text plus an icon. */
+.nas-label{display:inline-flex;align-items:center;align-self:flex-start;color:var(--accent);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:var(--dn-weight-medium);white-space:nowrap}
+.nas-readiness{gap:var(--dn-space-1)}
+.nas-checks{list-style:none;margin:0;padding:0}
+.nas-check{display:flex;gap:var(--dn-space-3);align-items:flex-start;padding:var(--dn-space-3) 0;border-top:1px solid var(--border-subtle)}
+.nas-check:first-child{border-top:0}
+.nas-check svg{flex:none;margin-top:var(--dn-space-0-5)}
+.nas-check b{font-weight:var(--dn-weight-semibold);overflow-wrap:anywhere}
+.nas-check p{margin:var(--dn-space-0-5) 0 0;overflow-wrap:anywhere}
+.nas-ok svg,.nas-ok b{color:var(--success)}
+.nas-warn svg,.nas-warn b{color:var(--warning)}
+.nas-fail svg,.nas-fail b{color:var(--error)}
+.nas-copy,.nas-again{display:inline-flex;align-items:center;gap:var(--dn-space-2);margin-top:var(--dn-space-2)}
+.nas-manager{display:flex;align-items:center;gap:var(--dn-space-2);margin-top:var(--dn-space-1);font-size:var(--fs-caption);color:var(--text-secondary)}
+.nas-manager svg{flex:none}
+.nas-webui{margin:var(--dn-space-0-5) 0 0;overflow-wrap:anywhere}
+.nas-group-heading{margin:var(--dn-space-4) 0 var(--dn-space-2);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:var(--dn-weight-medium);color:var(--text-muted)}
+.nas-guide{margin:var(--dn-space-3) 0;padding:var(--dn-space-3) var(--dn-space-4);border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--accent-soft)}
+.nas-guide h4{margin:0 0 var(--dn-space-2)}
+.nas-guide ol{margin:var(--dn-space-2) 0 0;padding-left:var(--dn-space-5)}
+.server-card-head .nas-label{margin-left:var(--dn-space-2)}
+.nas-beta{margin-left:var(--dn-space-2)}

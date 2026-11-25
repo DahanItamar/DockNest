@@ -292,6 +292,13 @@ test('catalogue message prefills What happened from the constants, for every bui
     assert.equal(fieldOf(build({ version: '2.4.1', installMode: 'image', message: known, ...extra }).href, 'what_happened'), extra.explanation + ' ' + known);
   assert.equal(fieldOf(buildJobReport({ version: '2.4.1', installMode: 'image', jobType: 'backup', message: known, explanation: 'made up sentence' }).href, 'what_happened'), known, 'an unknown explanation is dropped, the catalogue text stays');
 });
+test('job errors stored before the sites -> apps rename still map through the catalogue', async () => {
+  const legacy = 'This site was removed from active sites.';
+  assert.ok(!(await sourceText()).includes(legacy), 'legacy wording is no longer emitted');
+  assert.equal(catalogued(legacy), legacy); assert.equal(whatHappened(legacy, EXPLAIN.generic), EXPLAIN.generic + ' ' + legacy);
+  assert.equal(whatHappenedOk(EXPLAIN.generic + ' ' + legacy), true); assert.equal(whatHappenedOk(legacy), true);
+  assert.equal(catalogued('This app was removed from active apps.'), 'This app was removed from active apps.');
+});
 test('a message that is not in the catalogue never reaches the URL unless the excerpt is ticked', () => {
   const free = 'Could not connect to canary-host.example.com at 203.0.113.77 as user canaryuser: /home/canaryuser/site is missing';
   assert.equal(catalogued(free), null); assert.equal(whatHappened(free, EXPLAIN.generic), null);

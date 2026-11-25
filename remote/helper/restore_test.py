@@ -4,21 +4,27 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, atomic_json, docker, emit, hardening_args, inspect, mount_field, run, verify_hardening)
+    NOFOLLOW, atomic_json, docker, emit, hardening, hardening_args, inspect, mount_field, run, verify_hardening)
 from .databases import (
     cached_sqlite_file_proof, data_checks, restart_services)
+from .keys import (
+    env_map, key_context, read_small, restored_keys)
 from .backup import (
-    tree_digest)
+    archive_scan, tree_digest)
 from .discovery import (
-    temporary_mounts, tmpfs_argument)
+    cgroup_delegated, temporary_mounts, tmpfs_argument)
 from .restore import (
     MountLayoutError, chain_length, chain_paths, external_restore_plan, extract_mount, image_archives,
-    mount_bytes, network_peers, restore_network_plan, safe_extract, unpack_verified)
+    mount_bytes, network_peers, refuse_restored_links, restore_network_plan, safe_extract, unpack_verified)
 from .move import (
     save_state)
+from .dumps import (
+    dump_bytes, dumped_services, load_dumps)
 from .install import (
     systemd_present)
-# Mutable state lives in common and is never copied by import: STOPPING
+from .runtime import (
+    RuntimeRefused, chmod_folder, current_runtime, engine_load, engine_architecture, remove_rootless_data_root, resolve_runtime, restore_target, rootless_data_root, rootless_hardening_problem, runtime_is_default, translate_tree)
+# Mutable state lives in common and is never copied by import: STOPPING, RUNTIME
 # </build:header>
 # ---- Automatic restore tests (docs/restore-tests.md) ----
 # A test restores a verified backup onto a test server with resource limits, checks it, and removes everything it
@@ -53,7 +59,11 @@ def test_limits(req):
     return memory,float(cpus),limits.get('internet') is True
 def limit_args(memory,cpus):
     # Swap equal to memory means no swap on top. Restart 'no' makes a crash loop visible to the stability check.
-    return ['--memory','%dm'%memory,'--memory-swap','%dm'%memory,'--cpus','%g'%cpus,'--pids-limit','1024','--restart','no','--log-driver','local','--log-opt','max-size=10m','--log-opt','max-file=3']
+    limits=['--memory','%dm'%memory,'--memory-swap','%dm'%memory,'--cpus','%g'%cpus,'--pids-limit','1024','--restart','no']
+    # Podman has no `local` log driver (its create fails with exit 125). Its k8s-file driver takes the same size cap (max-size; it has no
+    # file count), so a test copy's logs stay bounded. Docker: exactly as before.
+    if current_runtime().engine=='podman':return [*limits,'--log-driver','k8s-file','--log-opt','max-size=10m']
+    return [*limits,'--log-driver','local','--log-opt','max-size=10m','--log-opt','max-file=3']
 def test_dir(tid):return RESTORE_TESTS_ROOT/tid
 def test_staging(tid):return RESTORE_ROOT/tid
 def test_state(tid,create=False):
@@ -122,8 +132,14 @@ def restore_test_check(req):
     size=int(need.get('bytes') or 0);required=size*3+1024**3
     if facts['freeBytes']<required:problems.append('The test server needs %.1f GB free for this backup and has %.1f GB.'%(required/1e9,facts['freeBytes']/1e9))
     if need.get('kind')!='static':
+        foreign=not runtime_is_default(current_runtime())
         facts['docker']=docker('version','--format','{{.Server.Version}}').decode().strip()[:40]
-        facts['architecture']=docker('info','--format','{{.Architecture}}').decode().strip()[:40]
+        facts['architecture']=engine_architecture()[:40]
+        if foreign:
+            facts['engine']=current_runtime().describe()
+            if internet:problems.append('Tests with internet access are available for rootful Docker only in this release.')
+            if need.get('grouped'):problems.append('Apps with several containers cannot be tested in Podman or rootless engines yet.')
+            if current_runtime().rootless and not cgroup_delegated(current_runtime().uid):problems.append('This server cannot limit memory for user apps, so DockNest will not test there.')
         if need.get('architecture') and need['architecture']!=facts['architecture']:problems.append('The test server has a different CPU architecture (%s) than the backup (%s).'%(facts['architecture'],str(need['architecture'])[:40]))
         if need.get('grouped') and docker_major()<28:problems.append('Sites with more than one container need Docker 28 or newer on the test server.')
         containers=max(1,int(need.get('containers') or 1));factor=2 if need.get('liveServer') else 1
@@ -177,7 +193,10 @@ def restore_test_prepare(req):
     test_journal(d,state,'paths',str(root))
     if root.exists() or root.is_symlink():raise ValueError('Restore test staging already exists')
     RESTORE_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);root.mkdir(mode=0o700)
-    state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time();save_state(d,state)
+    state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time()
+    # The engine of a Podman or rootless backup, written by this helper and read back by every later step and the reaper.
+    if not runtime_is_default(current_runtime()):state['runtime']=current_runtime().describe()
+    save_state(d,state)
     pid=start_reaper(d,tid,req['reaper']) if req.get('reaper') else None
     if isinstance(pid,int) and not isinstance(pid,bool):state['reaperPid']=pid;state['reaperStart']=process_start(pid);save_state(d,state)
     emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None,**chain_paths(req,root)})
@@ -221,6 +240,33 @@ def image_archive_names(archive):
                     annotations=item.get('annotations') if isinstance(item,dict) else None
                     if isinstance(annotations,dict):names+=[str(annotations[key]) for key in ['io.containerd.image.name','org.opencontainers.image.ref.name'] if annotations.get(key)]
     return list(dict.fromkeys(names))
+# Podman's `save` of an image that has no name writes one made from its ID: localhost/<id>:latest. Only that exact form, and only when
+# the ID in it is the ID of the image the archive's own manifest holds, is not a name: it can never collide with a real image.
+IMAGE_CONFIG_LIMIT=1024*1024  # an image config is a few kilobytes; more is not an image DockNest made
+ID_DERIVED_NAME=re.compile(r'(?:localhost/)?([0-9a-f]{64})(?::latest)?')
+def image_archive_id_names(archive):
+    """The names in manifest.json that are only the ID of their own image (see ID_DERIVED_NAME). Anything else is not listed."""
+    allowed=set()
+    with tarfile.open(archive,'r:') as tar:
+        try:member=tar.getmember('manifest.json')
+        except KeyError:return allowed
+        if not member.isfile() or member.size>4*1024*1024:return allowed
+        data=json.loads(tar.extractfile(member).read())
+        for item in data if isinstance(data,list) else []:
+            if not isinstance(item,dict) or not isinstance(item.get('Config'),str):continue
+            config=re.fullmatch(r'(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?',item['Config'])
+            if not config:continue
+            # The ID of an image is the SHA-256 of its config file: the file itself must hash to the ID the name carries, not just be called that.
+            try:held=tar.getmember(item['Config'])
+            except KeyError:continue
+            if not held.isfile() or held.size>IMAGE_CONFIG_LIMIT:continue
+            digest=hashlib.sha256();source=tar.extractfile(held)
+            for chunk in iter(lambda:source.read(64*1024),b''):digest.update(chunk)
+            if digest.hexdigest()!=config.group(1):continue
+            for tag in item.get('RepoTags') or []:
+                named=ID_DERIVED_NAME.fullmatch(tag) if isinstance(tag,str) else None
+                if named and named.group(1)==config.group(1):allowed.add(tag)
+    return allowed
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return None
@@ -232,9 +278,11 @@ def load_images_keeping_tags(archive):
     one DockNest made and is refused before loading; the tag restore after the load stays as a second guard."""
     try:names=image_archive_names(archive)
     except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
+    try:names=[name for name in names if name not in image_archive_id_names(archive)]
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
     if names:raise ValueError('The image archive names images (%s); DockNest backups save images by ID only, so it is not loaded.'%', '.join(names[:3]))
     state={'created':{'tags':[]}}
-    try:docker('load','-i',str(archive))
+    try:engine_load(archive)
     finally:restore_test_tags(state)
 def restore_test_tags(state):
     """Point every tag the load moved back at the image it named before, so a later `docker compose up` on this server
@@ -326,6 +374,7 @@ def test_unblock_mail(tid):
         except Exception:pass
     return removed
 def restore_test_restore(req):
+    global RUNTIME
     """Restore copy: verify the package, unpack, load images (tags restored at once), create networks and containers
     with the test's limits, and block mail when internet is allowed. Nothing starts here."""
     tid=test_id(req);memory,cpus,internet=test_limits(req)
@@ -351,19 +400,35 @@ def restore_test_restore(req):
         checks.append(test_check('Static files','static-files',None,'passed','%s files match'%(manifest.get('staticFiles') or {}).get('files','All')))
         state['restored']={'kind':'static'};save_state(d,state)
         emit(result={'outcome':'ok','kind':'static','checks':checks});return
-    if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise TestOutcome('couldnt_run','The test server has a different CPU architecture than the backup.',checks)
+    data_root=root;translation=None
+    if manifest.get('runtime') is not None:
+        # Podman and rootless backups test in their own engine kind, as one container, isolated, on a server that can limit it.
+        try:target,translation=restore_target(manifest,req.get('runtime'))
+        except RuntimeRefused as error:raise TestOutcome('couldnt_run',str(error),checks)
+        if state.get('runtime')!=target.describe():raise TestOutcome('couldnt_run','The test was prepared for a different container engine.',checks)
+        RUNTIME=target
+        if len(manifest.get('containers') or [])!=1:raise TestOutcome('couldnt_run','Apps with several containers cannot be tested in Podman or rootless engines yet.',checks)
+        if internet:raise TestOutcome('couldnt_run','Tests with internet access are available for rootful Docker only in this release.',checks)
+        if target.rootless:
+            if not cgroup_delegated(target.uid):raise TestOutcome('couldnt_run','This server cannot limit memory for user apps, so DockNest will not test there.',checks)
+            try:data_root=pathlib.Path(rootless_data_root(target,tid))
+            except RuntimeRefused as error:raise TestOutcome('couldnt_run',str(error),checks)
+            state['runtimeData']=str(data_root);save_state(d,state)
+    elif state.get('runtime') is not None:raise TestOutcome('couldnt_run','The test was prepared for a different container engine.',checks)
+    if manifest['architecture']!=engine_architecture():raise TestOutcome('couldnt_run','The test server has a different CPU architecture than the backup.',checks)
     containers=manifest['containers']
     if internet and internet_problem(containers):raise TestOutcome('couldnt_run',internet_problem(containers),checks)
     if internet and not (shutil.which('nsenter') and shutil.which('iptables') and shutil.which('ip6tables')):raise TestOutcome('couldnt_run','The test server needs nsenter, iptables and ip6tables to block outgoing mail inside the copy, so the test does not run with internet.',checks)
     try:plans=restore_network_plan(containers,isolated=True)
     except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
+    if manifest.get('runtime') is not None:plans=[{} for _ in containers]  # isolated by `--network none`; no engine networks are created
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise TestOutcome('failed','The backup is missing snapshot images.',checks)
     multi=len(containers)>1
     if multi and docker_major()<28:raise TestOutcome('couldnt_run','Sites with more than one container need Docker 28 or newer on the test server.',checks)
-    if shutil.disk_usage(root).free<mount_bytes(unpacked)+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
+    if shutil.disk_usage(root).free<mount_bytes(unpacked)+dump_bytes(manifest)+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
     prefix='dbm-test-'+tid[:12]
     labels=['--label',TEST_LABEL+'='+tid,'--label','com.docker.compose.project=docknest-test-'+tid[:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
-    definitions=[];sources={}
+    definitions=[];sources={};owned=set()
     for i,c in enumerate(containers):
         name=prefix+('-'+str(i) if multi else '')
         args=['create','--name',name,'--network','none',*labels,*limit_args(memory,cpus)]
@@ -371,14 +436,21 @@ def restore_test_restore(req):
         if multi and plans[i] and not internet:args+=['--dns','127.0.0.1']
         try:
             for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+            problem=rootless_hardening_problem(current_runtime(),hardening(c))
+            if problem:raise ValueError(problem)
             args+=hardening_args(c,root)  # the original's read-only root, capabilities and security options
         except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
         for j,m in enumerate(c['Mounts']):
-            try:source=extract_mount(unpacked,i,j,m,sources,root)
+            try:source=extract_mount(unpacked,i,j,m,sources,data_root)
             except MountLayoutError as error:
                 if error.kind=='overlap':raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
                 raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
             except ValueError as error:raise backup_side(error)
+            if data_root!=root and source not in owned:
+                chmod_folder(source.parent,0o711)
+                try:translate_tree(str(source),*(translation or (manifest['idMap'],manifest['idMap'])))
+                except RuntimeRefused as error:raise TestOutcome('failed',str(error),checks)
+                owned.add(source)
             try:mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
             except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
             args+=['--mount',mount]
@@ -388,6 +460,9 @@ def restore_test_restore(req):
         if not service.get('sqliteFiles'):continue
         original=next(c for c in containers if c['Id']==service['container'])
         restored={**original,'Mounts':[{**mount,'Source':str(sources[(mount['Type'],mount['Source'])])} for mount in original['Mounts']]}
+        if manifest.get('runtime') is not None:
+            try:refuse_restored_links(service,restored)
+            except RuntimeRefused as error:raise TestOutcome('failed',str(error),checks)
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         target=original['Name'].lstrip('/')
         if actual!=service.get('expectedSqliteChecks'):
@@ -404,8 +479,16 @@ def restore_test_restore(req):
     for image in wanted:
         if image not in before:test_journal(d,state,'images',image)
     try:
-        for archive in image_archives(unpacked):docker('load','-i',str(archive))
+        for archive in image_archives(unpacked):engine_load(archive)
     finally:restore_test_tags(state)
+    # Online logical dumps: loaded into the restored data folders (network none) before the copy's containers exist.
+    if dumped_services(manifest):
+        try:load_dumps(manifest,unpacked,root,definitions,sources,journal=lambda name:test_journal(d,state,'containers',name))
+        except Exception as error:
+            # A ValueError names the step; anything else gets a fixed reason (never raw tool or Docker output).
+            checks.append(test_check('Database dump','dump',None,'failed',str(error)[:200] if isinstance(error,ValueError) else 'The database dump could not be loaded into the copy.'))
+            raise TestOutcome('failed','The database dump in the backup could not be loaded.',checks)
+        checks.append(test_check('Database dump','dump',None,'passed','%d loaded'%len(dumped_services(manifest))))
     networks={};created=[]
     # Every copy starts on fresh internal isolated networks only. With internet, a single container gets one such
     # network too (a `none` container cannot join the egress network later).
@@ -449,10 +532,36 @@ def restore_test_restore(req):
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
     if any(containers[i]['State'].get('Running') and not containers[j]['State'].get('Running') for i,j in peers.items()):raise TestOutcome('couldnt_run','A container shares the network of one that was stopped in the backup.',checks)
+    keys=restored_test_keys(req,manifest,unpacked,sources,created)
     state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet,'egress':egress}
     save_state(d,state)
-    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks})
+    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks,**({'keys':keys} if keys is not None else {})})
+def restored_test_keys(req,manifest,unpacked,sources,created):
+    """Fingerprints of the app keys DockNest expects (docs/keys-safe.md) in the restored copy: each container's env as
+    created from its snapshot image, configuration files from their restored archives, key files from the restored
+    mounts. None when the request has no keys or they cannot be read; DockNest compares the fingerprints."""
+    context=key_context(req);expected=(req.get('keys') or {}).get('expect')
+    if context is None or not isinstance(expected,list):return None
+    containers=manifest['containers'];names=[(c.get('Name') or '').lstrip('/') for c in containers];files=manifest.get('configurationFiles',[]);envs={}
+    def env_of(service):
+        if service not in names:return None
+        i=names.index(service)
+        if i not in envs:envs[i]=env_map(inspect([created[i]])[0])
+        return envs[i]
+    def file_of(path):
+        if path in files:
+            name=posixpath.basename(path)
+            with open(unpacked/('config-%d.tar'%files.index(path)),'rb') as handle:return archive_scan(handle,[name],stream=False)[1].get(name)
+        for c in containers:
+            for m in c['Mounts']:
+                source=m['Source'];restored=sources.get((m['Type'],source))
+                if restored is not None and (path==source or path.startswith(source.rstrip('/')+'/')):
+                    return read_small(str(restored) if path==source else os.path.join(str(restored),posixpath.relpath(path,source)),str(restored))
+        return None
+    try:return restored_keys(context,expected,env_of,file_of)
+    except Exception:return None  # no comparison means no "verified"; the test itself goes on
 def cgroup_counter(cid,filename,key):
+    if not runtime_is_default(current_runtime()):return 0  # cgroup paths are Docker's; State.OOMKilled still says it for these engines
     for base in ['/sys/fs/cgroup/system.slice/docker-%s.scope'%cid,'/sys/fs/cgroup/docker/%s'%cid]:
         try:
             for line in pathlib.Path(base,filename).read_text().splitlines():
@@ -470,8 +579,12 @@ def limit_outcome(kind,checks=None):
     return TestOutcome('couldnt_run','Test couldn\'t finish: %s limit. Raise it in Advanced.'%kind,checks,stop=True)
 def test_manifest(tid):
     return json.loads((test_staging(tid)/'unpacked'/'manifest.json').read_text())
+def adopt_test_runtime(state):
+    """Later steps, teardown and the reaper use the engine this helper recorded at prepare, never one a request names."""
+    global RUNTIME
+    RUNTIME=resolve_runtime(state['runtime']) if state.get('runtime') is not None else None
 def restored_state(tid):
-    d,state=test_state(tid);restored=state.get('restored') or {}
+    d,state=test_state(tid);adopt_test_runtime(state);restored=state.get('restored') or {}
     if restored.get('kind')!='docker':raise ValueError('This restore test has no containers to check on this server')
     return d,state,restored
 def stop_test_containers(tid):
@@ -520,6 +633,7 @@ print(json.dumps({'status':status,'ms':round((time.monotonic()-started)*1000)}))
 def restore_test_probe(cid,probe,target):
     """GET on loopback inside the container's network namespace, as the nobody user with no new privileges, using the
     host's isolated Python: no tool in the image and no port opened. Only the status code and time are kept."""
+    if not runtime_is_default(current_runtime()):return test_check('Internal web check','http',target,'skipped','The internal web check is available for rootful Docker only in this release.')
     port=probe.get('port');path=probe.get('path') or '/'
     if not isinstance(port,int) or isinstance(port,bool) or not 1<=port<=65535 or not isinstance(path,str) or not TEST_PATH.fullmatch(path):return test_check('Internal web check','http',target,'skipped','The web check settings are not valid.')
     nsenter,setpriv=shutil.which('nsenter'),shutil.which('setpriv')
@@ -623,6 +737,7 @@ def restore_test_teardown(req):
     tid=test_id(req);d=test_dir(tid)
     if d.is_symlink():raise ValueError('The restore test folder cannot be a symbolic link')
     state=test_state(tid)[1] if d.is_dir() else {'created':{kind:[] for kind in TEST_KINDS}}
+    adopt_test_runtime(state)
     ids=docker('ps','-aq','--no-trunc','--filter','label='+TEST_LABEL+'='+tid).decode().split()
     if ids:docker('rm','-f',*ids)
     counts={'containers':len(ids),'firewall':test_unblock_mail(tid),'networks':0,'images':0,'tags':0,'paths':0}
@@ -642,6 +757,8 @@ def restore_test_teardown(req):
         if image_id_of(image) is None:continue
         try:docker('image','rm',image);counts['images']+=1
         except Exception:kept+=1  # a non-test container uses it now; kept and reported
+    if state.get('runtimeData') is not None:
+        if current_runtime().rootless and remove_rootless_data_root(current_runtime(),tid):counts['paths']+=1
     for value in dict.fromkeys(state['created']['paths']+[str(test_staging(tid))]):
         if pathlib.Path(value).exists() or pathlib.Path(value).is_symlink():remove_test_path(value,tid);counts['paths']+=1
     left=test_leftovers(tid);left['staging']=int(test_staging(tid).exists())
@@ -652,7 +769,9 @@ def restore_test_teardown(req):
         shutil.rmtree(d)
     emit(result={'removed':True,'counts':counts,'keptImages':kept})
 def restore_test_status(req):
-    tid=test_id(req);left=test_leftovers(tid)
+    tid=test_id(req)
+    if test_dir(tid).is_dir():adopt_test_runtime(test_state(tid)[1])
+    left=test_leftovers(tid)
     result={**left,'staging':test_staging(tid).exists(),'journal':test_dir(tid).exists()}
     result['present']=bool(any(left.values()) or result['staging'] or result['journal'])
     emit(result=result)

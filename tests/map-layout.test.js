@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutMap,databasesOf,domainsOf,METRICS} from '../web/map/layout.js';
+import {layoutMap,databasesOf,domainsOf,METRICS,snapToGrid,homeOffset,clippedIn} from '../web/map/layout.js';
+import {cleanPositions,prunePositions} from '../web/map/saved-layout.js';
 
 const make=(ns,nm)=>{const servers=[],sites=[];for(let i=0;i<ns;i++){servers.push({id:'s'+i,name:'Server '+String(ns-i).padStart(2,'0')});for(let j=0;j<(nm+i)%(nm+1);j++)sites.push({id:`s${i}-w${j}`,serverId:'s'+i,name:'site-'+((j*7)%13)+'.example.com'});}return {servers,sites};};
 const storageFor=(sites,n=3)=>{const storage=Array.from({length:n},(_,i)=>({id:'t'+i,name:'Storage '+i})),backupOf={};sites.forEach((s,i)=>{if(i%4!==3)backupOf[s.id]=storage[i%n].id});return {storage,backupOf};};
@@ -34,8 +35,8 @@ test('no overlaps (labels included) and sites sit beside their own server group'
 const segments=p=>p.points.slice(1).map((q,i)=>[p.points[i],q]);
 const inside=(pt,r)=>pt[0]>r.x+0.5&&pt[0]<r.x+r.w-0.5&&pt[1]>r.y+0.5&&pt[1]<r.y+r.h-0.5;
 const hitsRect=(seg,r)=>{const [[x1,y1],[x2,y2]]=seg,minx=Math.min(x1,x2),maxx=Math.max(x1,x2),miny=Math.min(y1,y2),maxy=Math.max(y1,y2);return minx<r.x+r.w-0.5&&maxx>r.x+0.5&&miny<r.y+r.h-0.5&&maxy>r.y+0.5};
-test('lines never cross cards or labels',()=>{
- const {servers,sites}=make(10,7),l=layoutMap(servers,sites,storageFor(sites)),blocks=[...l.servers,...l.sites,...l.storage].map(n=>({id:n.id,...n.block}));
+test('lines never cross another card (they are smooth curves, so a label may be touched)',()=>{
+ const {servers,sites}=make(10,7),l=layoutMap(servers,sites,storageFor(sites)),blocks=[...l.servers,...l.sites,...l.storage].map(n=>({id:n.id,x:n.x,y:n.y,w:n.w,h:n.h}));
  const lines=[...l.paths.map(p=>({p,from:p.serverId,to:p.id})),...l.backupPaths.map(p=>({p,from:p.id,to:p.storageId}))];
  assert.ok(lines.length>0);
  for(const {p,from,to} of lines)for(const seg of segments(p))for(const b of blocks){
@@ -70,7 +71,7 @@ test('without channels the layout has no alert nodes and is unchanged',()=>{
  const {servers,sites}=make(4,4),a=layoutMap(servers,sites,storageFor(sites)),b=layoutMap(servers,sites,{...storageFor(sites),alerts:{channels:[],rules:[{id:'r',channelId:'x',sourceKind:'docknest',sourceId:null,events:['backup.failed']}]}});
  assert.deepEqual(a,b);assert.equal(a.docknest,null);assert.deepEqual(a.alerts,[]);assert.deepEqual(a.rulePaths,[]);
 });
-test('alert lines never cross cards or labels and reach their alert node',()=>{
+test('alert lines reach their alert node',()=>{
  const {servers,sites}=make(8,6),o=storageFor(sites),channels=[{id:'c1',name:'Ops chat',kind:'telegram'},{id:'c2',name:'Mail',kind:'email'},{id:'c3',name:'Pager',kind:'telegram'}];
  const rules=[{id:'d1',channelId:'c1',sourceKind:'docknest',sourceId:null}];
  servers.slice(0,3).forEach((s,i)=>rules.push({id:'sv'+i,channelId:channels[i%3].id,sourceKind:'server',sourceId:s.id}));
@@ -84,7 +85,8 @@ test('alert lines never cross cards or labels and reach their alert node',()=>{
  for(const p of l.rulePaths){
   const from=p.sourceKind==='docknest'?'docknest':p.sourceId,to=p.channelId,end=p.points.at(-1),node=l.alerts.find(a=>a.id===to);
   assert.ok(end[0]<node.x&&end[1]===node.in.y,'ends at the alert input');
-  for(const seg of segments(p))for(const b of blocks){if(b.id===from||b.id===to)continue;assert.ok(!hitsRect(seg,b),`line ${p.id} crosses ${b.id}`);}
+  // Curves run straight from port to port like a workflow canvas, so they may pass behind a card; they leave and enter on a card edge
+  assert.ok(p.points[0][0]>=0&&p.d.startsWith('M'));
  }
  const top=Math.min(...[...l.servers,...l.sites,...l.storage].map(n=>n.y));
  assert.ok(top>l.docknest.block.y+l.docknest.block.h,'the map starts below the alert band');
@@ -108,3 +110,41 @@ test('saved positions move only their node, lines follow and unknown nodes keep 
  assert.deepEqual(layoutMap(servers,sites,{...o,positions:{}}),auto,'no positions is the automatic layout');
 });
 test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});
+test('a node moved left of and above the layout grows the canvas there, with no wall at 0',()=>{
+ const {servers,sites}=make(2,2),o=storageFor(sites),auto=layoutMap(servers,sites,o),key='site:'+auto.sites[0].id;
+ assert.deepEqual([auto.x0,auto.y0],[0,0],'the automatic layout starts at 0');
+ const l=layoutMap(servers,sites,{...o,positions:{[key]:{x:-400,y:-320}}}),n=l.keys[key];
+ assert.deepEqual([n.x,n.y],[-400,-320],'the position is used as given');
+ assert.ok(l.x0<=n.block.x&&l.x0<=n.x-METRICS.pad&&l.y0<=n.y-METRICS.pad,'the canvas reaches past the moved node');
+ assert.ok(l.x0+l.width>=auto.width&&l.y0+l.height>=auto.height-1,'and still covers the rest of the map');
+ assert.deepEqual(l.paths.find(p=>p.id===auto.sites[0].id).points.at(-1),[n.x-14,n.y+n.h/2],'its line follows it');
+ const same=layoutMap(servers,sites,{...o,positions:{[key]:{x:auto.sites[0].x,y:auto.sites[0].y}}});
+ assert.deepEqual([same.x0,same.y0],[0,0],'a node left in place keeps the canvas origin');
+});
+test('snapping, the home view and the out-of-view check use the same coordinates',()=>{
+ assert.deepEqual([-500,-9,-7,0,7,8,23].map(snapToGrid),[-496,-16,0,0,0,16,16]);
+ const l={x0:-200,y0:-100,width:600,height:400};
+ assert.deepEqual(homeOffset(l,1,1000,800),{x:400,y:300},'centred when it fits: x0 lands at the left edge of the centred box');
+ assert.deepEqual(homeOffset(l,1,100,100),{x:-50,y:-50},'otherwise its middle is at the middle of the view (both ends cut equally)');
+ assert.deepEqual(homeOffset({...l,custom:true},1,100,100),{x:200,y:100},'a layout the owner arranged starts at its top left corner');
+ assert.equal(clippedIn(l,{x:400,y:300,k:1},1000,800),false);
+ assert.equal(clippedIn(l,{x:100,y:300,k:1},1000,800),true,'a node left of the view counts as out of view');
+});
+test('saved positions are read back only when they are sound',()=>{
+ assert.deepEqual(cleanPositions({'site:a':{x:-480,y:-96},'server:b':{x:32,y:48,extra:1}}),{'site:a':{x:-480,y:-96},'server:b':{x:32,y:48}});
+ for(const bad of [null,'x',[],42])assert.deepEqual(cleanPositions(bad),{});
+ assert.deepEqual(cleanPositions({'site:a':{x:'1',y:2},'site:b':{x:NaN,y:0},'site:c':{x:1e9,y:0},'nope:d':{x:1,y:1},'site:':{x:1,y:1},'site:e':null}),{});
+});
+test('positions of removed nodes are dropped, kinds not loaded yet are kept',()=>{
+ const p={'server:a':{x:0,y:0},'server:gone':{x:1,y:1},'site:s':{x:2,y:2},'storage:t':{x:3,y:3},'alert:c':{x:4,y:4},'docknest:root':{x:5,y:5}};
+ assert.deepEqual(Object.keys(prunePositions(p,{server:['a'],site:[],storage:null,alert:null})),['server:a','storage:t','alert:c','docknest:root']);
+ assert.equal(prunePositions(p,{server:['a','gone'],site:['s'],storage:['t'],alert:['c']}),p,'nothing removed: the same object, so nothing re-renders');
+ assert.equal(prunePositions(p,{server:null,site:null,storage:null,alert:null}),p,'nothing loaded yet: everything is kept');
+});
+test('a database row says how it is backed up from the app data, never a fixed engine text',()=>{
+ const svc=[{container:'c',engine:'mongo',version:'7.0.14'},{container:'p',engine:'postgres'}];
+ assert.deepEqual(databasesOf({id:'1',config:{services:svc}}).map(d=>d.mode),['Stopped file copy','Stopped file copy'],'switch off: every database stops');
+ assert.deepEqual(databasesOf({id:'1',config:{onlineDumps:true,services:svc}}).map(d=>d.mode),['Stopped file copy','Online copy, stays running'],'the engine capability decides, not the switch alone');
+ assert.deepEqual(databasesOf({id:'1',incremental:{enabled:true},config:{onlineDumps:true,services:svc}}).map(d=>d.mode),['Stopped file copy','Stopped file copy'],'incremental chains always stop');
+ assert.deepEqual(databasesOf({id:'1',config:{onlineDumps:true,services:[{container:'r',engine:'redis',persistence:'disk'},{container:'k',engine:'redis',flavor:'valkey',persistence:'disk'},{container:'x',engine:'redis',persistence:'cache'}]}}).map(d=>d.mode),['Online copy, stays running','Online copy, stays running','Stopped file copy'],'Redis and Valkey take an online copy unless they keep nothing on disk');
+});

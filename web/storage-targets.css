@@ -32,6 +32,9 @@
 .storage-usage-text{display:flex;justify-content:space-between;align-items:baseline;gap:16px;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
 .storage-usage-text b{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:400;color:var(--text-primary);text-align:right}
 .storage-usage progress{display:block;width:100%;height:8px}
+/* Append-only SFTP: the status line and what the storage keeps, in the card's caption rhythm. */
+.storage-write-mode{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.storage-write-mode .hint{margin:0;color:var(--text-muted);font-size:var(--fs-caption);line-height:var(--lh-caption)}
 @media(min-width:768px){
  .rebrand-page .sr-root .storage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
  .rebrand-page .sr-root .storage-grid>.storage-card:only-child{grid-column:1/-1}

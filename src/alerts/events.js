@@ -5,7 +5,10 @@ import { classify } from './addresses.js';
 import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'launch.needs_you']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'launch.needs_you', 'selfbackup.kit_check_failed', 'config.changed', 'runbook.outdated', 'storage.reconnect_needed', 'report.failed']);
+// Sent to every channel whatever the rules say (docs/emergency-kit.md): a new emergency key decides who can open future
+// kits, so no rule can silence it. Not in EVENTS, so no rule can select or drop it.
+export const EVERY_CHANNEL_EVENTS = Object.freeze(['emergency.key_changed']);
 export const SOURCE_KINDS = Object.freeze(['docknest', 'server', 'site']);
 // Disk threshold: low when more than 90 percent is used or less than 5 GB is free.
 export const DISK_USED_PERCENT = 90;
@@ -17,7 +20,7 @@ export const STATE_DEDUPE_MS = Object.freeze({ 'server.unreachable': 6 * 3600_00
 
 // Bidi override and isolate characters (U+202A-202E, U+2066-2069) are dropped: they could make a name read as something
 // else in the alert ("gnp.exe" shown as "exe.png"). Hebrew and other right-to-left text needs none of them.
-const clean = (value, fallback = 'a site') => String(value ?? '').replace(/[\u202a-\u202e\u2066-\u2069]/g, '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
+const clean = (value, fallback = 'an app') => String(value ?? '').replace(/[\u202a-\u202e\u2066-\u2069]/g, '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
 // Time of day in the event's IANA time zone (the site's schedule zone, else the self-backup schedule zone, else UTC),
 // with the zone abbreviation, for example " at 03:00 UTC" or " at 06:00 GMT+3". An unknown zone falls back to UTC.
 const timeOf = (iso, timeZone = 'UTC') => {
@@ -34,7 +37,9 @@ const daysText = value => { const days = Math.max(0, Math.floor(Number(value) ||
 export function messageFor(event) {
   const site = clean(event.siteName), server = clean(event.serverName, 'your server'), target = clean(event.targetName, 'the new server'), when = clock(event.at, event.timeZone);
   switch (event.type) {
-    case 'backup.failed': return `Backup failed: ${site} on ${server}${when}. Open DockNest to see why.`;
+    case 'backup.failed':
+      if (event.code === 'missed') return `Backup missed: ${site} on ${server} did not run when it was due${when}. Open DockNest to check it.`;
+      return `Backup failed: ${site} on ${server}${when}. Open DockNest to see why.`;
     case 'backup.succeeded': return `Backup finished: ${site} on ${server}${when}.`;
     case 'move.finished':
       if (event.detail === 'rolled_back') return `Move undone: ${site} is back on ${server}. Open DockNest for details.`;
@@ -69,6 +74,18 @@ export function messageFor(event) {
     case 'self_heal.gave_up': return event.code === 'recreated' ? `Self-heal stopped: a watched container of ${site} on ${server} was recreated${when}. Open DockNest to check it.` : `Self-heal stopped restarting a container of ${site} on ${server}${when}: it stayed unhealthy. Open DockNest to check it.`;
     // Launches (docs/launch-site.md): a teardown that did not finish; {server} is the server of the launch.
     case 'launch.needs_you': return `Launch needs you: DockNest could not remove everything a failed launch made on ${server}. Open DockNest to try again.`;
+    // Keys safe (docs/keys-safe.md): Compose, env or configuration files changed outside Safe Edit. Names only, no diff.
+    case 'config.changed': return `Configuration changed: the Compose or env files of ${site} on ${server} changed outside Safe Edit. Open DockNest to review.`;
+    // Self Backup and the emergency kit (docs/emergency-kit.md): fixed sentences, never a key, a part or an error text.
+    case 'selfbackup.kit_check_failed': return `Self Backup kit check failed${when}: the newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.`;
+    case 'emergency.key_changed': if (event.code === 'retired') return `Emergency kit split turned off${when}: the kit opens with one recovery passphrase again. If you did not do this, open DockNest now.`;
+      return `Emergency kit key changed${when}: new emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.`;
+    // Recovery Guide (docs/recovery-guide.md): sent once per new inventory digest.
+    // Cloud drives (docs/cloud-drives.md): once per outage, until the owner reconnects. {destination} is the name the owner typed.
+    case 'storage.reconnect_needed': return `Storage needs you to sign in again: ${clean(event.destinationName, 'a cloud drive')}. Backups to it fail until you reconnect. Open DockNest.`;
+    case 'runbook.outdated': return 'The Recovery Guide is out of date: apps, servers, storage or the emergency kit changed since it was made. Open DockNest to make a new one.';
+    // Client reports (docs/client-reports.md): a scheduled report could not be emailed after its retries. Names only.
+    case 'report.failed': return `Client report failed: the report for ${clean(event.clientName, 'a client')}${event.periodLabel ? `, ${clean(event.periodLabel)},` : ''} could not be emailed. Open DockNest to download it instead.`;
     default: return null;
   }
 }
@@ -89,9 +106,9 @@ export function ruleMatches(rule, event) {
 // - reason: one fixed sentence from the reasons catalogue (reasons.js), keyed by event type and `event.code` / `event.detail`.
 // - time: the event's time of day in its time zone, for example "03:00 UTC" ('' for events without one).
 // - url: the job deep link, only when APP_ORIGIN is not a loopback address (no link a phone cannot open).
-const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'certificate.expiring': 'Certificate expires soon', 'certificate.renewal_failed': 'Certificate renewal failed', 'edit.rolled_back': 'Change undone', 'edit.needs_you': 'Change needs you', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped', 'launch.needs_you': 'Launch needs you' };
-const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
-const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
+const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'certificate.expiring': 'Certificate expires soon', 'certificate.renewal_failed': 'Certificate renewal failed', 'edit.rolled_back': 'Change undone', 'edit.needs_you': 'Change needs you', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped', 'launch.needs_you': 'Launch needs you', 'selfbackup.kit_check_failed': 'Self Backup kit check failed', 'emergency.key_changed': 'Emergency kit key changed', 'config.changed': 'Configuration changed', 'runbook.outdated': 'Recovery Guide out of date', 'storage.reconnect_needed': 'Storage needs you', 'report.failed': 'Client report failed' };
+const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'selfbackup.kit_check_failed', 'emergency.key_changed']);
+const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up', 'config.changed']);
 const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you', 'launch.needs_you']);
 export const loopbackOrigin = origin => {
   try { const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return host === 'localhost' || host.endsWith('.localhost') || (isIP(host) !== 0 && classify(host) === 'refused'); } catch { return true; }
@@ -104,7 +121,7 @@ export function jobLink(jobId, origin = config.origin) {
 export function templateFor(event, { origin = config.origin } = {}) {
   const at = event.at ?? new Date().toISOString();
   if (event.type === 'move.finished' && !event.detail) event = { ...event, detail: 'completed' };
-  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : event.type === 'certificate.expiring' && event.code === 'expired' ? 'Certificate expired' : TITLES[event.type];
+  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : event.type === 'certificate.expiring' && event.code === 'expired' ? 'Certificate expired' : event.type === 'backup.failed' && event.code === 'missed' ? 'Backup missed' : TITLES[event.type];
   if (!title) return null;
   const reason = reasonFor(event.type, event.code ?? event.detail, { target: clean(event.targetName, 'the new server'), version: event.type === 'update.available' ? clean(event.version, 'update') : '', destination: clean(event.destinationName, 'the copy destination'), free: event.freeBytes === undefined ? '' : gb(event.freeBytes), used: Math.round(Number(event.usedPercent) || 0), days: event.type === 'certificate.expiring' ? daysText(event.daysLeft) : '' });
   return {

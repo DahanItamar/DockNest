@@ -2,7 +2,7 @@
 
 The payload file is DBM1 (4 ASCII bytes), a 12-byte random nonce, AES-256-GCM ciphertext, and the 16-byte authentication tag. The 16-byte header is authenticated as AAD. The encryption key is the 32-byte master key. SHA256 covers the entire encrypted file. Preserve the master key separately from the metadata database and payloads.
 
-Plaintext is a gzip tar containing manifest.json, images.tar, and mount-I-J.tar files. The private manifest includes full Docker inspect configuration and snapshot image IDs; it contains secrets and must remain encrypted. Public database metadata excludes environment values and host source paths. Each mount archive preserves numerical UID/GID, modes, links, GNU tar ACLs and extended attributes. Committed snapshot images capture writable layers; images.tar includes both exact original image IDs/digests and committed snapshots. Mount archives capture attached data separately. Explicit Compose/config files and restore-guide.md are included.
+Plaintext is a gzip tar containing manifest.json, images.tar, and mount-I-J.tar files. The private manifest includes full Docker inspect configuration and snapshot image IDs; it contains secrets and must remain encrypted. Public database metadata excludes environment values and host source paths. Each mount archive preserves numerical UID/GID, modes, links, GNU tar ACLs and extended attributes. Committed snapshot images capture writable layers; images.tar includes both exact original image IDs/digests and committed snapshots. Mount archives capture attached data separately. Explicit Compose/config files and restore-guide.md are included. Since 3.0.0 a database that took an [online dump](online-dumps.md) adds database-I.tar and its data folder's mount archive holds only the empty folder.
 
 The source stops only containers previously running, verifies clean zero exit codes, copies mounts without hard links, commits writable layers, restarts and checks health, disables maintenance, then saves images and compresses. A detached local watchdog terminates the helper process group at its deadline before recovery, starts previously running containers, and clears maintenance only after health succeeds. Review recovery.json after a disconnect. Staging and snapshot images are retained after failures; disk use requires operator review. Watchdog does not survive source-host reboot: arrange a boot recovery service before production use.
 
@@ -14,7 +14,7 @@ Offline recovery must first authenticate the whole ciphertext to a private tempo
 
 Shutdown profiles: generic requires cleanShutdownConfirmed; PostgreSQL/MySQL require matching image identification and clean database shutdown log markers plus zero container exit codes. Manifest contains evidence booleans, never raw logs.
 
-Current capture blockers: Compose sites without explicit project files and dependency confirmation; privileged/device-backed containers; unreviewed tmpfs and system mounts; shared mounts with outside running containers; no explicit exclusiveSourcesConfirmed assertion; non-root SSH; graceful exit code other than zero. Explicitly declared `/tmp`, `/run/mysqld` and `/var/run/mysqld` RAM folders are recreated empty with original size/options and permissions. Their contents disappear when the source stops and are not called persistent backup data. Unknown destinations/options remain blocked. External writers cannot be inferred from Docker alone: the administrator must confirm exclusive ownership. Database-specific shutdown proof beyond the configured clean-exit profile requires integration validation.
+Current capture blockers: Compose apps without explicit project files and dependency confirmation; privileged/device-backed containers; unreviewed tmpfs and system mounts; shared mounts with outside running containers; no explicit exclusiveSourcesConfirmed assertion; non-root SSH; graceful exit code other than zero. Explicitly declared `/tmp`, `/run/mysqld` and `/var/run/mysqld` RAM folders are recreated empty with original size/options and permissions. Their contents disappear when the source stops and are not called persistent backup data. Unknown destinations/options remain blocked. External writers cannot be inferred from Docker alone: the administrator must confirm exclusive ownership. Database-specific shutdown proof beyond the configured clean-exit profile requires integration validation.
 
 Full ZIP exports never store the decrypted backup on the server. **Download ZIP** first runs a check pass: DockNest reads the whole encrypted backup from its storage, authenticates it (AES-256-GCM and the stored ciphertext checksum), lets the helper validate the package layout while discarding the plaintext, and keeps only the small manifest in memory with the storage object's size, modification time and ETag or version. The browser shows progress, an estimated time left and then "ready for 60 minutes". The download is a second, streamed pass: the ciphertext is read again, decrypted and unpacked as a stream, and the ZIP is written straight to the response, so the first bytes arrive immediately (this keeps proxies such as Cloudflare from cutting the request). Because the ZIP has two kinds of copies and a ZIP can only write one entry at a time, the backup is decrypted twice during a download: the first read writes `recovery-originals/`, the second the browsable `site-files/` and `configuration/` copies.
 
@@ -26,9 +26,26 @@ Maintenance HTML distribution over SSH is implemented; proxy maintenance uses an
 
 Retention removes only ordinary verified backups beyond the configured count after a new successful capture, and respects active download and restore records. Pinned backups are additional to the count. Interrupted jobs enter recovery_required and prevent further work on their server. Resolve source health and watchdog state before changing job status. A single expiring SQLite worker lease (not a lock file) prevents concurrent workers; after an unclean death the next worker takes it over once it is 60 seconds stale and marks interrupted jobs recovery_required. Central restart does not silently assume remote recovery succeeded.
 
+## Run definition (containers started without Compose, 2.16.5)
+
+A backup of a site whose containers were not started by Docker Compose also holds `run-definition/compose.yaml` and
+one `run-definition/<container>.env` per container that has environment variables. The Compose file recreates each
+container as `docker inspect` showed it (remote/helper/runspec.py): the image is its snapshot image from `images.tar`
+(writable layer kept) with the label `docknest.original-image=<original reference>`, and comment lines at the top name
+any setting it cannot recreate. Every key and value is a JSON-quoted string (valid YAML, no YAML library). The env
+files hold the environment values, single-quoted; a value with a quote or a line break is left out by name (the
+snapshot image keeps it). They contain secrets like the manifest, and live only inside the encrypted package.
+
+The files are optional package content, recorded in `manifest.runDefinition` (path to `bytes` and `sha256`) rather than
+in `manifest.artifacts`. Restore verifies them when the record is present and refuses a package whose
+`run-definition/` folder holds a file the record does not list. Packages without the record, and every older package,
+restore exactly as before. Older releases restore these packages (they ignore the folder) but cannot ZIP-export them:
+their export refuses the unknown entries. ZIP export keeps the files in `recovery-originals/`. Values are written as
+JSON strings with `$` doubled, so Compose never reads part of a value (a path, a log option) as a variable.
+
 ## Backup format v2 (incremental backups, 2.12)
 
-A site with incremental backups turned on makes format 2 packages. The envelope is unchanged: the same DBM1 header,
+An app with incremental backups turned on makes format 2 packages. The envelope is unchanged: the same DBM1 header,
 AES-256-GCM, tag and master key. The plaintext is the same gzip tar with `manifest.json`, `images.tar`, `config-*.tar`
 and `mount-I-J.tar`, plus one `snapshot-<key>.snar` file per incremental mount (GNU tar's change record, kept so a chain
 does not depend on the source server's disk). A package without incremental backups stays format 1.

@@ -54,7 +54,7 @@ test('buildReport groups by site and by storage and totals them', () => {
     { id: '1', siteId: 'a', capturedAt: daysAgo(3), path: 'sftp:t1:/a/1', size: 10 }, { id: '2', siteId: 'a', capturedAt: daysAgo(2), path: 'sftp:t1:/a/2', size: 12 },
     { id: '3', siteId: 'b', capturedAt: daysAgo(1), path: '/local/3', size: 4 }, { id: '4', siteId: 'gone', capturedAt: daysAgo(1), path: 'sftp:old:/x', size: 1 }];
   const built = report.buildReport({ backups, sites, targets, capacities: { t1: 1000 }, nowMs: NOW });
-  assert.deepEqual(built.sites.map(row => [row.name, row.packages, row.bytes]), [['shop', 2, 22], ['blog', 1, 4], ['Removed site', 1, 1]]);
+  assert.deepEqual(built.sites.map(row => [row.name, row.packages, row.bytes]), [['shop', 2, 22], ['blog', 1, 4], ['Removed app', 1, 1]]);
   assert.deepEqual(built.storages.map(row => [row.name, row.bytes, row.capacityBytes]), [['Offsite', 22, 1000], ['Local disk', 4, null], ['Removed destination', 1, null]]);
   assert.equal(built.totals.bytes, 27); assert.equal(built.totals.packages, 4);
   assert.equal(built.sites[0].estimate.upToBytes, 10); // 22 stored, needs 12

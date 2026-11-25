@@ -3,28 +3,42 @@
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
+from .runtime import (
+    check_runtime_source, current_runtime, engine_architecture, engine_save, engine_storage_root, host_id_map, runtime_is_default, systemd_unit)
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
-    INCREMENTAL_GUIDE, RESTORE_GUIDE)
+    DUMP_GUIDE, INCREMENTAL_GUIDE, RESTORE_GUIDE, RUN_DEFINITION_GUIDE, hand_steps_guide)
 from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
     refuse_protected_sources, scoped_classify, source_archive, source_archive_command, within)
+from .keys import (
+    KEY_FILE_LIMIT, key_context, key_hits, key_proof)
 from .databases import (
-    data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
+    ENGINES, data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
     shutdown_evidence, sqlite_check_mode, sqlite_file_source, validate_database_contracts)
+from .dumps import (
+    dump_artifacts, dump_candidates, dump_failure, dump_timeout, take_dump)
 from .incremental import (
     INCREMENTAL_ROOT, annotate_mounts, copy_private, incremental_request, incremental_sources, manifest_snapshots,
     plan_incremental, reset_snapshot, site_lock, snapshot_records)
 from .net import (
-    ProbePolicyError, certificate_facts, health, probe_url, public_probe, skip_refused_probes)
+    ProbePolicyError, certificate_facts, health, probe_url, public_probe, restart_reason, skip_refused_probes)
 from .maintenance import (
     MAINTENANCE_NOT_SET_UP, MaintenanceOptional, maintenance)
 from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
+from .restore_gaps import (
+    restore_check)
+from .move import (
+    hand_placed)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
+from .routing import (
+    proxy_routes)
+from .runspec import (
+    run_definition, standalone)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
 # </build:header>
 def transfer_progress(count,final=False):
@@ -53,7 +67,7 @@ def command_artifact(command,archive=None,name=None,expected=None,spool=None,sca
                 while data:=reader.read(1024*1024):output.write(data)
                 output.flush();os.fsync(output.fileno())
         elif archive is None:
-            if scan is not None:scan(archive_renames_safely(reader))
+            if scan is not None:scan(reader)
             while reader.read(1024*1024):pass
         else:
             info=tarfile.TarInfo(name);info.size=expected['bytes'];info.mode=0o600
@@ -112,26 +126,32 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=
         for path in files.values():path.unlink(missing_ok=True)
     return inventory
 
-def archive_has_renames(fileobj):
-    """True when a GNU tar archive holds a directory rename record (R or T in a GNU.dumpdir). GNU tar keeps writing a
-    rename's records into later increments of the same snapshot file, where a restore would replay them; so after an
-    increment with renames the next backup must be full (see the engine's `folders-renamed`)."""
-    with tarfile.open(fileobj=fileobj,mode='r|') as tar:
-        for member in tar:
-            value=member.pax_headers.get('GNU.dumpdir')
-            if isinstance(value,str) and any(entry[:1] in ('R','T') for entry in value.split('\0') if entry):return True
-    return False
+def archive_scan(fileobj,members=(),renames=False,stream=True):
+    """One pass over a tar archive. renames: whether it holds a directory rename record (R or T in a GNU.dumpdir). GNU
+    tar keeps writing a rename's records into later increments of the same snapshot file, where a restore would replay
+    them; so after an increment with renames the next backup must be full (see the engine's `folders-renamed`).
+    members: names of regular files whose bytes are returned (at most KEY_FILE_LIMIT each), for the key proof.
+    An archive this pass cannot read counts as renamed and gives no member: the next backup is then full, never a wrong
+    increment, and no key is proven from it. stream=False reads a seekable file and skips the file data it passes."""
+    wanted=set(members);found={};renamed=False
+    try:
+        with tarfile.open(fileobj=fileobj,mode='r|' if stream else 'r:') as tar:
+            for member in tar:
+                value=member.pax_headers.get('GNU.dumpdir')
+                if renames and isinstance(value,str) and any(entry[:1] in ('R','T') for entry in value.split('\0') if entry):renamed=True
+                if member.name in wanted and member.isfile() and member.size<=KEY_FILE_LIMIT:found[member.name]=tar.extractfile(member).read()
+                if (renamed or not renames) and len(found)==len(wanted):break
+    except (tarfile.TarError,OSError,EOFError,ValueError):return True,{}
+    return renamed,found
 def archive_renames_safely(fileobj):
-    # An archive this scan cannot read counts as renamed: the next backup is then full, never a wrong increment.
-    try:return archive_has_renames(fileobj)
-    except (tarfile.TarError,OSError,EOFError,ValueError):return True
+    return archive_scan(fileobj,renames=True)[0]
 def stream_file(archive,name,path,expected):
     size=path.stat().st_size;info=tarfile.TarInfo(name);info.size=size;info.mode=0o600
     with open(path,'rb') as source:archive.addfile(info,source)
     if file_sha256(path)!=expected or path.stat().st_size!=size:raise ValueError('Snapshot file changed during capture')
     return {'bytes':size,'sha256':expected}
 def stream_document(archive,name,value):
-    data=value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
+    data=value if isinstance(value,bytes) else value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
     archive.addfile(info,io.BytesIO(data))
 
 def capture_size(containers,configuration,exclusions,images):
@@ -150,6 +170,8 @@ def backup_plan(cfg,containers=None):
     if any(s['engine']=='generic' for s in services) and not cfg.get('cleanShutdownConfirmed'):
         raise ValueError('Application writers require explicit clean-shutdown confirmation regardless of the legacy shutdown profile')
     validate_database_contracts(services,containers)
+    # The native database adapters run `docker exec`, `logs` and `run` by name: rootful Docker only in this release.
+    if not runtime_is_default(current_runtime()) and any(s['engine']!='generic' for s in services):raise ValueError('Native database engines are available for rootful Docker only in this release. Use a generic app with a confirmed clean shutdown.')
     table=mount_table();sources=[];seen=set();exclusions=mount_exclusions(cfg,containers)
     if exclusions and any(s['engine']!='generic' for s in services):raise ValueError('Mount exclusions require reviewed generic application services; native database adapters retain full capture')
     for c in containers:
@@ -182,11 +204,12 @@ def v1_plan(plan):
     """Format v1 manifests keep the plan exactly as before chain fingerprints existed."""
     return {k:v for k,v in plan.items() if k!='chainFingerprint'}
 def public_plan(plan):
-    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn']} for s in plan['services']]}
+    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{**{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn','flavor','persistence']},'onlineCopy':bool(getattr(ENGINES.get(s['engine']),'dump_format',None))} for s in plan['services']]}
 
 def revalidate_sources(plan):
     table=mount_table()
     for source in plan['sources']:
+        check_runtime_source(current_runtime(),source['path'])
         if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
 DATABASE_IMAGE_WORDS=('postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch')
@@ -214,23 +237,20 @@ def service_contracts(cfg,containers):
     for c in containers:
         declaration=declarations.get(c['Id'],{})
         engine=declaration.get('engine','auto');detected=None;version=None
-        if c['State']['Running']:
-            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld'),('redis','redis-server')]:
-                try:
-                    output=run(['docker','exec',c['Id'],binary,'--version'],timeout=10).decode(errors='replace')
-                    match=re.search(r'\bv=(\d+\.\d+\.\d+)\b' if name=='redis' else r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
-                    if match:detected=name;version=match[1];break
-                except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
         hint=c['Config'].get('Image','')
+        if c['State']['Running']:
+            for name,native in ENGINES.items():
+                version=native.detect(c['Id']) if native.detectable(hint,engine) else None
+                if version:detected=name;break
         if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
         engine=detected or ('generic' if engine=='auto' else engine)
         if engine=='generic' and image_looks_like_database(hint):raise ValueError('Stateful service requires a supported per-service database contract')
         if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
-        if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
+        if engine!='generic':ENGINES[engine].check_version(version)
         expected=declaration.get('version')
         if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
         for check in declaration.get('checks',[]):
-            if engine=='generic' or (engine=='redis' and (not check.get('key') or check.get('table'))) or (engine in ['postgres','mysql','mariadb'] and (not check.get('table') or check.get('key'))):
+            if engine=='generic' or not ENGINES[engine].check_shape(check):
                 raise ValueError('Configured data checks do not match the detected native engine')
         dependencies=[]
         for value in declaration.get('dependsOn',[]):
@@ -239,7 +259,7 @@ def service_contracts(cfg,containers):
         result.append({'container':c['Id'],'engine':engine,'version':version,'role':'database' if engine!='generic' else 'writer','dependsOn':dependencies,'database':declaration.get('database'),'user':declaration.get('user'),'checks':declaration.get('checks',[])})
         if declaration.get('sqliteFiles'):
             if engine!='generic':raise ValueError('SQLite file proof is limited to declared generic applications')
-            installed=run(['docker','exec',c['Id'],'python3','-c','import sqlite3;print(sqlite3.sqlite_version)'],timeout=10).decode().strip()
+            installed=run(current_runtime().argv('exec',c['Id'],'python3','-c','import sqlite3;print(sqlite3.sqlite_version)'),timeout=10).decode().strip()
             if not re.fullmatch(r'3\.\d+\.\d+',installed) or installed!=declaration.get('sqliteVersion'):raise ValueError('Installed SQLite version differs from the explicit file contract')
             item=result[-1];item.update(sqliteFiles=sorted(declaration['sqliteFiles']),sqliteVersion=installed,sqliteSigtermConfirmed=bool(declaration.get('sqliteSigtermConfirmed')))
             exclusions=mount_exclusions(cfg,containers)
@@ -268,20 +288,37 @@ def service_order(services):
 def artifact_inventory(root):
     result={}
     for p in sorted(root.iterdir()):
-        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|static-files)\.tar|snapshot-[0-9a-f]{64}\.snar',p.name):
+        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|database-\d{1,3}|static-files)\.tar|snapshot-[0-9a-f]{64}\.snar',p.name):
             digest=hashlib.sha256()
             with open(p,'rb') as f:
                 for chunk in iter(lambda:f.read(1024*1024),b''):digest.update(chunk)
             result[p.name]={'bytes':p.stat().st_size,'sha256':digest.hexdigest()}
     return result
 
+# run-definition/ files (2.16.5): optional, recorded in manifest.runDefinition, so packages without them still verify.
+RUN_DEFINITION=re.compile(r'run-definition/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:yaml|env)')
+def document_record(data):return {'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+def run_definition_intact(root,records):
+    folder=root/'run-definition'
+    present={'run-definition/'+p.name for p in folder.iterdir()} if folder.is_dir() and not folder.is_symlink() else set()
+    if present!=set(records) or not all(RUN_DEFINITION.fullmatch(name) for name in records):return False
+    return all((root/name).is_file() and not (root/name).is_symlink() and document_record((root/name).read_bytes())==item for name,item in records.items())
+def package_run_definition(cs,images):
+    """A container started without Compose gets a readable Compose file of itself (docs/backup-format.md). It is
+    optional content: if it cannot be written the backup goes on without it (no manifest.runDefinition)."""
+    if not standalone(cs):return {}
+    try:return {name:text.encode() for name,text in run_definition(cs,images).items()}
+    except Exception as error:
+        diagnostic(phase='run-definition-skipped',exceptionType=type(error).__name__);return {}
 def verify_artifacts(root,manifest):
     expected=manifest.get('artifacts')
     if expected is None:return False # Legacy package: no invented artifact evidence.
     actual=artifact_inventory(root)
-    if actual!=expected:raise ValueError('Backup artifacts are missing, changed or unexpected')
+    if actual!=expected or not run_definition_intact(root,manifest.get('runDefinition') or {}):raise ValueError('Backup artifacts are missing, changed or unexpected')
     names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
+    # Online logical dumps (3.0.0): a helper without them does not list database-*.tar and so refuses the package.
+    names.update(dump_artifacts(manifest))
     if manifest.get('formatVersion')==2:
         # Format v2 (incremental-enabled sites) also carries the tar snapshot file of every source after this backup.
         for key,item in manifest_snapshots(manifest).items():
@@ -353,7 +390,7 @@ def capture_static(req):
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
     emit(stage='packing')
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'static-files.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('config-*.tar')]])
-    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def capture_static_stream(req,output):
     cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job']);plan=backup_plan(cfg,[])
@@ -373,7 +410,7 @@ def capture_static_stream(req,output):
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md','Static website backup. Restore static-files.tar into a new private directory and verify staticFiles.sha256. Never overwrite the live website automatically.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600);output.flush()
-    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def preflight(cfg):
     if cfg.get('deliveryMode','staged') not in ['staged','direct']:raise ValueError('Unsupported backup delivery mode')
@@ -381,17 +418,22 @@ def preflight(cfg):
     if cfg.get('kind')=='static':static_preflight(cfg);return []
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
+    if not runtime_is_default(current_runtime()) and cfg.get('kind')=='static':raise ValueError('A static website has no container engine')
     if not cfg.get('exclusiveSourcesConfirmed'):raise ValueError('Confirm no external processes write the selected data')
     profile=cfg.get('shutdownProfile','generic')
     if profile not in ['generic','postgres','mysql']:raise ValueError('Unsupported shutdown profile')
     if profile=='generic' and not cfg.get('cleanShutdownConfirmed'):raise ValueError('Generic shutdown requires explicit application clean-shutdown confirmation')
     cs=inspect(ids); selected={c['Id'] for c in cs};exclusions=mount_exclusions(cfg,cs)
+    # A container managed by systemd (a quadlet or a generated unit) is removed and recreated by its unit, so it cannot be
+    # stopped, copied and restarted like a plain container. Its unit would have to be stopped and started: not in this release.
+    if not runtime_is_default(current_runtime()) and any(systemd_unit(c) for c in cs):raise ValueError('A container managed by a systemd unit (a quadlet) cannot be backed up yet. Its unit would have to be stopped and started by DockNest.')
     others=docker('ps','-q').decode().split()
     mounts=[]
     for c in cs:
         temporary_mounts(c)
         if c.get('HostConfig',{}).get('Privileged') or c.get('HostConfig',{}).get('Devices'):raise ValueError('Privileged/device-backed containers require a capture adapter')
-        if c.get('Config',{}).get('Labels',{}).get('com.docker.compose.project'):
+        # Podman reports Labels as null for an image without labels (Docker: {}); a missing and a null value are the same here.
+        if ((c.get('Config') or {}).get('Labels') or {}).get('com.docker.compose.project'):
             if not cfg.get('composeFiles'):raise ValueError('Select this site\'s Compose project files in Edit configuration before backing up. No files have been selected for this backup.')
             if not cfg.get('externalReferencesConfirmed'):raise ValueError('Review the Compose and environment files in Edit configuration and confirm the dependencies before backing up.')
         for m in c['Mounts']:
@@ -402,6 +444,7 @@ def preflight(cfg):
             src=m['Source']
             if src.startswith(('/proc','/sys','/dev','/run')) or src.endswith('docker.sock'):raise ValueError('System mount is not portable')
             if not os.path.exists(src) or not os.access(src,os.R_OK):raise ValueError('Unreadable mount source')
+            check_runtime_source(current_runtime(),src)
             scoped_classify(src,mount_table(),exclusions)
             if os.path.islink(src):raise ValueError('Mount source symlink requires a capture adapter')
             # A protected mount is not copied (an empty placeholder takes its place), so its contents are not walked.
@@ -422,26 +465,38 @@ def preflight(cfg):
                 if os.path.commonpath([a,b]) in [a,b]:raise ValueError('A running container outside the site shares a mount')
     refuse_protected_sources(cfg)
     for filename in cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
+        check_runtime_source(current_runtime(),filename)
         p=pathlib.Path(filename)
         if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink() or not os.access(p,os.R_OK):raise ValueError('Explicit configuration file is unreadable or invalid')
         classify_source(filename)
     if cfg.get('externalSources'):raise ValueError('External sources require a capture adapter')
     if os.geteuid()!=0:raise ValueError('Root SSH required to preserve ownership and read volume data')
     return cs
+def redis_summary(name,service):
+    """One calm line per Redis or Valkey server: what it is and whether anything is kept on disk."""
+    label=('Valkey' if service.get('flavor')=='valkey' else 'Redis')+' '+'.'.join(str(service.get('version') or '').split('.')[:2])
+    if service.get('persistence')=='cache':return '%s (%s): cache only, nothing to back up. The app folders are still included.'%(name,label)
+    return '%s (%s): saved to disk, included in the backup.'%(name,label)
+
 def readiness(cfg):
     checks=[]
     def check(name,fn):
         try:
             fn();checks.append({'name':name,'ok':True,'message':'Ready'})
         except Exception as error:
-            message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
+            message=str(error) if isinstance(error,ValueError) else DOCKER_NOT_RUNNING if isinstance(error,subprocess.CalledProcessError) and rootful_docker_down() else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
     selected={}
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:selected.update(containers=preflight(cfg)))
     if cfg.get('kind')!='static':
+        redis_notes=[]
         def contracts():
-            backup_plan(cfg,preflight(cfg))
+            plan=backup_plan(cfg,preflight(cfg))
+            names={c['Id']:c.get('Name','').lstrip('/') for c in selected.get('containers',[])}
+            for service in plan['services']:
+                if service['engine']=='redis':redis_notes.append(redis_summary(names.get(service['container'],service['container']),service))
         check('Per-service database consistency contracts',contracts)
+        if redis_notes:checks.append({'name':'Redis and Valkey','ok':True,'required':False,'message':'; '.join(redis_notes)})
     def direct_health():
         try:healthy=health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()))
         except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's health URL."%error)
@@ -452,6 +507,16 @@ def readiness(cfg):
         try:keys,unscanned=protected_paths(selected.get('containers') or [],mount_exclusions(cfg,selected.get('containers') or []),READINESS_SCAN_ENTRIES)
         except ValueError:keys,unscanned=[],[]  # the configuration check above already names the problem
         if keys or unscanned:checks.append({'name':'Key folders that are not copied','ok':False,'required':False,'message':protected_path_warning(keys,unscanned)})
+    if cfg.get('kind')!='static' and cfg.get('onlineDumps') and selected.get('containers'):
+        # Read-only: which databases would take an online dump, and why any other keeps the stopped file copy.
+        try:
+            cs=selected['containers'];plan=backup_plan(cfg,cs)
+            chosen,fallbacks=dump_candidates({'onlineDumps':True},cfg,plan,cs,[c['Id'] for c in cs if c['State'].get('Running')])
+            names=[c.get('Name','').lstrip('/') for c in cs if c['Id'] in chosen]
+            message='; '.join((['Online dump: '+', '.join(names)] if names else [])+['%s stops for a file copy: %s'%(item['container'],item['reason']) for item in fallbacks]) or 'No running database to dump'
+            message+='. With incremental backups on, every database stops for a file copy instead.'
+            checks.append({'name':'Online database dumps','ok':not fallbacks,'required':False,'message':message,'dumped':names,'fallbacks':[{'container':item['container'],'reason':item['reason']} for item in fallbacks]})
+        except ValueError:pass  # the contracts check above already names the problem
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -468,12 +533,45 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         check('Maintenance proxy and website',proxy)
         if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
-    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts()}
+    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'restoreGaps':restore_check(cfg,selected.get('containers')),'routing':proxy_routes()}
+def key_archive_member(hit,cfg,containers):
+    """(archive, member) of the package that holds a key file: config-N.tar for a configuration file, else the first
+    archive of its mount source (a source shared by mounts is archived once, in its first archive)."""
+    if hit['source']=='config':
+        return 'config-%d.tar'%(cfg.get('composeFiles',[])+cfg.get('configFiles',[])).index(hit['path']),posixpath.basename(hit['path'])
+    source=containers[hit['container']]['Mounts'][hit['mount']]['Source']
+    first=next('mount-%d-%d.tar'%(i,j) for i,c in enumerate(containers) for j,m in enumerate(c['Mounts']) if m['Source']==source)
+    name=pathlib.PurePosixPath(source).name
+    return first,name if hit['path']==source else name+'/'+posixpath.relpath(hit['path'],source)
+def key_missing_reason(hit,containers,exclusions):
+    """Why a key cannot be in the package at all: its file is not one the app backs up, or lies in an excluded path."""
+    if hit['source']=='outside':return 'not-included'
+    if hit['source']=='mount' and excluded_path(hit['path'],exclusions.get(containers[hit['container']]['Mounts'][hit['mount']]['Source'],[])):return 'excluded'
+    return None
+def archive_scanner(name,members,renamed,increment,packaged):
+    """The inventory pass's scan of one streamed archive: its rename record (increments) and the key files it holds."""
+    def scan(reader):
+        found,data=archive_scan(reader,members,name in renamed)
+        if name in renamed:increment['renames'][renamed[name]]=found
+        packaged.update({(name,member):value for member,value in data.items()})
+    return scan
+def packaged_keys(context,found,root,direct,members,packaged,cfg,containers,exclusions):
+    """The key proof of a capture: every live key compared with the bytes written into the package, the manifest's
+    container env and the configuration and mount archives. None when no key was looked for or the proof failed."""
+    if found is None:return None
+    try:
+        if not direct:
+            for name,wanted in members.items():
+                with open(root/name,'rb') as archive_file:packaged.update({(name,member):value for member,value in archive_scan(archive_file,wanted,stream=False)[1].items()})
+        written=json.loads((root/'manifest.json').read_text())['containers']
+        return {'keys':key_proof(context,found[0],written,lambda hit:packaged.get(key_archive_member(hit,cfg,containers)),lambda hit:key_missing_reason(hit,containers,exclusions)),'files':found[1]}
+    except Exception:return None  # the backup stands; this package proves no key
 def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
         return capture_static(req)
     inc=incremental_request(req)
+    if inc is not None and not runtime_is_default(current_runtime()):raise ValueError('Backups of Podman and rootless apps are not incremental yet.')
     cfg=req['config'];skip_refused_probes(cfg);cs=preflight(cfg);plan=backup_plan(cfg,cs)
     if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
@@ -499,6 +597,16 @@ def capture(req,output=None):
     # .ssh and .gnupg entries inside copied bind mounts are left out (2.12.1). The ones found join the incremental
     # exclusion record, so a chain whose earlier archives still hold them restarts with a full backup.
     keys_left_out,_=protected_paths(cs,exclusions)
+    # App keys (docs/keys-safe.md): found from the live sources before anything stops. Finding them never fails a
+    # backup; without a result the package simply proves no key.
+    key_request=key_context(req);key_found=None;packaged={};key_members={}
+    if key_request:
+        try:
+            key_found=key_hits(key_request,cfg,cs)
+            for hit in key_found[0]:
+                if hit['source'] in ('config','mount'):
+                    archive_name,member=key_archive_member(hit,cfg,cs);key_members.setdefault(archive_name,set()).add(member)
+        except Exception:key_found=None;key_members={}
     increment=None;snapshot_sources={}
     if inc is not None:
         snapshot_sources=incremental_sources(cs)
@@ -518,12 +626,16 @@ def capture(req,output=None):
         if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     else:
         if shutil.disk_usage(root).free<1024**3:raise ValueError('Insufficient recovery journal capacity')
-        docker_root=docker('info','--format','{{.DockerRootDir}}').decode().strip()
+        docker_root=engine_storage_root()
         if shutil.disk_usage(docker_root).free<sum(c.get('SizeRw',0) or 0 for c in cs)+1024**3:raise ValueError('Insufficient Docker snapshot capacity')
         # images.tar is spooled once in the staging root; budget it before any service stops.
         image_bytes=sum(int(image.get('Size',0) or 0) for image in original_images)+sum(c.get('SizeRw',0) or 0 for c in cs)
         if shutil.disk_usage(root).free<image_bytes*2+1024**3:raise ValueError('Insufficient staging capacity for the image archive')
     running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
+    # Online dumps (docs/online-dumps.md): chosen before anything stops; a move's final copy and incremental chains
+    # always stop every database. Each database that does not qualify keeps the stopped file copy, with its reason.
+    dumps,dump_fallbacks=dump_candidates(req,cfg,plan,cs,running) if inc is None and not req.get('keepStopped') else ({},[])
+    if output is not None and dumps and shutil.disk_usage(root).free<sum(int(run(['du','-sb',str(host)]).split()[0]) for _,host in dumps.values())+1024**3:raise ValueError('Insufficient staging capacity for the database dumps')
     cfg['_runningContainers']=running
     cfg['_serviceContracts']=plan['services']
     if output is not None:cfg['_directDelivery']=True
@@ -548,22 +660,35 @@ def capture(req,output=None):
             try:(root/'watchdog.done').touch(mode=0o600)
             except Exception:pass
         os._exit(0)
-    stopped_at=None;visitor_start=None;captured=None;images=[];archive=None;inventory=None
+    stopped_at=None;visitor_start=None;downtime_from=None;captured=None;images=[];archive=None;inventory=None
     try:
         emit(stage='stopping')
-        visitor_start=time.time()
-        maintenance(cfg,True)
+        # Nothing stops when every running container is a database taking an online dump: no maintenance page then.
+        if any(cid not in dumps for cid in running):visitor_start=time.time();maintenance(cfg,True)
         if backup_plan(cfg,preflight(cfg))['fingerprint']!=plan['fingerprint']:raise ValueError('Docker configuration changed after planning; capture blocked')
         stopped_at=time.time()
+        if visitor_start is not None:downtime_from=stopped_at
+        by_id={c['Id']:c for c in cs};index={c['Id']:i for i,c in enumerate(cs)}
         for cid in reversed(running):
             service=next(s for s in plan['services'] if s['container']==cid)
             if service['engine']!='generic':service['expectedChecks']=data_checks(cid,service)
+            if cid in dumps:
+                # Writers of this app are already stopped (they restart after the databases), so the dump is quiet.
+                try:
+                    service['dump']=take_dump(service,by_id[cid],*dumps[cid],root,index[cid],dump_timeout(cfg))
+                    continue
+                except Exception as error:
+                    # Fail closed: no partial dump is kept; this database stops for the file copy instead.
+                    dump_fallbacks.append({'container':by_id[cid].get('Name','').lstrip('/'),'engine':service['engine'],'reason':dump_failure(error)})
+                    if visitor_start is None:visitor_start=time.time();maintenance(cfg,True);downtime_from=time.time()
             prepare_database_shutdown(service)
             docker('stop','--time',str(stop_timeout),cid)
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
-        archives={};specs=[];prepare={};scans={};labels={}
+        archives={};specs=[];prepare={};scans={};labels={};renamed={}
+        # A dumped database's data folder is left out of its mount archive; a restore loads the dump into a fresh one.
+        dumped=[str(dumps[s['container']][1]) for s in plan['services'] if s.get('dump')]
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -578,16 +703,18 @@ def capture(req,output=None):
                     source=str(holder)
                 key=snapshot_sources.get(source) if increment else None
                 snapshot=increment['work']/(key+'.snar') if key else None
+                excluded=exclusions.get(source,[])+[folder for folder in dumped if folder.startswith(source.rstrip('/')+'/')]
+                folder_only=source in dumped
                 if output is not None:
                     link=archives.get(source) if share else None
-                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot,guard),link))
+                    specs.append((target.name,None if link else source_archive_command(source,excluded,snapshot,guard,folder_only),link))
                     if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
-                    if key and not link and increment['level']:scans[target.name]=lambda found,key=key:increment['renames'].__setitem__(key,found)
+                    if key and not link and increment['level']:renamed[target.name]=key
                     archives[source]=link or target.name
                 elif share and source in archives:os.link(archives[source],target)
                 else:
                     if key:reset_snapshot(increment,key)
-                    source_archive(source,target,exclusions.get(source,[]),snapshot,guard);archives[source]=target
+                    source_archive(source,target,excluded,snapshot,guard,folder_only);archives[source]=target
                     if key and increment['level']:
                         with open(target,'rb') as written:increment['renames'][key]=archive_renames_safely(written)
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
@@ -595,12 +722,20 @@ def capture(req,output=None):
             if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None));labels['config-%d.tar'%i]=str(source)
             else:run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
         if output is not None:
+            for service in plan['services']:
+                if service.get('dump'):specs.append((service['dump']['artifact'],['cat','--',str(root/service['dump']['artifact'])],None))
             level=int(cfg.get('streamCompressLevel',1))
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
             archive=open_stream_archive(output,level)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans,labels)
+            # The inventory pass reads each archive once; the second pass must give the same bytes (SHA-256), so a key
+            # read here is a key in the package.
+            for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
+            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv(*current_runtime().save_arguments(len(saved_ids)+len(images)),*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
+            # Streamed: the plaintext dump never stays in the staging folder.
+            for service in plan['services']:
+                if service.get('dump'):(root/service['dump']['artifact']).unlink(missing_ok=True)
         captured=time.time()
     except BaseException:
         # Abandon buffered payload bytes on a failed stream. Recovery below is
@@ -623,20 +758,28 @@ def capture(req,output=None):
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
-          except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
+          except Exception:
+            reason=restart_reason(running)
+            raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json' if reason is None else 'RESTART_FAILED: '+reason)
     restarted=time.time()
     emit(stage='packing')
-    if output is None:docker('save','-o',str(root/'images.tar'),*saved_ids,*images)
+    if output is None:engine_save(root/'images.tar',*saved_ids,*images)
     snapshots=snapshot_records(increment) if increment else {}
     if increment and output is None:
         for key in increment['keys']:copy_private(increment['work']/(key+'.snar'),root/('snapshot-%s.snar'%key))
     if increment and output is not None:
         for key in increment['keys']:inventory['snapshot-%s.snar'%key]=stream_file(archive,'snapshot-%s.snar'%key,increment['work']/(key+'.snar'),snapshots[key])
-    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
+    downtime=restarted-downtime_from if downtime_from is not None else 0
+    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':downtime,'containerDowntimeSeconds':downtime,'visitorDowntimeSeconds':restarted-visitor_start if visitor_start is not None else 0,'architecture':engine_architecture(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     # Restore reads RAM folders from the container record; this list keeps backups restorable by older helpers.
     manifest['temporaryMemoryFolders']=[{'container':c.get('Name','').lstrip('/'),'destination':destination} for c in manifest['containers'] for destination,_ in temporary_mounts(c)]
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
     manifest['backupPlan']=plan if increment else v1_plan(plan)
+    if not runtime_is_default(current_runtime()):
+        # Format 3 (docs/podman-rootless.md): releases that predate it refuse it, so an older DockNest can never restore a
+        # rootless backup as root-owned rootful containers.
+        manifest['formatVersion']=3;manifest['runtime']=current_runtime().describe()
+        if current_runtime().rootless:manifest['idMap']=host_id_map(current_runtime())
     if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
     if exclusions:
         manifest['backupScope']='application-and-local-state'
@@ -645,8 +788,12 @@ def capture(req,output=None):
     if protected:manifest['protectedMounts']=protected
     if keys_left_out:manifest['protectedPaths']=keys_left_out
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
+    definition=package_run_definition(cs,images)
+    if definition:manifest['runDefinition']={name:document_record(data) for name,data in definition.items()}
     manifest['deliveryMode']='direct' if output is not None else 'staged'
-    manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
+    dumped_any=any(s.get('dump') for s in plan['services'])
+    manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'online native logical dumps, offline native shutdown evidence and declared writer quiescence' if dumped_any else 'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
+    if dump_fallbacks:manifest['onlineDumpFallbacks']=dump_fallbacks
     if increment:
         manifest['formatVersion']=2
         manifest['backupKind']='incremental' if increment['level'] else 'full'
@@ -658,7 +805,8 @@ def capture(req,output=None):
         # An increment whose archives carry directory renames ends the chain: the engine makes the next backup full.
         manifest['renamesSeen']=any(increment['renames'].values())
         if increment['reason']:manifest['fallback']={'reason':increment['reason']}
-    (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
+    document=json.dumps(manifest)
+    (root/'manifest.json').write_text(document);os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     if exclusions:
         with (root/'restore-guide.md').open('a') as guide:
@@ -669,17 +817,30 @@ def capture(req,output=None):
     if keys_left_out:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
+    hand=set(hand_placed(manifest['configurationFiles'],[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind']))
+    if hand:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(hand_steps_guide([(i,f) for i,f in enumerate(manifest['configurationFiles']) if f in hand]))
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
+    if definition:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(RUN_DEFINITION_GUIDE)
+    if dumped_any:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(DUMP_GUIDE)
     if output is not None:
-        stream_document(archive,'manifest.json',json.dumps(manifest))
+        stream_document(archive,'manifest.json',document)
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
+        for name,data in definition.items():stream_document(archive,name,data)
         archive.close();output.flush()
-    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar'))])
+    else:
+        if definition:(root/'run-definition').mkdir(mode=0o700)
+        for name,data in definition.items():(root/name).write_bytes(data);os.chmod(root/name,0o600)
+        run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('database-*.tar')),*sorted(p.name for p in root.glob('snapshot-*.snar')),*definition])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass
     # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
     if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots,'exclusions':increment['exclusions']})
-    # Hardening facts travel beside the manifest, never inside the package, so the package format is unchanged.
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts()})
+    # Hardening facts and the key proof travel beside the manifest, never inside the package, so the package format is
+    # unchanged.
+    proof=packaged_keys(key_request,key_found,root,output is not None,key_members,packaged,cfg,cs,exclusions)
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs) if runtime_is_default(current_runtime()) else None,'certificates':certificate_facts(),'routing':proxy_routes(),**({'keys':proof} if proof else {})})

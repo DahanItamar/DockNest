@@ -1,4 +1,4 @@
-// Storage page on the real app: metric tiles (Overview compact metric), By site table, short-history Growth chart, destinations grid and cards.
+// Storage page on the real app: metric tiles (Overview compact metric), By app table, short-history Growth chart, destinations grid and cards.
 // Real backup rows feed the main run; the edge cases (no history, 12 sites, one destination, S3 without capacity, errors) mock only the two Storage GET endpoints.
 // Synthetic data only; no real storage or Docker is used.
 import { chromium } from '@playwright/test';
@@ -82,7 +82,7 @@ try {
     const region = page.getByLabel('Storage report');
     await region.waitFor();
     assert.equal(await region.getByRole('heading', { name: 'By storage' }).count(), 0, label + ': the By storage card is gone');
-    assert.ok(await region.getByRole('heading', { name: 'By site' }).count(), label + ': By site card');
+    assert.ok(await region.getByRole('heading', { name: 'By app' }).count(), label + ': By app card');
     assert.ok(await region.getByRole('heading', { name: 'Growth' }).count(), label + ': Growth card');
     const tiles = region.locator('.sr-metrics .berry-metric-compact');
     assert.equal(await tiles.count(), 4, label + ': four metric tiles');
@@ -155,7 +155,8 @@ try {
   }
   { // Three destinations: two columns, and the odd last card stays a normal half-width cell.
     const targets = [sftpTarget(1, 'Storage box'), sftpTarget(2, 'Offsite box'), sftpTarget(3, 'Third box')], { context, page } = await openStorage(wide, 'dark', { report: mockReport({ targets }), targets });
-    await page.locator('.storage-card').first().waitFor();
+    await page.waitForFunction(n => document.querySelectorAll('.storage-card').length === n, targets.length);
+    await page.evaluate(() => document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))));
     const cards = page.locator('.storage-card'), a = await box(cards.nth(0)), b = await box(cards.nth(1)), c = await box(cards.nth(2));
     assert.ok(Math.abs(a.y - b.y) < 1 && b.x > a.x, 'two columns');
     assert.ok(Math.abs(c.width - a.width) < 1 && Math.abs(c.x - a.x) < 1 && c.y > a.y, 'the odd last card is a half-width cell under the first');
@@ -186,7 +187,7 @@ try {
     const { context, page } = await openStorage(wide, 'light', { report: mockReport({ sites: 1 }), targets: [] });
     const region = page.getByLabel('Storage report'); await region.waitFor();
     assert.equal(await region.locator('.sr-table tbody tr').count(), 1);
-    assert.match(await page.locator('.notice').innerText(), /Connect your first destination/);
+    assert.match(await page.locator('.alert-panel').innerText(), /Connect your first destination/);
     await context.close();
   }
   { // A report load error leaves the destinations usable.
@@ -195,5 +196,5 @@ try {
     assert.equal(await page.getByRole('button', { name: 'Add storage destination' }).count(), 1);
     await context.close();
   }
-  console.log('Storage page passed: tiles, By site, short-history chart, no history, one destination spanning, S3 without capacity, 12-site scroll, errors, light and dark, 390 px phone.');
+  console.log('Storage page passed: tiles, By app, short-history chart, no history, one destination spanning, S3 without capacity, 12-site scroll, errors, light and dark, 390 px phone.');
 } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); db.close(); await rm(directory, { recursive: true, force: true }); }

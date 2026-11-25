@@ -1,6 +1,6 @@
-# Moving a site to another server
+# Moving an app to another server
 
-Administrators move sites from the Map page (operators see the map read-only). Real moves count as validated
+Administrators move apps from the Map page (operators see the map read-only). Real moves count as validated
 only when the two-host Linux Docker integration test (`scripts/integration-move.js`, CI job `linux-integration`)
 passes (see AGENTS.md).
 
@@ -10,14 +10,14 @@ When a check says a server needs nginx, Docker, Compose or Certbot and DockNest 
 
 ## The short version
 
-1. On the Map page, drag the end of a site's line off its server and drop it on another server (with the keyboard: focus the site, press Enter, **Move to…**; on a phone: **Details**, then **Move to…**, or **Move to…** in the list). While a site is not connected, **Save changes** stays off ("Connect every site to a server to save"); **Cancel** puts the line back.
+1. On the Map page, drag the end of an app's line off its server and drop it on another server (with the keyboard: focus the app, press Enter, **Move to…**; on a phone: **Details**, then **Move to…**, or **Move to…** in the list). While an app is not connected, **Save changes** stays off ("Connect every app to a server to save"); **Cancel** puts the line back.
 2. Press **Save changes**. DockNest checks both servers and shows **Ready to move** with how long the move takes,
-   how long the site is offline and how long you can undo, or the one reason it cannot move yet.
+   how long the app is offline and how long you can undo, or the one reason it cannot move yet.
    **Advanced settings** holds the details; most people never need them.
-3. Press **Move**. DockNest copies the site, tests the copy, switches over and tells you when it is done.
+3. Press **Move**. DockNest copies the app, tests the copy, switches over and tells you when it is done.
    You can press **Cancel** until the switch.
 
-Your site stays online on the old server while the copy is made and tested. It goes offline only for the final
+Your app stays online on the old server while the copy is made and tested. It goes offline only for the final
 copy, behind a maintenance page.
 
 ## What happens during a move
@@ -28,7 +28,7 @@ copy, behind a maintenance page.
 | Backup | Takes a fresh verified backup. A move never deletes a backup. | "Backing up" |
 | Copy and test | Restores the copy on the new server, reachable only from that server, and tests it. | "Testing the copy" |
 | Wait for you (manual DNS only) | Waits until you press **Switch now**, so you choose when the short downtime happens. | "Ready to switch" |
-| Final copy | Shows the maintenance page on the old server, stops the old site, takes a final backup and starts it on the new server. | "Final copy" |
+| Final copy | Shows the maintenance page on the old server, stops the old app, takes a final backup and starts it on the new server. | "Final copy" |
 | Switch | Changes the DNS record for you (Cloudflare) or shows you the exact record to change. | The DNS record, with a copy button |
 | Done | Confirms the domain points at the new server, sets up the certificate if a certificate tool is installed. | "Done" |
 
@@ -38,23 +38,23 @@ it. It never deletes your data by itself.
 ## Cancel and switch back
 
 - **Cancel** is offered until the switch starts. Cancelling undoes everything the move created on the new server and,
-  if the old site was already stopped, starts it again.
+  if the old app was already stopped, starts it again.
 - After the switch, **Cancel** is replaced by **Switch back** (within the 7 days). Switching back shows the
   maintenance page on the new server, stops the new copy (kept, with restart off), starts the old copy with its
   original restart settings, points DNS back (automatically with Cloudflare, otherwise DockNest shows the record to
-  change) and moves the site record back. Data written on the new server after the switch is not copied back.
+  change) and moves the app record back. Data written on the new server after the switch is not copied back.
 - After 7 days DockNest asks **Remove old copy?**. It never removes anything by itself. Removing deletes the stopped
   old containers; their data folders and volumes stay unless you tick **Also delete the old data** (data still used by
-  another container is always kept). You type the site name to confirm.
+  another container is always kept). You type the app name to confirm.
 - If a step takes much longer than it should, DockNest stops it on the server, confirms it stopped, and shows **Try
   again** (and **Undo** before the switch). Until the server confirms, nothing else runs for that move.
 - Once the DNS switch has started, DockNest never undoes the move by itself: visitors may already be writing to the
   new copy. If a later step fails (certificate, finish, a lost connection), the move shows the reason with **Try
   again** or **Switch back**, and keeps the new copy and its data. If finishing fails because the old server is gone,
-  **Finish without the old server** (type the site name) completes the move without stopping the old copy; the move
+  **Finish without the old server** (type the app name) completes the move without stopping the old copy; the move
   then warns that the old copy may start again and offers **Disable old copy** for when that server is back.
 - While DockNest waits for DNS, **Cancel and go back** (the same Switch back action) stops the new copy and starts the
-  old site again. After 48 hours of waiting the move asks you to check the record. When the domain is behind
+  old app again. After 48 hours of waiting the move asks you to check the record. When the domain is behind
   Cloudflare's proxy (orange cloud), public DNS never shows your server; DockNest says so and lets you confirm the
   change yourself (**I changed it**).
 - Before rolling DockNest back to a release without moves (2.5.0 or older), finish or cancel every move. Older
@@ -62,13 +62,32 @@ it. It never deletes your data by itself.
 
 ## When a move is refused
 
-DockNest refuses a move rather than risk breaking a site. It tells you the reason in one sentence, for example:
+DockNest refuses a move rather than risk breaking an app. It tells you the reason in one sentence, for example:
 
 - "Not enough space on new-srv: needs about 7 GB, has 5 GB free."
 - "new-srv needs nginx. Install it, then try again."
 - "new-srv already has a folder /srv/shop/data. DockNest never overwrites folders."
 
 Fix the reason, then press **Save changes** again to re-check.
+
+### Owners, permissions and folders (read-only checks)
+
+The preview also asks both servers three read-only questions (ids `owner-map`, `file-mode`, `target-filesystem`; see
+docs/adr-3.0.0-keys-safe.md section 6):
+
+- **Owners and groups** (warning): Docker uses remapped user IDs (userns-remap or rootless) on either server, so the owners a
+  container sees can differ from the archive.
+- **File permissions** (warning): files under the app's folders use setuid or setgid bits, ACLs or extended attributes that the
+  new file system does not keep. The note names the first path, never file content.
+- **Target folder** (block): the folder is on a read-only, noexec or nosuid mount, or a network file system that squashes root.
+
+What a probe finds (the first two) is a warning the person must acknowledge: the review dialog shows **I checked these**, Move
+stays off until it is ticked, and the server refuses to start without `ownershipChecked: true` (409 `OWNERSHIP_CHECK_REQUIRED`).
+The preview carries `needsOwnershipCheck` and `requiresAcknowledgement` on those warnings. The target folder findings still block.
+
+A probe that cannot run (an old helper, an unreadable mount table, a failed probe file) is never treated as fine: it blocks
+with "DockNest could not check ... Update DockNest on both servers, then check again." No tick can override that block. The only thing a probe writes is one
+empty file in a private folder (the staging folder, and on a network mount the nearest existing folder), removed straight after.
 
 ## Installing missing software on the new server (optional)
 
@@ -82,9 +101,9 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
 - On other systems, and for software the system's own sources do not offer, the plain note stays and "Show command"
   shows the best known line (or none).
 - If the server is busy with a backup, restore or move, or the software is already there, nothing is installed.
-- Before offering Docker, DockNest reads the version the system's own sources offer. When a site has several
+- Before offering Docker, DockNest reads the version the system's own sources offer. When an app has several
   containers and the offered Docker is older than 28, or its version cannot be read (2.12.1), `supported` is false and
-  the check carries `install.reason`: "This server's packages offer Docker 26.1; this site needs 28 or newer. Install
+  the check carries `install.reason`: "This server's packages offer Docker 26.1; this app needs 28 or newer. Install
   Docker from Docker's own repository instead." `command` is then a comment line pointing to Docker's official
   instructions (https://docs.docker.com/engine/install/); DockNest never runs a downloaded script.
 - DockNest never installs over software from another source: if the binary exists, or the package manager lists any
@@ -106,7 +125,7 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
 Each check for these four tools that blocks a move (and the certificate note for certbot) carries
 `install: { package: "nginx"|"docker"|"compose"|"certbot", command: string, supported: boolean }`.
 `command` is the line a person would run (or a comment with Docker's documentation link), and `reason` (optional) says in
-one sentence why `supported` is false for this site. For example
+one sentence why `supported` is false for this app. For example
 `sudo apt-get update && sudo apt-get install -y --no-install-recommends nginx`; it is empty when no distribution
 package line is known. `supported` is true only for the combinations in the table. The field is absent when the
 tool is present (including an old Docker Compose) or when the server's system could not be read.
@@ -114,9 +133,9 @@ tool is present (including an old Docker Compose) or when the server's system co
 ### POST /api/servers/:id/install
 
 Body `{ "package": "nginx" | "docker" | "compose" | "certbot", "siteId"?: "<uuid>" }` and nothing else (any other
-field, including a command, answers 400). A move's install sends the site; its selected containers then decide the
-Docker need exactly as in preflight (several containers need 28), and a missing site answers 404. The server panel
-sends no site. Administrators only, CSRF token like every API write, and a re-verification within 5 minutes
+field, including a command, answers 400). A move's install sends the app; its selected containers then decide the
+Docker need exactly as in preflight (several containers need 28), and a missing app answers 404. The server panel
+sends no app. Administrators only, CSRF token like every API write, and a re-verification within 5 minutes
 (403 `REAUTH_REQUIRED`). DockNest re-reads the server first and answers 409 with a plain `error` and one of these
 `code` values: `SERVER_BUSY` (a job, a move or another install uses the server), `SERVER_UNREACHABLE`,
 `INSTALL_UNSUPPORTED`, `ALREADY_INSTALLED`. Success is `202 { "job": { "id": "..." } }`; the request is audited as
@@ -126,8 +145,8 @@ Poll `GET /api/jobs/:id` (same shape as other jobs): `type: "install"`, `status`
 `error` (one fixed sentence chosen from the helper's short failure code; unknown codes give a generic sentence; never command output or exception text), and
 `details: { serverId, package, steps: [{ name, status }] }` with the four steps `Connected`, `Package list updated`,
 `Installing <name>`, `Checking <name> works`, each `queued|running|done|failed`. Install runs are stored in their own
-table (`server_installs`, schema v7) because a job normally belongs to a site; they do not appear in the site job
-history. The worker runs an install only when no site job is running on that server. If DockNest stops during an
+table (`server_installs`, schema v7) because a job normally belongs to an app; they do not appear in the app job
+history. The worker runs an install only when no app job is running on that server. If DockNest stops during an
 install the run is marked failed ("DockNest stopped while installing"); the package tool on the server finishes on
 its own, so check the server, then save the move again to re-check.
 
@@ -136,14 +155,14 @@ its own, so check the server, then save the move again to re-check.
 
 Collapsed by default and pre-filled; most moves need no changes here.
 
-- **Ports**: if a port is taken on the new server, the site listens on the next free port instead. The site's own
+- **Ports**: if a port is taken on the new server, the app listens on the next free port instead. The app's own
   settings stay the same; only the nginx route on the new server changes.
 - **nginx**: DockNest writes one file of its own on the new server. Custom settings from the old server's nginx block
   are listed here because they are not copied.
 - **Settings that name the old server**: values in `.env` files or container settings that point at the old server
   are listed (with passwords removed). Rewriting a value is off by default and only changes the new copy.
 - **Downtime estimate**: how the estimate was calculated (last backup and restore times). If the final copy would
-  keep the site offline for more than 30 minutes, the check turns amber and the move starts only after you press
+  keep the app offline for more than 30 minutes, the check turns amber and the move starts only after you press
   **Move anyway**.
 - **Ask before switching** (off by default): the move pauses after the test so you choose when the downtime starts.
 - **Test copy**: the copy runs your real app on a copy of your data, reachable only from the new server. Outgoing
@@ -163,7 +182,7 @@ Collapsed by default and pre-filled; most moves need no changes here.
 ## How the engine keeps track (for contributors)
 
 - Each move is a row in `site_moves`; each step has a journal row in `site_move_steps` (migration 6, additive).
-  One unfinished move per site is enforced by a partial unique index.
+  One unfinished move per app is enforced by a partial unique index.
 - `src/moves/state.js` is the pure state machine: states, allowed transitions, step plan, journal records, cancel
   rules, rollback order and crash recovery. A step is journaled as running before its effect and as done after it;
   after a crash a running step is checked against the real servers and is either marked done, undone and re-run, or
@@ -182,13 +201,24 @@ Collapsed by default and pre-filled; most moves need no changes here.
   the journal lists and the `docknest.move=<id>` label confirms; refused once the move finished), `deploy-status`,
   `move-test`, `move-resume-source`, `move-retire-source`, `move-finalize-target`, `move-certificate`. Isolated restore
   shares its verify-and-unpack code and is pinned by a golden test (`remote/test_moves.py`).
-- Compose sites (one project whose files are selected in the site) deploy with the site's own Compose files plus a
+- Compose apps (one project whose files are selected in the app) deploy with the app's own Compose files plus a
   generated override (`/var/lib/docknest/moves/<move>/compose.<test|live>.yaml`: snapshot image, `ports: !override`
   with the remapped host ports, restart `no` for the test copy, DockNest labels). The user's files are never edited.
   This needs Compose 2.24 or newer on the new server; otherwise, and for single containers, containers are recreated
-  from their snapshot images with `docker create`, which copies ports, mounts, networks, extra hosts and `--init` but
-  not resource limits or log drivers. After a move, running `docker compose up` by hand without the override brings
-  the original host port back.
+  from their snapshot images with `docker create`. Since 2.16.5 the flags come from the run spec
+  (`remote/helper/runspec.py`, shared with backups), which keeps the name, restart policy (with its retry count),
+  networks and aliases, ports and `-P`, mounts, RAM folders, extra hosts, `--init`, the hostname, TTY and stdin, memory,
+  memory reservation and swap, CPU limit, CPU shares and CPU set, pids limit, ulimits, the log driver and its options
+  (`json-file`, `local` and `none` only), DNS servers, search domains and options, shm size, sysctls, extra groups and
+  the stop timeout. A test copy never publishes on every interface: its `-P` ports go to loopback ports Docker picks.
+  Nothing it used to drop may now stop the copy from starting on the new server: a CPU limit above its CPU count is
+  capped to it and a CPU set naming CPUs it lacks is left out (both named as warnings in the move preview, from the
+  new server's CPU count), and a sysctl its kernel does not have (`/proc/sys/<key>`) is left out and named in the
+  deploy result. Settings neither path recreates (devices, GPUs, a custom runtime or cgroup parent, host or shared
+  namespaces, volumes from other containers, the journald and other log drivers, block I/O and OOM settings) are
+  named as warnings in the move preview, never as a new refusal; what the preflight refused before stays refused. A
+  mount without a source or target blocks the move (the copy would lose its data). After a move, running
+  `docker compose up` by hand without the override brings the original host port back.
 - Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.
@@ -202,13 +232,19 @@ Collapsed by default and pre-filled; most moves need no changes here.
   - a non-hidden folder inside a home folder other than `~/bin` (`/home/<user>/<folder>`; also `/var/home`,
     `/var/srv` and friends on image-based systems).
 
+  A configuration file outside these locations (for example `/etc/cron.d/shop` or a systemd unit, added with the
+  restore check's **Include in backup**) no longer blocks the move: the preview names it as a note ("Put back by hand:
+  /etc/cron.d/shop"), the move leaves out exactly the files the preview named, and the backup's restore guide says
+  where to copy each one. A move never writes into `/etc`. The Compose files of the site's project, files inside bind
+  mounts and any file the preview did not name still block, as before.
+
   The path must not pass through a symbolic link on the new server. The one exception is image-based systems
   (Fedora CoreOS, Silverblue, IoT): a root-owned top-level `/home`, `/srv`, `/opt` or `/mnt` link whose target is
   `var/<name>` is accepted when `/var` and `/var/<name>` are not links themselves. Any other link on the way is
   refused. Below `/var/lib`, an application folder that holds an entry this move did not create is never written into. Anything else, such as `/tmp`, `/efi`,
-  `/nix`, `~/.config` or `~/bin`, is refused, and the site is moved by hand.
+  `/nix`, `~/.config` or `~/bin`, is refused, and the app is moved by hand.
 
-  A bind mount of password files, sudo rules or SSH or GPG keys is not copied by backups, so a move refuses a site that
+  A bind mount of password files, sudo rules or SSH or GPG keys is not copied by backups, so a move refuses an app that
   has one. `.ssh` and `.gnupg` folders inside a copied bind mount are left out of backups (2.12.1), so the moved copy
   has none; the backup's warning names them. Restored files never keep setuid or setgid bits (2.12.1). A backup that
   names the host network or another container's network, or a relative or `..` configuration path, is refused. Other
@@ -216,14 +252,14 @@ Collapsed by default and pre-filled; most moves need no changes here.
   An image archive that names any image tag is refused before `docker load`, because DockNest backups save images by
   ID.
   The maintenance folder on the new server is always DockNest's own `/var/lib/docknest/maintenance/<site>`, never an
-  existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
+  existing web root; the move journals it when it creates it and removes it on Undo. The app record follows at the
   finish and goes back on Switch back.
 - Compose: the merged configuration (`docker compose config`) is checked against allow-lists of known top-level and
   service settings; anything else (for example `sysctls`, `volumes_from`, `uts`, `cgroup`, `cgroup_parent`,
   privileged mode, host namespaces, devices, capabilities added beyond Docker's defaults, secrets or configs read from
   files, volumes with driver options, external networks or volumes, networks or mounts the backup does not hold, fixed
   addresses) is refused with the reason. A Compose project of the same name already on the new server is refused.
-- Security settings (2.14.0): the copy keeps the site's read-only root, dropped capabilities, default capabilities added
+- Security settings (2.14.0): the copy keeps the app's read-only root, dropped capabilities, default capabilities added
   back, no-new-privileges, seccomp and AppArmor profiles. Compose `cap_add` is accepted when it adds only Docker's
   default capabilities (the same rule as every other copy), `cap_drop` is accepted, and `security_opt` is accepted for
   `no-new-privileges`, `seccomp` (`unconfined` or an absolute path to a profile on the new server), `apparmor` (loaded on
@@ -231,18 +267,18 @@ Collapsed by default and pre-filled; most moves need no changes here.
   profile; each copy is inspected before it starts and refused if it is less protected than the original. Every
   Compose copy is inspected, so Compose files that add `unconfined` or `label=disable` the original lacks are refused.
   `systempaths=unconfined` and `writable-cgroups` are left out (the copy is stricter). Docker's host-wide defaults are
-  not moved: when the site runs under Docker's default AppArmor profile and the new server has no AppArmor, the
+  not moved: when the app runs under Docker's default AppArmor profile and the new server has no AppArmor, the
   preflight notes it under Advanced settings. See
-  [restore-tests.md](restore-tests.md#hardened-sites).
+  [restore-tests.md](restore-tests.md#hardened-apps).
 - Remove old copy with data deletes only read-write data folders and volumes of the old containers; never folders used
-  by another container, served by nginx on that server or named in another DockNest site's settings (compared after
+  by another container, served by nginx on that server or named in another DockNest app's settings (compared after
   following symlinks), never a home folder itself (`/home/<user>` or any user's home), and never system paths. What was kept is listed in the step result (`kept`).
 - Move jobs use the statuses `move_queued` and `move_running`, so a release without moves never claims them.
 - Step time limits come from `src/moves/state.js` (for example 60 minutes for a deploy, 5 for the test). A backup step
   past its limit fails and the move undoes itself; a server step past its limit sets `needs_attention` because its
   outcome is unknown, and the owner chooses Try again or Undo (`POST /api/moves/:id/resolve`).
 - Only bridge networks move. After Switch back the stopped new copy stays on the new server; remove it by hand
-  (`docker rm` of the containers labelled `docknest.move=<move id>`) before moving the site there again.
+  (`docker rm` of the containers labelled `docknest.move=<move id>`) before moving the app there again.
 - Cloudflare (`src/moves/cloudflare.js`): the token is checked with read calls only (token verify, zone list, a DNS
   record read per zone), sealed with the master key, stored in settings, decrypted only for a call, and never
   returned, logged, audited or journaled. All calls go to `https://api.cloudflare.com` without redirects. Edit
@@ -264,7 +300,7 @@ domain. Response 201:
 
 ```json
 {
-  "id": "uuid of the draft move (null when the site is already on that server)",
+  "id": "uuid of the draft move (null when the app is already on that server)",
   "siteId": "uuid", "targetServerId": "uuid",
   "ok": true,
   "mailBlocked": true,
@@ -290,8 +326,8 @@ domain. Response 201:
 }
 ```
 
-A preview is stored as a draft move. It blocks no other work, a newer preview for the same site replaces it, and it
-expires after an hour. `downtimeSeconds` and `estimateSeconds` are `null` until the site has a timed backup. To
+A preview is stored as a draft move. It blocks no other work, a newer preview for the same app replaces it, and it
+expires after an hour. `downtimeSeconds` and `estimateSeconds` are `null` until the app has a timed backup. To
 change Advanced settings (for example `envRewrite`), post a new preview. `needsMoveAnyway` is decided by the server
 (an estimated final copy over 30 minutes, the owner's rule); the UI shows the amber warning and sends
 `moveAnyway: true` only after the owner presses **Move anyway**.
@@ -299,9 +335,9 @@ change Advanced settings (for example `envRewrite`), post a new preview. `needsM
 ### POST /api/moves/:id/start ("Move")
 
 Needs a re-verification within the last 5 minutes (403 `REAUTH_REQUIRED` otherwise). Request:
-`{ "preflightHash": "<from the preview>", "moveAnyway"?: true }`. The server re-runs every check; if anything changed
+`{ "preflightHash": "<from the preview>", "moveAnyway"?: true, "ownershipChecked"?: true }`. The server re-runs every check; if anything changed
 it answers 409 `PREFLIGHT_CHANGED` with the fresh preview in `preview`. Long downtime without `moveAnyway` answers
-409 `MOVE_ANYWAY_REQUIRED`. Success: 202 with the move (same shape as GET).
+409 `MOVE_ANYWAY_REQUIRED`; owner or permission findings without `ownershipChecked` answer 409 `OWNERSHIP_CHECK_REQUIRED`. Success: 202 with the move (same shape as GET).
 
 ### GET /api/moves/:id (poll every few seconds)
 
@@ -324,7 +360,7 @@ it answers 409 `PREFLIGHT_CHANGED` with the fresh preview in `preview`. Long dow
 }
 ```
 
-`progress` is a whole percentage of finished steps. `dns` is the record to show with a copy button (null for a site
+`progress` is a whole percentage of finished steps. `dns` is the record to show with a copy button (null for an app
 without a domain). In `waiting_dns` DockNest checks public DNS every 15 seconds (every minute after five minutes)
 and finishes by itself. `done` covers the 7 days the old copy is kept; `retainUntil` says until when.
 
@@ -366,7 +402,7 @@ old server): stops the old copy and turns its restart off. 202 with the move.
 
 `{ "action": "retry" | "undo" | "finish-without-old-server", "confirmation"?: "<site name>" }` for a move in
 `needs_attention`; needs a recent re-verification. `actions.resolve` lists what is allowed (no Undo after the switch;
-`finish-without-old-server` only when finishing failed, with the site name). Answers 409 while a step of the move is
+`finish-without-old-server` only when finishing failed, with the app name). Answers 409 while a step of the move is
 still running on a server.
 
 ### Step results the UI shows

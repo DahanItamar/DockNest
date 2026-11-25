@@ -5,7 +5,7 @@ import {StatusPage} from '../status-page.jsx';
 import {RefreshCw} from '../icons.jsx';
 
 // Route names as the app knows them, mapped to the fixed ids of app-error.yml.
-export const ROUTE_IDS={Overview:'overview',Servers:'servers','Sites & schedules':'sites',Backups:'backups',Jobs:'jobs',Audit:'audit',Maintenance:'maintenance',Storage:'storage','DockNest backup':'self-backup','Update Center':'update-center',Access:'access','System health':'system-health'};
+export const ROUTE_IDS={Overview:'overview',Servers:'servers','Apps & Schedules':'sites',Backups:'backups',Jobs:'jobs',Audit:'audit',Maintenance:'maintenance',Storage:'storage','Self Backup':'self-backup','Update Center':'update-center',Access:'access','System health':'system-health'};
 export const routeId=route=>ROUTE_IDS[route]||'other';
 
 // Full-screen 500 overlay (status-page.css, z-index 2000): only for the route-level boundary (area "page"), the only one today.

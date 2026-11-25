@@ -61,10 +61,10 @@ export function SiteStorageDialog({client,site,siteRetention,onClose,onSaved,onS
     <input type="number" inputMode="numeric" min="1" max="365" step="1" aria-label={'Backups to keep on copy '+(index+1)} value={copy.retention} onChange={event=>change(copy.key,{retention:event.target.value})}/>
     <IconButton label={'Remove copy '+(index+1)} icon={X} onClick={()=>{setError(null);setCopies(list=>list.filter(item=>item.key!==copy.key))}}/>
    </div>)}
-   <p className="t-caption cp-note">Empty keeps the same count as the site.</p>
+   <p className="t-caption cp-note">Empty keeps the same count as the app.</p>
   </div>}
   {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title={error.reason}>{error.action}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy||guard.waiting}>{busy?'Saving…':'Save'}</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy||guard.waiting}>{busy?'Saving…':'Save'}</button></div>
  </form>;
 }

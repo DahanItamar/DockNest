@@ -47,7 +47,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
  const [values,setValues]=useState(initial),[name,setName]=useState(()=>connection?.name||(item?'My '+(item.id==='webhook'?'webhook':item.label):'')),[replacing,setReplacing]=useState(()=>new Set());
  const [busy,setBusy]=useState(false),[error,setError]=useState(null),[result,setResult]=useState(null),[testing,setTesting]=useState(false),[customLang,setCustomLang]=useState(false);
  const readOnly=(edit&&connection.editable===false)||(!!item?.adminOnly&&role!=='admin');
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();setTimeout(()=>(edit?nameRef.current:d?.querySelector('.cx-combo'))?.focus(),0);return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();const first=()=>(edit?nameRef.current:d?.querySelector('.cx-combo'))?.focus();first();return()=>{if(d?.open)d.close()}},[]);
  // A new provider starts from its own defaults; the name follows the provider until the user types one.
  function pickProvider(id){const p=providers.find(x=>x.id===id);setProviderId(id);setResult(null);setError(null);setReplacing(new Set());setCustomLang(false);
   const next={};for(const f of p?.fields||[])if(!f.secret)next[f.key]=text(prefill?.[f.key]??defaultOf(f));setValues(next);
@@ -130,7 +130,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
    <div role="status" aria-live="polite" className="cx-result-box">{result&&<p className={'cx-result '+(result.ok?'ok':'bad')}>{result.ok?<IconCircleCheck size={16} stroke={2} aria-hidden="true"/>:<IconCircleX size={16} stroke={2} aria-hidden="true"/>}<span>{result.text}</span></p>}</div>
    {error&&<AlertPanel variant="error">{error.text}</AlertPanel>}
    {guard.box}
-   <div className="modal-foot"><span className="t-caption rt-why" role="status">{why}</span><button type="button" onClick={onClose}>{readOnly?'Close':'Cancel'}</button><button type="button" disabled={!item||missing||testing||busy||guard.waiting} onClick={test}>{testing?'Sending…':'Send test'}</button>{!readOnly&&<button type="submit" className="primary" disabled={missing||busy||guard.waiting}>{busy?'Saving…':'Save'}</button>}</div>
+   <div className="modal-foot"><span className="t-caption rt-why" role="status">{why}</span><button className="link-action" type="button" onClick={onClose}>{readOnly?'Close':'Cancel'}</button><button className="link-action" type="button" disabled={!item||missing||testing||busy||guard.waiting} onClick={test}>{testing?'Sending…':'Send test'}</button>{!readOnly&&<button type="submit" className="primary" disabled={missing||busy||guard.waiting}>{busy?'Saving…':'Save'}</button>}</div>
   </form>
  </dialog>;
 }
@@ -138,7 +138,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
 // Delete a Connection: refused while a node uses it, with the nodes named. The API checks again (a node made meanwhile).
 export function DeleteConnectionDialog({client,connection,onClose,onDeleted}){
  const ref=useRef(null),guard=useReauth(client),[busy,setBusy]=useState(false),[error,setError]=useState(''),used=(connection.usedBy||[]).map(n=>n.name);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('.modal-foot button')?.focus();return()=>{if(d?.open)d.close()}},[]);
  async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.remove(connection.id);await onDeleted()},e=>setError(e.code==='CONNECTION_IN_USE'?e.message:e.message||'This connection could not be deleted.'));setBusy(false)}
  return <dialog ref={ref} className="cx-dialog cx-confirm" aria-labelledby="cx-delete-title" onCancel={e=>{e.preventDefault();onClose()}}>
   <div className="modal-head"><h2 id="cx-delete-title" tabIndex={-1}>Delete {connection.name}?</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>
@@ -147,7 +147,7 @@ export function DeleteConnectionDialog({client,connection,onClose,onDeleted}){
     :<p>The login is removed from DockNest. If it leaked, also revoke it at the provider.</p>}
    {error&&<AlertPanel variant="error">{error}</AlertPanel>}
    {guard.box}
-   <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||used.length>0} onClick={go}>Delete</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||used.length>0} onClick={go}>Delete</button></div>
   </div>
  </dialog>;
 }

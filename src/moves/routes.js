@@ -26,7 +26,7 @@ moveRoutes.post('/', rateLimit('move-preview', 40, 10 * 60_000), handle(async (r
 }));
 moveRoutes.get('/:id', handle(async (req, res) => res.json(moveView(uuid.parse(req.params.id)))));
 moveRoutes.post('/:id/start', requireRecentAuth, rateLimit('move-start', 30, 10 * 60_000), handle(async (req, res) => {
-  const body = z.object({ preflightHash: z.string().regex(/^[0-9a-f]{64}$/), moveAnyway: z.boolean().default(false) }).strict().parse(req.body);
+  const body = z.object({ preflightHash: z.string().regex(/^[0-9a-f]{64}$/), moveAnyway: z.boolean().default(false), ownershipChecked: z.boolean().default(false) }).strict().parse(req.body);
   res.status(202).json(await startMove(uuid.parse(req.params.id), body, req.user.id));
 }));
 moveRoutes.post('/:id/cancel', requireRecentAuth, handle(async (req, res) => res.json(cancelMove(uuid.parse(req.params.id), req.user.id))));

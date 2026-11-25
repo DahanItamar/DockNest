@@ -39,13 +39,13 @@ Caddy obtains and renews certificates and proxies to the API. Its profile is opt
 
 ## Remote preparation and maintenance
 
-Use a staging filesystem with enough space for a full local copy outside all site data paths. Inventory every writer of shared volumes and bind mounts. Configure and test the database shutdown profile, health check, local recovery watchdog, and independent site reverse proxy before production backup.
+Use a staging filesystem with enough space for a full local copy outside all app data paths. Inventory every writer of shared volumes and bind mounts. Configure and test the database shutdown profile, health check, local recovery watchdog, and independent app reverse proxy before production backup.
 
-The central dashboard proxy is distinct from each site's maintenance proxy. A maintenance page must remain available on the original site domain while the application is stopped. Required maintenance integration must block scheduled backups until verified. Manual activation and deactivation must also verify application health. Automated installation of arbitrary existing proxies is not assumed.
+The central dashboard proxy is distinct from each app's maintenance proxy. A maintenance page must remain available on the original app domain while the application is stopped. Required maintenance integration must block scheduled backups until verified. Manual activation and deactivation must also verify application health. Automated installation of arbitrary existing proxies is not assumed.
 
 ## Updates and monitoring
 
-Run `docker compose logs --tail=100 api worker` and review dashboard jobs/recovery failures. A running API does not imply a running worker or a recoverable backup. Monitor disk space, worker activity, failed jobs, and sites requiring recovery. Use one worker until concurrency and crash-recovery behavior have passed the acceptance checks. `docker compose exec worker node src/worker-status.js` (locally `npm run worker:status`) prints the worker lease, heartbeat and recovery_required jobs. It never migrates or writes rows; a closed, checkpointed database is opened immutable so no `-wal`/`-shm` files are created, and a live one reuses the existing WAL files. It exits 0 after printing status and 1 when the database is missing or not initialised.
+Run `docker compose logs --tail=100 api worker` and review dashboard jobs/recovery failures. A running API does not imply a running worker or a recoverable backup. Monitor disk space, worker activity, failed jobs, and apps requiring recovery. Use one worker until concurrency and crash-recovery behavior have passed the acceptance checks. `docker compose exec worker node src/worker-status.js` (locally `npm run worker:status`) prints the worker lease, heartbeat and recovery_required jobs. It never migrates or writes rows; a closed, checkpointed database is opened immutable so no `-wal`/`-shm` files are created, and a live one reuses the existing WAL files. It exits 0 after printing status and 1 when the database is missing or not initialised.
 
 The worker holds an expiring SQLite lease renewed every 15 seconds; a second worker waits for it instead of running. `docker compose stop` sends SIGTERM: the worker stops claiming, finishes the current job, releases the lease and exits. Compose allows 5 minutes (`stop_grace_period`) before SIGKILL. A second signal, SIGKILL or crash leaves the lease to expire 60 seconds after its last renewal; the next worker then takes over and marks any running job recovery_required, and that server accepts no new jobs until an operator reviews it. A leftover `worker.lock` from older releases is ignored with a warning and can be deleted once no older worker or migration runs.
 
@@ -53,7 +53,7 @@ Use `scripts/upgrade.sh` to upgrade. It holds new work, waits for running jobs, 
 
 ## Central-system recovery
 
-Administrators can create and download an encrypted manager recovery kit from **DockNest backup**. It uploads to the connected SFTP destination selected for site backups, retains one latest successful copy and can refresh it on a schedule. Keep the recovery passphrase and storage sign-in details separately so you can retrieve the kit after server loss. See [DockNest self-backup](docknest-self-backup.md) for contents, release requirements and fresh-server import steps.
+Administrators can create and download an encrypted manager recovery kit from **Self Backup**. It uploads to the connected SFTP destination selected for app backups, retains one latest successful copy and can refresh it on a schedule. Keep the recovery passphrase and storage sign-in details separately so you can retrieve the kit after server loss. See [Self Backup](docknest-self-backup.md) for contents, release requirements and fresh-server import steps.
 
 Keep an encrypted off-host copy of the metadata volume and a separately protected copy of `data/master.key`. The backup payloads remain on their configured remote destinations. Stop both processes before copying SQLite metadata, including WAL files, or use SQLite's supported backup mechanism. Protect the setup token and SSH credentials. Never commit these files.
 
@@ -71,7 +71,7 @@ The tool streams into a restricted temporary file and publishes output only afte
 
 The application, image, and Compose project are now named DockNest/docknest. Compose preserves legacy metadata and Caddy volume names so upgrades reuse existing state and certificates. The old local backup volume is not mounted or deleted; keep it until any legacy backups have been migrated and verified independently. The encrypted backup format, session cookie, existing remote staging paths, and existing authenticator secrets remain compatible. Newly issued authenticator QR labels use DockNest. Do not rename or delete those storage volumes during a branding update.
 
-New sites default to `/var/lib/docknest` for remote staging. Saved site configuration and legacy maintenance fallback paths are preserved; no remote directories or persistent volumes are moved automatically. The checkout remains at its current workspace path.
+New apps default to `/var/lib/docknest` for remote staging. Saved app configuration and legacy maintenance fallback paths are preserved; no remote directories or persistent volumes are moved automatically. The checkout remains at its current workspace path.
 
 ## DemoHost deployment and storage layout
 
@@ -87,7 +87,7 @@ For an existing nginx host, publish the API only on a loopback port and proxy th
 
 The Caddy setups need a Caddy 2 release whose `file_server` accepts `status` (the current documentation lists it; the `caddy:2` image is 2.11.x at the time of writing). Run `caddy validate --config <Caddyfile>` before reloading an older install.
 
-The page cannot show a countdown without a script; the browser refresh header does the retry. These proxy snippets are not exercised by the repository tests: check them once by stopping the API container and loading the site.
+The page cannot show a countdown without a script; the browser refresh header does the retry. These proxy snippets are not exercised by the repository tests: check them once by stopping the API container and loading the app.
 
 New remote backups use this hierarchy inside the selected SFTP storage root:
 
@@ -100,13 +100,13 @@ BACKUP/
     └── docknest_<manager-key-id>_2026-10-03_12-13-14Z--<backup-id>.dkit
 ```
 
-If the configured root already ends in `BACKUP`, it is reused without creating `BACKUP/BACKUP`. Names are sanitized and identifiers prevent collisions, including captures within the same UTC second. Site archives remain encrypted; `.tar.gz.enc` describes the encrypted compressed archive. Recovery kits have their own passphrase and `.dkit` format. Temporary uploads use the same filename plus `.partial` until publication succeeds. Failure cleanup and retention remove individual files, never a shared site folder.
+If the configured root already ends in `BACKUP`, it is reused without creating `BACKUP/BACKUP`. Names are sanitized and identifiers prevent collisions, including captures within the same UTC second. App archives remain encrypted; `.tar.gz.enc` describes the encrypted compressed archive. Recovery kits have their own passphrase and `.dkit` format. Temporary uploads use the same filename plus `.partial` until publication succeeds. Failure cleanup and retention remove individual files, never a shared app folder.
 
-Existing backups and recovery kits keep their recorded paths and remain accessible; there is no automatic relocation. Storage offers a metadata-backed folder tree with site download/pin controls and a separate recovery folder. It displays actual paths, includes earlier layouts, lists only DockNest-managed files, and never reorganizes unrelated files.
+Existing backups and recovery kits keep their recorded paths and remain accessible; there is no automatic relocation. Storage offers a metadata-backed folder tree with app download/pin controls and a separate recovery folder. It displays actual paths, includes earlier layouts, lists only DockNest-managed files, and never reorganizes unrelated files.
 
 ### Move existing remote files into the new tree
 
-`node --no-addons scripts/migrate-storage.js plan` reports the number of recorded remote site archives and completed remote recovery kits needing migration. It does not scan unrelated SFTP files. Local archives or local recovery kits block this command and require a separate import.
+`node --no-addons scripts/migrate-storage.js plan` reports the number of recorded remote app archives and completed remote recovery kits needing migration. It does not scan unrelated SFTP files. Local archives or local recovery kits block this command and require a separate import.
 
 After the exact release passes the deployment gate, retain the previous image and verified encrypted metadata recovery kit, stop API admission and gracefully stop the worker. Check the queue and set the deployment hold using `scripts/deployment-preflight.js hold` with both services stopped. Run `node --no-addons scripts/migrate-storage.js apply` in a one-off container with the same state, master key and storage credentials. The command holds the worker's SQLite lease, so a worker waits instead of starting during migration, and rejects active jobs, restores, downloads, recovery work and pending publications/deletions. Keep the API stopped throughout migration.
 

@@ -9,9 +9,10 @@
 import net, { BlockList, isIP } from 'node:net';
 import tls from 'node:tls';
 import dns from 'node:dns/promises';
+import { randomBytes } from 'node:crypto';
 import { classify } from './addresses.js';
 
-export const smtpLimits = Object.freeze({ totalMs: 20_000, replyBytes: 16 * 1024, connectionBytes: 64 * 1024, replyLines: 100, bodyBytes: 4096, lineBytes: 998 });
+export const smtpLimits = Object.freeze({ totalMs: 20_000, attachmentMs: 120_000, replyBytes: 16 * 1024, connectionBytes: 64 * 1024, replyLines: 100, bodyBytes: 4096, lineBytes: 998, attachmentBytes: 8 * 1024 * 1024 });
 export class SmtpError extends Error { constructor(message, code = 'smtp') { super(message); this.code = code; } }
 
 const blocked = new BlockList();
@@ -85,17 +86,24 @@ const oneLine = value => String(value).replace(/[\r\n\u0000-\u001f\u007f]/g, ' '
 export const mailbox = value => { const match = /^[^\s<>"',;:\\()[\]@]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.exec(String(value).trim()); return match && match[0].length <= 254 ? match[0] : null; };
 const encodeHeader = value => /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
 
-export function buildMessage({ from, to, subject, text, date = new Date(), id }) {
+const wrap = base64 => base64.replace(/(.{76})/g, '$1\r\n');
+// attachment: { filename, type, data: Buffer }. The file name is reduced to plain ASCII, so it can never add a header.
+export function buildMessage({ from, to, subject, text, date = new Date(), id, attachment = null }) {
   const body = String(text).replace(/\r\n?|\n/g, '\r\n').slice(0, smtpLimits.bodyBytes).split('\r\n').map(line => line.length > smtpLimits.lineBytes ? line.slice(0, smtpLimits.lineBytes) : line).join('\r\n');
   const headers = [`From: ${oneLine(from)}`, `To: ${to.map(oneLine).join(', ')}`, `Subject: ${encodeHeader(oneLine(subject).slice(0, 200))}`, `Date: ${date.toUTCString()}`, `Message-ID: <${id}@docknest.invalid>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', 'X-Auto-Response-Suppress: All'];
-  const encoded = Buffer.from(body, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
-  return headers.join('\r\n') + '\r\n\r\n' + encoded + '\r\n';
+  const encoded = wrap(Buffer.from(body, 'utf8').toString('base64'));
+  if (!attachment) return headers.join('\r\n') + '\r\n\r\n' + encoded + '\r\n';
+  // multipart/mixed: the fixed text, then one base64 attachment (docs/client-reports.md). The boundary is random, so no body can contain it.
+  const boundary = `docknest-${randomBytes(18).toString('hex')}`, filename = String(attachment.filename).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80) || 'attachment', type = /^[a-z]+\/[a-z0-9.+-]+$/.test(attachment.type) ? attachment.type : 'application/octet-stream';
+  const mixed = headers.map(line => line.startsWith('Content-Type:') ? `Content-Type: multipart/mixed; boundary="${boundary}"` : line).filter(line => !line.startsWith('Content-Transfer-Encoding:'));
+  return mixed.join('\r\n') + '\r\n\r\n' + [`--${boundary}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', encoded, `--${boundary}`, `Content-Type: ${type}; name="${filename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${filename}"`, '', wrap(Buffer.from(attachment.data).toString('base64')), `--${boundary}--`, ''].join('\r\n');
 }
 
 // config: { host, port, security: 'starttls' | 'tls', username, password, from, to: [address] }
 // With `message` null it only connects, encrypts and signs in (to check a credential), then quits without sending.
 export async function sendMail(config, message, { id = String(Date.now()), tlsOptions = {}, privateOk = false } = {}) {
-  const { subject, text } = message ?? {};
+  const { subject, text, attachment = null } = message ?? {};
+  if (attachment && attachment.data.length > smtpLimits.attachmentBytes) throw new SmtpError('Report too large to email, download it instead.', 'too-large');
   const from = mailbox(config.from), recipients = (config.to ?? []).map(mailbox);
   if (!from || (message && (!recipients.length || recipients.some(item => !item)))) throw new SmtpError('The sender or recipient address is not valid.', 'config');
   let connection, timer;
@@ -130,11 +138,11 @@ export async function sendMail(config, message, { id = String(Date.now()), tlsOp
     await connection.command(`MAIL FROM:<${from}>`, [250]);
     for (const recipient of recipients) await connection.command(`RCPT TO:<${recipient}>`, [250, 251]);
     await connection.command('DATA', [354]);
-    await connection.command(buildMessage({ from, to: recipients, subject, text, id }) + '.', [250]);
+    await connection.command(buildMessage({ from, to: recipients, subject, text, id, attachment }) + '.', [250]);
     try { connection.socket.write('QUIT\r\n'); } catch { /* The message is already accepted. */ }
   };
   try {
-    await Promise.race([run(), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new SmtpError(unreachable, 'timeout')), smtpLimits.totalMs); })]);
+    await Promise.race([run(), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new SmtpError(unreachable, 'timeout')), attachment ? smtpLimits.attachmentMs : smtpLimits.totalMs); })]);
   } catch (error) {
     if (error instanceof SmtpError) throw error;
     const tlsProblem = /certificate|self.signed|hostname|altnames|ssl|tls/i.test(`${error?.code} ${error?.message}`);

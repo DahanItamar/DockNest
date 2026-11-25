@@ -3,20 +3,28 @@ import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from './auth.js';
-import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn } from './storage.js';
+import { testStorageTarget, probeTargetCapacity, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn, parseRemote } from './storage.js';
+import { writeMode, recordWriteMode, markUnverified, releaseKept, keptSummary, holdsFiles, leftovers, recordLeftovers, forgetLeftovers } from './storage/write-mode.js';
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
+import { fetchRootFolderId } from './storage/drive-root.js';
+import { fetchAccount } from './storage/account-info.js';
+import { loadSecrets, saveSettings, settingsOf } from './storage/rclone-state.js';
+import { rcloneRoutes, rcloneView, folderView } from './storage-rclone-routes.js';
 
 export const storageTargets=Router();
 storageTargets.use(requireAdmin);
-const schema=z.object({
+storageTargets.use(rcloneRoutes);
+const connection=z.object({
  name:z.string().trim().min(1).max(100),host:z.string().regex(/^[a-zA-Z0-9_.:-]{1,253}$/),port:z.number().int().min(1).max(65535).default(23),username:z.string().regex(/^[a-zA-Z0-9_.-]{1,100}$/),
  hostKey:z.string().regex(/^(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+/]{43}=?)$/),
  authType:z.enum(['password','ssh-key']),password:z.string().min(1).max(4096).optional(),privateKey:z.string().min(50).max(30000).optional(),
  root:z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value=>value!=='/'&&!value.split('/').includes('..'),'Use a dedicated absolute storage directory.'),
- capacityBytes:z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(1000000000000),
-}).superRefine((value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});});
+}),needsCredential=(value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});};
+// Empty capacity means: use what the server reports, else 1 TB.
+const DEFAULT_CAPACITY=1000000000000;
+const schema=connection.extend({capacityBytes:z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional()}).superRefine(needsCredential),probeSchema=connection.omit({name:true}).superRefine(needsCredential);
 // S3 endpoints: HTTPS (plain HTTP only on loopback), no embedded credentials, query or fragment.
 const endpoint=z.string().trim().max(512).transform((value,ctx)=>{
  let url;try{url=new URL(value);}catch{ctx.addIssue({code:'custom',message:'Enter the S3 endpoint as a URL, for example https://s3.eu-central-1.amazonaws.com.'});return z.NEVER;}
@@ -35,13 +43,47 @@ function safe(row){
  const {credential,...rest}=row,mode=targetMode(row);
  // Main packages (a backup living only on its copies counts once, as a copy), copies held here, and recovery kits.
  const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ? AND id NOT IN (SELECT backup_id FROM backup_main_removed)').get(targetPrefix({mode,id:row.id})+'%').bytes+copyBytesOn(row.id)+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
+ if(mode==='rclone')return rcloneView(row,used);
+ if(mode==='folder')return folderView(row,used);
  if(mode==='s3'){
   // Never return the sealed access key pair; only public connection settings.
   const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');
   return {id:row.id,name:row.name,kind:'s3',status:row.status,created_at:row.created_at,last_tested_at:row.last_tested_at,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,hasCredential:Boolean(credential),trackedBytes:used};
  }
- return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used};
+ const write=writeMode(row.id);
+ return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used,writeMode:write.writeMode,writeModeCheckedAt:write.checkedAt,deletesRefusedAt:write.deletesRefusedAt,writeModeUnverifiedAt:write.unverifiedAt,unprotectedBefore:write.unprotectedBefore,keptByStorage:keptSummary(row.id,targetPrefix({mode,id:row.id}))};
 }
+// Probe files a test could not delete (src/storage/sftp.js) are listed for the owner, never retried.
+const probeRefs=(targetId,files=[])=>files.map(file=>targetPrefix({mode:'sftp',id:targetId})+file);
+// After a test of a saved SFTP destination: records the detected write mode. A destination found normal again releases
+// what it kept (retention then deletes it as usual) and gets one removal attempt for each listed leftover.
+async function settleWriteMode(targetId,result,actor){
+ if(targetMode(db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(targetId)??{})!=='sftp'||!result?.writeMode)return;
+ recordLeftovers(targetId,probeRefs(targetId,result.probeLeftovers));
+ const prefix=targetPrefix({mode:'sftp',id:targetId}),previous=recordWriteMode(targetId,result.writeMode,actor,undefined,{holdsFiles:holdsFiles(targetId,prefix)});
+ // Newly append-only while it already holds DockNest files: those are protected only once made read-only on the server.
+ if(result.writeMode==='append-only'&&previous.writeMode!=='append-only'&&writeMode(targetId).unprotectedBefore)result.olderFilesWritable=true;
+ if(result.writeMode!=='normal'||!previous.keepsFiles)return;
+ const released=releaseKept(targetId,prefix);
+ if(released.backups||released.copies)audit(actor,'storage.kept_released',targetId,released);
+ const gone=[];
+ // Straight to the adapter: a leftover that still cannot be removed stays listed without marking the destination again.
+ for(const item of leftovers(targetId)){try{const {adapter,options,value}=parseRemote(item.path);await adapter.removeFile(options,value);gone.push(item.path);}catch(error){if(error?.code===2)gone.push(item.path);}}
+ if(gone.length)forgetLeftovers(gone);
+}
+// A test that failed on a saved destination: its kept probe files are still listed. One that found it broken (deletes
+// refused, files still changeable) leaves it unverified: every file is kept and the card warns until a test passes.
+function recordFailedProbe(targetId,error,actor){
+ if(!db.prepare('SELECT 1 FROM storage_targets WHERE id=?').get(targetId))return;
+ if(error?.probeLeftovers?.length)recordLeftovers(targetId,probeRefs(targetId,error.probeLeftovers));
+ if(error?.writeMode==='broken')markUnverified(targetId,actor);
+}
+export async function testSaved(targetId,actor){
+ try{const result=await testStorageTarget(targetOptions(targetId));await settleWriteMode(targetId,result,actor);return result;}
+ catch(error){recordFailedProbe(targetId,error,actor);throw error;}
+}
+// Public shape of a test result: never the probe paths.
+const testView=result=>{const {probeLeftovers,...rest}=result;return {...rest,...(probeLeftovers?.length?{probeLeftovers:probeLeftovers.length}:{})};};
 storageTargets.get('/',(_req,res)=>res.json({targets:db.prepare('SELECT * FROM storage_targets ORDER BY created_at').all().map(safe),activeTargetId:activeStorage().id}));
 storageTargets.get('/:id/tree',(req,res)=>{
  const target=db.prepare('SELECT id,root,auth_type FROM storage_targets WHERE id=?').get(req.params.id);
@@ -68,15 +110,31 @@ storageTargets.get('/:id/tree',(req,res)=>{
  const recovery={folder:'docknest-recovery',limited:recoveryLimited,files:kits.map(row=>({id:row.id,createdAt:row.created_at,size:row.size,filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null,downloadable:row.id===latest?.id}))};
  res.json({root:target.root,managedRoot:backupRoot(target.root),limited,recovery,servers:[...servers.values()].map(server=>({...server,sites:[...server.sites.values()].map(site=>({...site,days:[...site.days.values()]}))}))});
 });
+// Pre-fills the capacity field. Nothing is saved or logged; an unreadable server answers null so the form just stays empty.
+storageTargets.post('/capacity',rateLimit('storage-probe',30),async(req,res)=>{
+ const data=probeSchema.parse(req.body),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
+ const total=await probeTargetCapacity({host:data.host,port:data.port,username:data.username,hostKey,root:data.root.replace(/\/+$/,''),...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})});
+ res.json({capacityBytes:Number.isSafeInteger(total)&&total>0?total:null});
+});
 storageTargets.post('/connect',rateLimit('storage-connect',10),async(req,res)=>{
  const data=schema.parse(req.body),targetId=id(),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
  const root=data.root.replace(/\/+$/,'');
- await testStorageTarget({host:data.host,port:data.port,username:data.username,hostKey,root,...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})});
+ const options={host:data.host,port:data.port,username:data.username,hostKey,root,...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})};
+ let result;
+ try{result=await testStorageTarget(options);}
+ catch(error){
+  // Nothing is saved, so probe files the storage kept are named in the answer (relative to the folder) and audited by count.
+  if(error?.probeLeftovers?.length){audit(req.user.id,'storage.probe_kept',null,{count:error.probeLeftovers.length});error.message+=` DockNest could not delete its ${error.probeLeftovers.length===1?'test file':'test files'} in ${root}/.docknest-probe; remove ${error.probeLeftovers.length===1?'it':'them'} on the server.`;}
+  throw error;
+ }
+ const capacityBytes=data.capacityBytes??await probeTargetCapacity(options)??DEFAULT_CAPACITY;
  const credential=seal(data.authType==='password'?data.password:data.privateKey),now=new Date().toISOString();
  transaction(()=>{
-  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,data.capacityBytes,'connected',now,now);
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,capacityBytes,'connected',now,now);
   db.prepare("INSERT OR IGNORE INTO settings VALUES('backup_storage_target',?)").run(targetId);
-  audit(req.user.id,'storage.connected',targetId,{authType:data.authType});
+  recordWriteMode(targetId,result.writeMode,req.user.id,now);
+  recordLeftovers(targetId,probeRefs(targetId,result.probeLeftovers));
+  audit(req.user.id,'storage.connected',targetId,{authType:data.authType,writeMode:result.writeMode});
  });
  res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
 });
@@ -103,7 +161,7 @@ storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
  const removed=transaction(()=>{
   const usage=destinationUsage(target.id);
   if(destinationInUse(usage)){
-   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'site':'sites'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'site copies':'sites copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
+   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'app':'apps'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'app copies':'apps copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
    return {usage,refused:`${target.name} cannot be removed: ${reasons.join('; ')}.`};
   }
   db.prepare('DELETE FROM storage_targets WHERE id=?').run(target.id);
@@ -118,14 +176,63 @@ storageTargets.post('/:id/copies/delete',requireRecentAuth,(req,res)=>{
  try{res.status(202).json(requestDestinationCopyDeletion(target.id,data,req.user.id));}
  catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});if(error.code==='last_packages')return res.status(409).json({error:error.message,code:error.code,lastPackages:error.lastPackages});throw error;}
 });
+// A cloud drive's test can take minutes when the provider rate-limits the shared sign-in app, longer than a browser request
+// should wait. It runs here on its own, the request waits up to PROBE_WAIT_MS, and the page polls GET /:id/test until it ends.
+// Other destinations keep the plain request. Finished answers are kept for 10 minutes and not repeated after being read.
+const probes=new Map();
+const probeWaitMs=()=>process.env.NODE_ENV==='test'&&/^\d{1,6}$/.test(process.env.DOCKNEST_TEST_PROBE_WAIT_MS??'')?Number(process.env.DOCKNEST_TEST_PROBE_WAIT_MS):25_000;
+function finishTest(targetId,actor,result){
+ db.prepare("UPDATE storage_targets SET status='connected',last_tested_at=? WHERE id=?").run(new Date().toISOString(),targetId);
+ audit(actor,'storage.test',targetId);
+ return testView(result);
+}
+function startProbe(targetId,actor){
+ const probe={state:'checking',startedAt:new Date().toISOString()};
+ probe.done=testSaved(targetId,actor).then(async result=>{
+  probe.result=finishTest(targetId,actor,result);probe.state='done';
+  await rememberRoot(targetId);
+ },error=>{probe.state='failed';probe.error={message:error?.expose&&error.message?error.message:'The storage test failed. Check the destination and try again.',code:error?.publicCode??null,status:error?.status>=400&&error.status<600?error.status:502};});
+ probe.done.catch(()=>{}).finally(()=>{probe.endedAt=Date.now();const timer=setTimeout(()=>{if(probes.get(targetId)===probe)probes.delete(targetId);},600_000);timer.unref?.();});
+ probes.set(targetId,probe);
+ return probe;
+}
+// A Google Drive destination made before the root folder was kept asks once, after its first passing test.
+async function rememberRoot(targetId){
+ try{
+  const settings=settingsOf(targetId);if(!settings)return;
+  // The account name is asked again after every passing test, so a destination made before it was kept (or after the
+  // owner changed accounts) shows the right one.
+  const secrets=loadSecrets(targetId),found=await fetchAccount(settings.backend,secrets?.token?.access_token);
+  if(found&&found!==settings.account)saveSettings(targetId,{account:found});
+  if(settings.backend!=='drive'||settings.rootFolderId)return;
+  const id=await fetchRootFolderId(secrets?.token?.access_token);
+  if(id)saveSettings(targetId,{rootFolderId:id});
+ }catch{/* best effort: rclone still works without it */}
+}
 storageTargets.post('/:id/test',rateLimit('storage-test',10),async(req,res)=>{
- const result=await testStorageTarget(targetOptions(req.params.id));
- db.prepare("UPDATE storage_targets SET status='connected',last_tested_at=? WHERE id=?").run(new Date().toISOString(),req.params.id);
- audit(req.user.id,'storage.test',req.params.id);res.json(result);
+ const row=db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(req.params.id);
+ if(!row||targetMode(row)!=='rclone'){
+  const result=await testSaved(req.params.id,req.user.id);
+  return res.json(finishTest(req.params.id,req.user.id,result));
+ }
+ const probe=probes.get(req.params.id)?.state==='checking'?probes.get(req.params.id):startProbe(req.params.id,req.user.id);
+ await Promise.race([probe.done.catch(()=>{}),new Promise(resolveWait=>{const timer=setTimeout(resolveWait,probeWaitMs());timer.unref?.();})]);
+ if(probe.state==='checking')return res.status(202).json({checking:true,startedAt:probe.startedAt});
+ probes.delete(req.params.id);
+ if(probe.state==='failed')return res.status(probe.error.status).json({error:probe.error.message,code:probe.error.code});
+ res.json(probe.result);
+});
+storageTargets.get('/:id/test',(req,res)=>{
+ knownTarget(req);
+ const probe=probes.get(req.params.id);
+ if(!probe)return res.json({state:'none'});
+ if(probe.state==='checking')return res.json({state:'checking',startedAt:probe.startedAt});
+ probes.delete(req.params.id);
+ if(probe.state==='failed')return res.json({state:'failed',error:probe.error.message,code:probe.error.code});
+ res.json({state:'done',result:probe.result});
 });
 storageTargets.post('/:id/use',async(req,res)=>{
- const options=targetOptions(req.params.id);
- await testStorageTarget(options);
+ await testSaved(req.params.id,req.user.id);
  transaction(()=>{
   db.prepare("INSERT INTO settings VALUES('backup_storage_target',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(req.params.id);
   audit(req.user.id,'storage.selected',req.params.id);

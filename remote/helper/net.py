@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     VERSION, diagnostic, inspect)
+from .runtime import (
+    current_runtime)
 # Mutable state lives in common and is never copied by import: PEER_CERTIFICATES, PROBE_POLICY_FALLBACKS
 # </build:header>
 def pinned_socket(addresses,port,timeout):
@@ -175,9 +177,35 @@ def public_probe(m,domains=()):
         return exchange(connection,path,{'Host':parsed.netloc,'Cache-Control':'no-cache'},time.monotonic()+10)[:2]
     finally:connection.close()
 
+HEALTHCHECK_LIMIT=30
+HEALTHCHECK_SECONDS=30
+HEALTHCHECK_TOTAL_SECONDS=60  # for one call, however many containers: 30 slow checks can never stack to 15 minutes
+def drive_podman_healthchecks(containers):
+    """Podman runs an image health check from a systemd timer of the user's session, and that timer is not there for a container that
+    DockNest stopped and started (nor under every rootless session). So DockNest runs the check itself, once per call, through the same
+    runuser/env -i path as every other engine call: `podman healthcheck run <id>`, fixed argv, an id the engine gave and that is checked
+    here. The command records its result in the container, so the ordinary inspect below sees healthy or unhealthy. Docker is untouched;
+    a failing, slow or odd answer changes nothing (the caller's own timeout still ends the wait)."""
+    runtime=current_runtime()
+    if runtime.engine!='podman' or not containers:return
+    ids=[c for c in containers if isinstance(c,str) and re.fullmatch(r'[0-9a-f]{12,64}',c)][:HEALTHCHECK_LIMIT]
+    if not ids:return
+    try:records=inspect(ids)
+    except Exception:return
+    deadline=time.monotonic()+HEALTHCHECK_TOTAL_SECONDS
+    for c in records:
+        left=deadline-time.monotonic()
+        if left<=0:return  # the rest wait for the next call; the caller's own timeout still decides
+        state=c.get('State') or {};health_state=state.get('Health')
+        if not state.get('Running') or not isinstance(health_state,dict) or health_state.get('Status') in (None,'healthy','unhealthy'):continue
+        cid=str(c.get('Id') or '')
+        if not re.fullmatch(r'[0-9a-f]{64}',cid):continue
+        try:runtime.cli('healthcheck','run',cid,timeout=max(1,min(HEALTHCHECK_SECONDS,int(left))))
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):pass  # exit 1 is an unhealthy answer; the inspect below reads it
 def health(containers,url=None,domains=(),fallback=False):
     """A policy-refused URL raises unless fallback is set; recovery paths then rely on container
     health only (the same check used when no health URL is configured) instead of waiting forever."""
+    drive_podman_healthchecks(containers)
     for c in inspect(containers) if containers else []:
         if not c['State']['Running']: return False
         if c['State'].get('Health',{}).get('Status','healthy')!='healthy': return False
@@ -226,9 +254,17 @@ def note_peer_certificate(host,sock=None,error=None):
         fact=certificate_fact(sock.getpeercert(),'tls',name)
         if fact and (name in PEER_CERTIFICATES or len(PEER_CERTIFICATES)<CERT_LIMIT):PEER_CERTIFICATES[name]=fact
     except Exception:pass
+# Why a renewal failed, as a category only (docs/domains.md, "Certificate"). The log text itself never leaves the server.
+RENEW_CATEGORIES=(('rate-limited',re.compile(r'rateLimited|too many (?:certificates|failed authorizations)',re.I)),
+    ('dns',re.compile(r'DNS problem|NXDOMAIN|SERVFAIL')),('connection-refused',re.compile(r'Connection refused',re.I)),
+    ('timeout',re.compile(r'Timeout during connect|timed out',re.I)))
+RENEW_START=re.compile(r'Processing /etc/letsencrypt/renewal/|Renewing an existing certificate')
+def renewal_category(line):
+    return next((name for name,pattern in RENEW_CATEGORIES if pattern.search(line)),None)
 def renewal_outcomes(logs=None):
-    """{certificate name: ('ok' | 'failed', log modified time)} from certbot's newest logs (the last 512 KB of up to
-    five), newest first. A run that renewed nothing ("not yet due") says nothing, so the newest run that tried decides."""
+    """{certificate name: ('ok' | 'failed', log modified time, failure category or None)} from certbot's newest logs (the
+    last 512 KB of up to five), newest first. A run that renewed nothing ("not yet due") says nothing, so the newest run
+    that tried decides. The category comes from the failure line or the lines of the same renewal before it."""
     directory=pathlib.Path(logs or LETSENCRYPT_LOGS);outcomes={}
     for index in range(CERT_LOG_FILES):
         path=directory/('letsencrypt.log'+('.%d'%index if index else ''))
@@ -238,11 +274,18 @@ def renewal_outcomes(logs=None):
                 modified=os.fstat(handle.fileno()).st_mtime
                 size=handle.seek(0,2);handle.seek(max(0,size-CERT_LOG_TAIL));text=handle.read(CERT_LOG_TAIL).decode('utf-8','replace')
         except OSError:continue
-        found={}
+        found={};category=None
         for line in text.splitlines():
+            if RENEW_START.search(line):category=None
+            category=renewal_category(line) or category
             failed=RENEW_FAILED.search(line);result=None if failed else RENEW_RESULT.search(line);match=failed or result
-            if match and LINEAGE.fullmatch(match.group(1)):found[match.group(1)]='failed' if failed or result.group(2)=='failure' else 'ok'
-        for name,state in found.items():outcomes.setdefault(name,(state,modified))
+            if not match or not LINEAGE.fullmatch(match.group(1)):continue
+            name=match.group(1)
+            # The summary at the end of a run keeps the category its renewal already recorded.
+            if failed:found[name]=('failed',category)
+            elif result.group(2)=='failure':found[name]=('failed',found[name][1] if found.get(name,('',))[0]=='failed' else category)
+            else:found[name]=('ok',None)
+        for name,(state,reason) in found.items():outcomes.setdefault(name,(state,modified,reason))
     return outcomes
 def certbot_certificates(root=None,logs=None):
     """The certbot certificates on this server, read from the public certificate files only (never a key)."""
@@ -261,12 +304,14 @@ def certbot_certificates(root=None,logs=None):
             if not fact:continue
             fact['renews']=(root/'renewal'/(name+'.conf')).is_file()
             if name in renewal:
-                state,modified=renewal[name]
+                state,modified,category=renewal[name]
                 # A failure logged before this certificate was issued was followed by a renewal that worked.
                 if state=='failed' and modified<ssl.cert_time_to_seconds(decoded['notBefore']):state='ok'
                 fact['renewal']=state
                 # Which run failed (its log file's time), so DockNest can tell a new failure from the one it already told.
-                if state=='failed':fact['renewalAt']=int(modified)
+                if state=='failed':
+                    fact['renewalAt']=int(modified)
+                    if category:fact['renewalCategory']=category
         except Exception:continue
         facts.append(fact)
     return facts
@@ -274,3 +319,17 @@ def certificate_facts():
     """What an operation's result carries: this run's probe certificates, then the certbot certificates."""
     try:return list(PEER_CERTIFICATES.values())[:CERT_LIMIT]+certbot_certificates()
     except Exception:return []
+
+def restart_reason(containers):
+    """One plain sentence for a restart that did not become healthy, read from the containers themselves, or
+    None when nothing specific shows (the caller keeps the old generic text). Names only: no environment, command or log text."""
+    try:
+        for c in inspect(containers) if containers else []:
+            name=(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12]
+            state=c.get('State') or {};health_state=state.get('Health') or {}
+            if not state.get('Running'):return '%s is not running after the restart (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status')=='starting' and not health_state.get('Log'):
+                return 'the health check of %s never started, so it cannot report healthy; a rootless Podman container needs its user session (watchdog remains armed, maintenance retained)'%name
+            if health_state.get('Status') not in (None,'healthy'):return '%s reports %s (watchdog remains armed, maintenance retained)'%(name,str(health_state.get('Status'))[:20])
+    except Exception:pass
+    return None

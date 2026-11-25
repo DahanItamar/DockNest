@@ -13,7 +13,7 @@ backups (2.12.0). The next releases, in the owner's order:
 
 | Release | Theme | Design |
 | --- | --- | --- |
-| 2.12.0 (shipped) | Incremental backups (GNU tar chains, opt-in, beta) and a provider-first Connect storage dialog | [incremental-backups.md](../incremental-backups.md) |
+| 2.12.0 (shipped) | Incremental backups (GNU tar chains, opt-in) and a provider-first Connect storage dialog | [incremental-backups.md](../incremental-backups.md) |
 | 2.12.1 (next, patch) | Safety for incremental chains and fixes, below | [incremental-backups.md](../incremental-backups.md) |
 | 2.13.0 | Top-layer-only increments and chain ZIP | [incremental-backups.md](../incremental-backups.md) |
 
@@ -31,7 +31,7 @@ backups (2.12.0). The next releases, in the owner's order:
 1. Increments that hold only the top layer.
 2. ZIP download of a whole chain.
 
-Incremental backups stay in beta until they have run as real chains for 4 weeks; then the beta label comes off.
+Incremental backups are claimed as validated once they have run as real chains for 4 weeks.
 
 The vulnerability radar was dropped by the owner on 2026-10-29 and is not planned.
 

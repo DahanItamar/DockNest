@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { installInfo, dockerNeed, MIN_DOCKER_MAJOR } from '../install-plan.js';
 import { formatBytes } from '../../shared/format-bytes.js';
+import { isRootfulDocker, runtimeRefusal } from '../runtime.js';
 
 /**
  * @typedef {{ hostIp?: string, hostPort: number, containerPort: number, protocol?: 'tcp'|'udp' }} PortBinding
@@ -14,15 +15,19 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     architecture?: string, packageBytes: number, ports?: PortBinding[], bindPaths?: string[],
  *     names?: { containers?: string[], volumes?: string[], networks?: string[] }, nginxDirectives?: string[],
  *     maintenanceReady?: boolean, env?: EnvFinding[], timings?: { backupSeconds?: number, restoreSeconds?: number },
- *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] } },
- *   source: { id: string, name: string, addresses?: string[] },
+ *     domainPaths?: { stopping: string[], viaProxy: { domain: string, proxy: string }[] },
+ *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] },
+ *     unsupported?: { container: string, settings: string[] }[], unreadableMounts?: string[],
+ *     cpuLimits?: { container: string, cpus: string|null, cpuset: string|null }[] },
+ *   source: { id: string, name: string, addresses?: string[], ownership?: { engine?: { mode: string|null }, modes?: { checked: boolean, scanned?: number, truncated?: boolean, findings?: { path: string, modes: string[] }[] } } },
  *   target: { id: string, name: string, reachable: boolean, hostKeyOk?: boolean, uid?: number, architecture?: string,
  *     dockerVersion?: string|null, composeVersion?: string|null, freeBytes: number, totalBytes?: number,
  *     usedPorts?: number[], reservedPorts?: number[], existingPaths?: { path: string, empty: boolean }[],
  *     conflicts?: { containers?: string[], volumes?: string[], networks?: string[] },
  *     nginx?: { installed: boolean, configOk?: boolean, serverNames?: string[] }, webPortOwner?: 'nginx'|'other'|null,
  *     certbot?: { installed: boolean, account?: boolean }, stagingWritable?: boolean, addresses?: string[],
- *     transferBytesPerSecond?: number, apparmorLoaded?: string[], apparmorEnabled?: boolean, seccompPresent?: string[] },
+ *     ownership?: { engine?: { mode: string|null }, filesystem?: { mounts?: object[], features?: { setid: boolean, xattr: boolean }, error?: string } },
+ *     transferBytesPerSecond?: number, apparmorLoaded?: string[], apparmorEnabled?: boolean, seccompPresent?: string[], cpuCount?: number },
  *   state: { sameServer?: boolean, busy?: boolean, archived?: boolean, deploymentHold?: boolean, activeMove?: boolean },
  *   backupStorage?: { freeBytes: number },
  *   dns: { mode: 'manual'|'cloudflare', records?: { type: 'A'|'AAAA'|'CNAME', name: string, value: string, proxied?: boolean }[] },
@@ -80,9 +85,40 @@ export function describeDuration(seconds) {
   return `about ${hours} hours`;
 }
 
+// Owner decision (docs/moving-sites.md): what a probe FOUND is a warning the person must tick "I checked these" for; a probe that
+// failed or is missing stays a block. The server refuses to start without the tick (startMove).
+const ACK = { requiresAcknowledgement: true };
 const check = (id, status, title, text, extra) => ({ id, status, title, text, ...extra });
+// The CPU limit and CPU set a server with `count` CPUs accepts; mirrors cpu_fit in remote/helper/runspec.py.
+export function cpuFit(cpus, cpuset, count) {
+  const numbers = (String(cpuset ?? '').match(/\d+/g) ?? []).map(Number);
+  return { cpus: cpus && Number(cpus) > count ? String(count) : cpus, cpuset: numbers.length && Math.max(...numbers) >= count ? null : cpuset };
+}
 // Only when the tool is missing (never for an old version) and only on a reachable target whose system was read.
 const installable = (target, name, need) => (target.os ? { install: installInfo(target, name, need) } : {});
+
+// Podman and rootless apps (docs/podman-rootless.md, decision 10). The rules a move between engines follows are judged here, so
+// the owner sees every reason; the move itself stays blocked until the move steps run in the app's engine.
+export const RUNTIME_MOVES_EXECUTABLE = false;
+const ROOTFUL = Object.freeze({ engine: 'docker', rootless: false });
+export function runtimeMoveChecks(facts, add) {
+  const { site, target } = facts, source = site.runtime ?? ROOTFUL, wanted = target.runtime ?? site.runtime ?? ROOTFUL;
+  if (isRootfulDocker(source) && isRootfulDocker(wanted)) return;  // an ordinary move: nothing here
+  if (source.engine !== wanted.engine) { add('runtime-kind', 'block', 'Container engine', 'Docker and Podman apps cannot be moved to each other in this release.'); return; }
+  const refusal = runtimeRefusal(wanted, { engines: target.engines });
+  if (refusal) add('runtime-target', 'block', 'Container engine', refusal);
+  if (wanted.rootless) {
+    const floor = target.runtimeFacts?.portFloor;
+    if (!Number.isInteger(floor)) add('runtime-ports', 'block', 'Ports', `DockNest could not check which ports ${wanted.user} may use on ${target.name}.`);
+    else {
+      const low = [...new Set((site.ports ?? []).map(binding => binding.hostPort).filter(port => port < floor))].sort((a, b) => a - b);
+      if (low.length) add('runtime-ports', 'block', 'Ports', `${wanted.user} cannot use port${low.length > 1 ? 's' : ''} ${low.join(', ')} on ${target.name} (ports below ${floor} need root). Change the app's port first.`);
+    }
+    if (target.runtimeFacts?.linger?.[wanted.user] !== true) add('runtime-linger', 'warn', 'Keeping the app running', `${wanted.user} on ${target.name} may stop the app when its last login ends. Run loginctl enable-linger ${wanted.user} there.`, ACK);
+  }
+  if (source.rootless !== wanted.rootless || source.user !== wanted.user || source.uid !== wanted.uid) add('runtime-owners', 'warn', 'Owners and groups', 'File owners are translated to the new user, and the move stops if one file has an owner that cannot be mapped.', ACK);
+  if (!RUNTIME_MOVES_EXECUTABLE) add('runtime-move', 'block', 'Moving this app', 'Moving Podman and rootless apps is not available yet in this release.');
+}
 
 /** @param {MoveFacts} facts @param {{ envRewrite?: string[] }} [options] */
 export function evaluateMove(facts, options = {}) {
@@ -92,9 +128,9 @@ export function evaluateMove(facts, options = {}) {
   const add = (...args) => checks.push(check(...args));
 
   // Eligibility comes first; if the target cannot be reached nothing else can be trusted.
-  if (state.sameServer || source.id === target.id) add('eligibility', 'block', 'Same server', `This site is already on ${target.name}.`);
+  if (state.sameServer || source.id === target.id) add('eligibility', 'block', 'Same server', `This app is already on ${target.name}.`);
   if (!target.reachable || target.hostKeyOk === false) add('eligibility', 'block', 'Server not reachable', `DockNest cannot connect to ${target.name}. Test it on the Servers page.`);
-  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'Site is busy', `${site.name} is busy with another job. Try again when it finishes.`);
+  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'App is busy', `${site.name} is busy with another job. Try again when it finishes.`);
   const reachable = !checks.some(item => item.title === 'Server not reachable');
 
   if (reachable) {
@@ -121,16 +157,54 @@ export function evaluateMove(facts, options = {}) {
     }
 
     const plan = planPorts(site.ports ?? [], [...(target.usedPorts ?? []), ...(target.reservedPorts ?? [])]);
-    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `${target.name} has no free port for this site (tried ${binding.hostPort} and the next ${PORT_SEARCH_RANGE}).`);
-    for (const entry of plan.map.filter(item => item.from !== item.to)) add('port', 'warn', 'Ports', `Port ${entry.from} is already used on ${target.name}. The site will listen on ${entry.to} instead. Its own settings stay the same.`, { automatic: true });
-    if (!plan.exhausted.length && plan.map.every(item => item.from === item.to)) add('port', 'ok', 'Ports', 'The site keeps its ports.');
+    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `${target.name} has no free port for this app (tried ${binding.hostPort} and the next ${PORT_SEARCH_RANGE}).`);
+    for (const entry of plan.map.filter(item => item.from !== item.to)) add('port', 'warn', 'Ports', `Port ${entry.from} is already used on ${target.name}. The app will listen on ${entry.to} instead. Its own settings stay the same.`, { automatic: true });
+    if (!plan.exhausted.length && plan.map.every(item => item.from === item.to)) add('port', 'ok', 'Ports', 'The app keeps its ports.');
     portMap = plan.map;
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${target.name} already has a folder ${folder}. DockNest never overwrites folders.`);
+    // Configuration files outside the folders a move may create (such as /etc/cron.d) are never written; they stay in the backup.
+    for (const file of site.handPlaced ?? []) add('paths', 'warn', 'Put back by hand', `Put back by hand: ${file}. DockNest does not write there during a move; copy it from the backup to the same path on ${target.name}.`);
+    // Owners, modes and file system (docs/adr-3.0.0-keys-safe.md, section 6). The helper reads them without changing anything.
+    // A fact that could not be read blocks the move ("could not be checked"); it never passes silently.
+    const sameServer = source.id === target.id;
+    const dockerBlocked = checks.some(item => item.id === 'docker' && item.status === 'block');
+    const unverified = (id, title, what, where = target.name) => add(id, 'block', title, `DockNest could not check ${what} on ${where}. Update DockNest on both servers, then check again.`);
+    const MODES = ['none', 'userns', 'rootless'], sourceMode = source.ownership?.engine?.mode, targetMode = target.ownership?.engine?.mode;
+    if (docker && !dockerBlocked && !sameServer) {
+      if (!MODES.includes(sourceMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses', source.name);
+      else if (!MODES.includes(targetMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses');
+      else if (sourceMode !== 'none' || targetMode !== 'none') add('owner-map', 'warn', 'Owners and groups', `Docker on ${sourceMode !== 'none' ? source.name : target.name} runs with remapped user IDs (${sourceMode !== 'none' ? sourceMode : targetMode}). File owners keep their numbers, but the owners the containers see on ${target.name} can differ, so the app may not read its own files. Check it after the move.`, ACK);
+    }
+    runtimeMoveChecks(facts, add);
+    const modes = source.ownership?.modes, fsFacts = target.ownership?.filesystem;
+    if (sameServer) { /* nothing moves */ }
+    else if (!modes || modes.checked !== true) unverified('file-mode', 'File permissions', "the app's file permissions", source.name);
+    else {
+      if (modes.truncated) add('file-mode', 'warn', 'File permissions', `DockNest looked at the first ${modes.scanned} files of ${site.name} only, so special permissions further on were not checked.`, ACK);
+      if (modes.findings?.length) {
+        const features = fsFacts?.features;
+        if (!features || typeof features.setid !== 'boolean' || typeof features.xattr !== 'boolean') unverified('file-mode', 'File permissions', 'which file permissions the file system keeps');
+        else {
+          const lost = modes.findings.filter(item => (item.modes ?? []).some(mode => (mode === 'setid' && !features.setid) || (mode !== 'setid' && !features.xattr)));
+          if (lost.length) add('file-mode', 'warn', 'File permissions', `${lost[0].path}${lost.length > 1 ? ` and ${lost.length - 1} more` : ''} use special permissions (setuid or setgid bits, ACLs or extended attributes) that the file system on ${target.name} does not keep. The copy may lose them.`, ACK);
+        }
+      }
+    }
+    if (sameServer) { /* nothing moves */ }
+    else if (!fsFacts || fsFacts.error || !Array.isArray(fsFacts.mounts)) unverified('target-filesystem', 'Target folder', 'the folders the app moves into');
+    else for (const mount of fsFacts.mounts) {
+      const where = `${mount.sample ?? mount.mount} on ${target.name}`;
+      if (mount.readOnly) add('target-filesystem', 'block', 'Target folder', `${where} is on a read-only file system. Make it writable, then check again.`);
+      if (mount.noexec) add('target-filesystem', 'block', 'Target folder', `${where} is on a file system mounted noexec, so programs cannot run from it. Change the mount, then check again.`);
+      if (mount.nosuid) add('target-filesystem', 'block', 'Target folder', `${where} is on a file system mounted nosuid, which ignores setuid bits. Change the mount, then check again.`);
+      if (mount.rootSquash === true) add('target-filesystem', 'block', 'Target folder', `${where} is on a network file system that does not let root own files (root squash). Allow it on the share, then check again.`);
+      else if (mount.rootSquash !== false) unverified('target-filesystem', 'Target folder', 'whether the network file system lets root own files');
+    }
     const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `${target.name} already has a ${label} called ${name}. DockNest never replaces it.`);
-    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
+    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this app by hand.`);
 
     // The copy keeps the site's read-only root, dropped capabilities and security options (remote helper hardening),
     // so a setting no copy can have, or an AppArmor profile the new server has not loaded, blocks the move here.
@@ -144,8 +218,17 @@ export function evaluateMove(facts, options = {}) {
     const seccomp = hardening?.seccomp ?? [];
     if (seccomp.length && !Array.isArray(target.seccompPresent)) add('security', 'block', 'Security settings', `DockNest could not check seccomp profiles on ${target.name}. Update DockNest on both servers, then check again.`);
     else for (const path of seccomp) if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
-    if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the site's security settings.");
+    if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the app's security settings.");
     // Docker's host-wide AppArmor default is a server setting, not the site's: noted, never enforced.
+    // docker create copies (remote/helper/runspec.py): settings it cannot recreate are named, never refused; a mount it
+    // cannot read is refused (the copy would lose its data); CPU limits are fitted to the new server, as fit_host does.
+    for (const item of docker ? site.unsupported ?? [] : []) add('settings', 'warn', 'Container settings', `${item.container} uses ${item.settings.join(', ')}, which DockNest does not recreate on ${target.name}.`);
+    for (const name of docker ? site.unreadableMounts ?? [] : []) add('settings', 'block', 'Container settings', `${name} has a mount without a source or target, which DockNest cannot recreate. Move this app by hand.`);
+    for (const item of docker && target.cpuCount > 0 ? site.cpuLimits ?? [] : []) {
+      const fit = cpuFit(item.cpus, item.cpuset, target.cpuCount);
+      if (fit.cpus !== item.cpus) add('settings', 'warn', 'Container settings', `${item.container} may use ${item.cpus} CPUs, but ${target.name} has ${target.cpuCount}. The copy may use ${fit.cpus}.`);
+      if (fit.cpuset !== item.cpuset) add('settings', 'warn', 'Container settings', `${item.container} runs on CPUs ${item.cpuset}, which ${target.name} does not have. The copy may run on any CPU.`);
+    }
     if (hardening?.hostAppArmor?.length && target.apparmorEnabled === false) add('security', 'info', 'AppArmor', `${site.name} runs under the ${hardening.hostAppArmor.join(', ')} AppArmor profile on ${source.name} by default. ${target.name} has no AppArmor, so the copy runs without it.`, { advanced: true });
 
     const nginx = target.nginx ?? { installed: false };
@@ -180,6 +263,13 @@ export function evaluateMove(facts, options = {}) {
   else if (source.addresses?.length && !a.some(record => source.addresses.includes(record.value)) && !cname.length) add('dns', 'warn', 'DNS', `${primary} does not currently point to ${source.name}; check DNS before you switch.`);
   if (aaaa.length) add('dns', 'warn', 'DNS', dns.mode === 'cloudflare' ? `${primary} also has an IPv6 (AAAA) record. DockNest changes only the IPv4 record; update the IPv6 record yourself.` : `${primary} also has an IPv6 (AAAA) record. Change it too when you switch.`, { advanced: true });
 
+  // Every domain that stops working (docs/domains.md, "Move"): a warning, never a block. A domain another server's proxy
+  // sends here is its own warning, because the move does not change that proxy.
+  const stopping = site.domainPaths?.stopping ?? [];
+  if (stopping.length === 1) add('domains', 'warn', 'Domains', `${stopping[0]} stops working until DNS points to ${target.name}.`);
+  else if (stopping.length) add('domains', 'warn', 'Domains', `${stopping.length} domains stop working until DNS points to ${target.name}: ${stopping.join(', ')}.`);
+  for (const item of site.domainPaths?.viaProxy ?? []) add('domains', 'warn', 'Domains', `${item.domain} reaches ${site.name} through the proxy on ${item.proxy}. The move does not change that proxy, so point it to ${target.name} after the move.`);
+
   // Honest downtime: the site is offline during the final sync.
   const seconds = estimateDowntime(facts);
   // Owner decision: long downtime is not refused. It is an amber warning the owner must accept with "Move anyway".
@@ -190,10 +280,11 @@ export function evaluateMove(facts, options = {}) {
 
   const blocks = checks.filter(item => item.status === 'block'), warnings = checks.filter(item => item.status === 'warn');
   const needsMoveAnyway = checks.some(item => item.requiresConfirmation);
+  const needsOwnershipCheck = checks.some(item => item.status === 'warn' && item.requiresAcknowledgement);
   const verdict = blocks.length ? 'blocked' : warnings.length ? 'ready-with-notes' : 'ready';
   const sentence = blocks.length ? blocks[0].text
     : `${site.name} is ready to move to ${target.name}. It stays online while the copy is tested${downtime ? `; expected downtime is ${downtime.text}` : ''}.`;
-  return { verdict, canStart: !blocks.length, needsMoveAnyway, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
+  return { verdict, canStart: !blocks.length, needsMoveAnyway, needsOwnershipCheck, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
@@ -203,8 +294,10 @@ export function evaluateMove(facts, options = {}) {
 export function preflightHash(result, options = {}) {
   const canonical = value => Array.isArray(value) ? value.map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const material = {
-    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway,
+    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck,
     blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
+    // The owner and permission notes behind "I checked these": a new or different note needs a fresh review and tick.
+    acknowledged: result.details.checks.filter(item => item.status === 'warn' && item.requiresAcknowledgement).map(({ id, text }) => ({ id, text })),
     portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
     env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
     options,

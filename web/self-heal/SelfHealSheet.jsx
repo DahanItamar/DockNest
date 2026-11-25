@@ -1,15 +1,16 @@
 import React,{useEffect,useId,useState} from 'react';
 import {Sheet} from '../map/MoveFlow.jsx';
-import {AlertPanel,StatusLabel} from '../system.jsx';
+import {AlertPanel,EmptyState,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {RefreshCw} from '../icons.jsx';
 import {notWatching,WINDOWS,DEFAULT_RESTARTS,DEFAULT_WINDOW,MIN_RESTARTS,MAX_RESTARTS,validRestarts,RESULTS,rows,timeOf,saveError,windowLabel} from './model.js';
 import './self-heal.css';
+import {isRootful,UNSUPPORTED_NOW} from '../runtime-ui.js';
 
 const SESSION='Your session ended. Sign in again.';
 function Restarts({events,narrow,more,onMore,moreBusy}){
  const list=rows(events);
- if(!list.length)return <div className="data-table-wrap"><div className="empty sh-empty"><span className="empty-icon"><RefreshCw size={28} stroke={1.75} aria-hidden="true"/></span><h3>No restarts yet</h3></div></div>;
+ if(!list.length)return <div className="data-table-wrap"><EmptyState className="sh-empty" icon={RefreshCw} title="No restarts yet"/></div>;
  const result=e=>{const r=RESULTS[e.kind];return <StatusLabel state={r.state}>{r.label}</StatusLabel>};
  const why=e=>(e.kind==='skipped'||e.kind==='restart_failed')&&e.reason?<small className="sh-reason">{e.reason}</small>:null;
  const key=e=>e.id||e.at+e.container;
@@ -33,8 +34,8 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
   return()=>{alive=false};
  },[client,site.id,tries]);
  const title='Self-heal',label='map-selfheal-title',cls='dialog-edge sh-sheet';
- if(loadError)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setLoadError('');setData(null);setTries(x=>x+1)}}>Try again</button></>}><AlertPanel variant="error" title="Could not load">{loadError}</AlertPanel></Sheet>;
- if(!data)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<button type="button" onClick={onClose}>Cancel</button>}><div className="sh-load" role="status" aria-live="polite"><StatusLabel state="running">Loading…</StatusLabel></div></Sheet>;
+ if(loadError)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setLoadError('');setData(null);setTries(x=>x+1)}}>Try again</button></>}><AlertPanel variant="error" title="Could not load">{loadError}</AlertPanel></Sheet>;
+ if(!data)return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={<button className="link-action" type="button" onClick={onClose}>Cancel</button>}><div className="sh-load" role="status" aria-live="polite"><StatusLabel state="running">Loading…</StatusLabel></div></Sheet>;
  // A site that was never switched on has no watched list yet, so "no health check" is known from the server's answer: the stream reason, a static site, or a 422 on save.
  const canEdit=data.canEdit===true,noHc=data.available===false||data.stream?.reason==='no_healthcheck'||noHcSeen,locked=!canEdit||noHc;
  const found=(Array.isArray(data.watched)?data.watched:[]).filter(w=>w.found===true);
@@ -53,7 +54,7 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
   try{await client.save(site.id,{enabled,maxRestarts:validRestarts(count)?Number(count):DEFAULT_RESTARTS,windowMinutes});onSaved?.(enabled?'Self-heal saved.':'Self-heal is off.')}
   catch(e){if(e.status===401&&onSessionExpired){onSessionExpired();return}if(e.status===401){setError({title:'Signed out',text:SESSION});return}if(e.code==='NO_HEALTHCHECK'){setNoHcSeen(true);setEnabled(false);return}setError(saveError(e))}finally{setBusy(false)}
  }
- return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={canEdit?<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'Saving…':'Save'}</button></>:<button type="button" onClick={onClose}>Close</button>}>
+ return <Sheet title={title} labelId={label} className={cls} fixedHead onClose={onClose} actions={canEdit?<><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>{busy?'Saving…':'Save'}</button></>:<button type="button" onClick={onClose}>Close</button>}>
   <div className="sb-switch-row sh-switch">
    <span className="sb-switch-text"><span id={on} className="sb-switch-label">Restart unhealthy containers</span></span>
    <button type="button" role="switch" className="switch" aria-checked={enabled&&!noHc} aria-labelledby={on} disabled={locked} onPointerDown={e=>e.preventDefault()} onClick={()=>{setError(null);setEnabled(v=>!v)}}></button>
@@ -66,6 +67,7 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
     <select className="sh-window" aria-label="Time window" value={windowMinutes} disabled={fieldsOff} onChange={e=>{setError(null);setWindow(Number(e.target.value))}}>{options.map(([m,l])=><option key={m} value={m}>{l}</option>)}</select>
    </div>
   </div>
+  {site.config?.runtime&&!isRootful(site.config.runtime)&&<AlertPanel variant="info" title="Not available for this engine yet">{UNSUPPORTED_NOW} Self-heal works for apps on rootful Docker.</AlertPanel>}
   {noHc?<AlertPanel variant="warning">No container has a health check. Add one in Compose.</AlertPanel>:enabled&&notWatching(data.stream)?<AlertPanel variant="warning">{notWatching(data.stream)}</AlertPanel>:<AlertPanel variant="info">Only containers with a health check. {data.note}</AlertPanel>}
   {enabled&&!noHc&&!notWatching(data.stream)&&found.length>0&&<p className="t-caption sh-watched">Watching {found.map((w,i)=><React.Fragment key={w.name}>{i>0&&', '}<code>{w.name}</code></React.Fragment>)}</p>}
   {error&&<AlertPanel variant="error" title={error.title}>{error.text}</AlertPanel>}

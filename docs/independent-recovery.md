@@ -30,14 +30,14 @@ Validate recovery on a clean host with the original manager unavailable. Reconne
 
 ## Restoring an incremental chain
 
-An incremental backup depends on the packages before it. You need only the recovery kit and a copy of the site's
+An incremental backup depends on the packages before it. You need only the recovery kit and a copy of the app's
 storage folder (DockNest itself, its database and **Download chain** are not needed). Run these as root on a Linux host
 with GNU tar, Node 24 and Python 3; the full steps and what each one checks are in
 [incremental-backups.md](incremental-backups.md#recovery-without-docknest).
 
 1. Restore the kit into a new folder (above). It holds `master.key`, `recovery/decrypt-backup.js` and
    `recovery/helper.py`.
-2. Copy the site's `backup_<time>--<backup ID>.tar.gz.enc` files from storage into one local folder.
+2. Copy the app's `backup_<time>--<backup ID>.tar.gz.enc` files from storage into one local folder.
 3. Check and decrypt the chain of the backup you want:
    `node recovery/decrypt-backup.js --chain <copy>/backup_<time>--<ID>.tar.gz.enc master.key <new empty folder>`.
    It finds the chain from the sealed manifests and verifies every file's checksum, every authentication tag and every
@@ -52,6 +52,12 @@ match is a reason to stop. Extracting by hand is described in the restore guide 
 helper, which also handles a symlink later replaced by a folder and two folders that swap names.
 
 Check paths in every archive as for a full backup, including directory-listing entries.
+
+## Restoring a database dump
+
+A database that took an [online dump](online-dumps.md) has an empty data folder in the package and its dump in
+`database-I.tar`. Follow "Database dumps" in the package's `restore-guide.md` (the Recovery Guide prints it) before the
+app starts.
 
 ## Independent protected copies
 

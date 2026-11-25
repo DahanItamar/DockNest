@@ -15,6 +15,7 @@ import { db, id, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, jobRunners, claimHooks, claimJob, siteInfo, movingSite } from '../engine.js';
 import { emit } from '../alerts/delivery.js';
+import { hasForeignRuntime } from '../runtime.js';
 import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, RETRYABLE, REASONS, reasonText, timing } from './limits.js';
 
 // Clock, SSH and timers; tests replace members.
@@ -48,7 +49,7 @@ function record(event) {
 }
 // Attempts in the window: restarts, failed restarts and retryable attempts that never reached Docker.
 const restartsSince = (siteId, container, sinceMs) => db.prepare(`SELECT COUNT(*) AS n,MAX(at) AS last,MIN(at) AS first FROM self_heal_events WHERE site_id=? AND container=? AND at>? AND (kind IN ('restarted','restart_failed') OR (kind='skipped' AND reason IN (${[...RETRYABLE].map(() => '?').join(',')})))`).get(siteId, container, iso(sinceMs), ...RETRYABLE);
-const settleEnds = (siteId, nowMs) => { const last = db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL").get(siteId)?.at; return last ? Date.parse(last) + timing.settleMs - nowMs : 0; };
+const settleEnds = (siteId, nowMs) => { const last = db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test','domain-check') AND finished_at IS NOT NULL").get(siteId)?.at; return last ? Date.parse(last) + timing.settleMs - nowMs : 0; };
 const activeHealJob = (siteId, container) => db.prepare("SELECT id FROM jobs WHERE site_id=? AND type='self-heal' AND status IN ('heal_queued','heal_running') AND json_extract(details,'$.container')=?").get(siteId, container);
 const siteNames = siteId => db.prepare('SELECT s.name AS site,s.server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(siteId);
 const zoneFor = siteId => { try { return db.prepare('SELECT timezone FROM policies WHERE site_id=?').get(siteId)?.timezone || 'UTC'; } catch { return 'UTC'; } };
@@ -62,6 +63,8 @@ function inMaintenance(siteId) {
 // Why a restart of this site must wait now, or null. Used by the tick (to record the wait once) and at claim time.
 export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) return 'removed';
+  // Self-heal restarts through rootful Docker only (docs/podman-rootless.md): an app in another engine is never touched.
+  if (hasForeignRuntime(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId)?.config)) return 'removed';
   if (deploymentHeld(db)) return 'deployment_hold';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND id IS NOT ? AND status IN ('running','recovery_required','move_running','edit_running','edit_waiting','heal_running')").get(siteId, ownJobId)) return 'site_busy';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','move_queued','edit_queued')").get(siteId)) return 'work_queued';
@@ -69,7 +72,7 @@ export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare('SELECT 1 FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)) return 'site_busy';
   if (movingSite(siteId)) return 'moving';
   if (inMaintenance(siteId)) return 'maintenance';
-  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';
+  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test','domain-check') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';
   return null;
 }
 
@@ -146,7 +149,7 @@ export function cancelRechecks() { for (const timer of rechecks.values()) healCl
 // ---------- the tick ----------
 export function tickSelfHeal(nowMs = healClock.now()) {
   for (const { site_id: siteId } of db.prepare('SELECT site_id FROM self_heal_settings WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all()) {
-    try { tickSite(siteId, nowMs); } catch (error) { console.error(`Self-heal tick failed for a site: ${error.code ?? error.name}`); }
+    try { tickSite(siteId, nowMs); } catch (error) { console.error(`Self-heal tick failed for an app: ${error.code ?? error.name}`); }
   }
 }
 function tickSite(siteId, nowMs = healClock.now()) {
@@ -220,6 +223,7 @@ export async function executeHealJob(job) {
   const { container, containerId } = details;
   let site, server;
   try { ({ site, server } = siteInfo(job.site_id)); } catch { finishHeal(job.id, 'failed', 'failed', { ...details, outcome: 'skipped', reason: 'removed' }, REASONS.removed); return; }
+  if (hasForeignRuntime(site.config)) { finishHeal(job.id, 'failed', 'failed', { ...details, outcome: 'skipped', reason: 'removed' }, REASONS.removed); return; }
   const base = { siteId: site.id, serverId: server.id, container, containerId, jobId: job.id };
   let result = null;
   try {

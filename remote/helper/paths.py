@@ -16,6 +16,8 @@ PROTECTED_CONTENT=tuple(PROTECTED_FILES)+PROTECTED_TREES+('/etc/ssh','/etc/sudoe
 # Per-user key folders: an entry with one of these names is never captured, wherever it is (a /home/<user> bind mount
 # would otherwise carry ~/.ssh and ~/.gnupg). Only private key stores; tokens such as ~/.aws stay application data.
 PROTECTED_NAMES=('.ssh','.gnupg')
+# A path the API accepts in a site's file lists (src/server.js linuxPath).
+SITE_PATH=re.compile(r'/[a-zA-Z0-9_./-]+')
 def lexical(value):
     # The helper runs on Linux; the separator swap only lets the unit tests run on a Windows workstation.
     path=posixpath.normpath(str(value).replace(os.sep,'/'))
@@ -160,7 +162,9 @@ def exclude_options(source,excluded=(),guard=False):
     if guard:options+=['--no-wildcards','--no-anchored',*('--exclude='+name for name in PROTECTED_NAMES)]
     return options
 
-def source_archive(source,target,excluded=(),snapshot=None,guard=False):
+# folder_only: the archive holds the source folder itself (owner, mode, ACLs, xattrs) and none of its contents. A
+# database that took an online dump keeps its data folder this way: a restore loads the dump into it.
+def source_archive(source,target,excluded=(),snapshot=None,guard=False,folder_only=False):
     if snapshot is not None:
         # Incremental archives always use the POSIX format: GNU-format incremental headers keep atime/ctime where
         # ustar keeps the name prefix, so the restore path checks would read different names than GNU tar extracts.
@@ -168,11 +172,12 @@ def source_archive(source,target,excluded=(),snapshot=None,guard=False):
         run(command);return
     source=pathlib.Path(source)
     options=exclude_options(source,excluded,guard)
+    if folder_only:options=['--no-recursion']
     run(['tar','--xattrs','--acls','--numeric-owner',*options,'-cpf',str(target),'-C',str(source.parent),'--',source.name])
 
-def source_archive_command(source,excluded=(),snapshot=None,guard=False):
+def source_archive_command(source,excluded=(),snapshot=None,guard=False,folder_only=False):
     source=pathlib.Path(source)
-    options=exclude_options(source,excluded,guard)
+    options=['--no-recursion'] if folder_only else exclude_options(source,excluded,guard)
     if snapshot is not None:options=['--listed-incremental='+str(snapshot),*options]
     # atime changes when the first pass reads data; ctime is not restored.
     return ['tar','--format=posix','--pax-option=delete=atime,delete=ctime,exthdr.name=%d/PaxHeaders/%f','--xattrs','--acls','--numeric-owner',*options,'-cpf','-','-C',str(source.parent),'--',source.name]

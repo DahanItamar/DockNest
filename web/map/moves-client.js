@@ -4,7 +4,7 @@ export function createMovesClient(api){
  return {
   // Stores a draft move and returns the verdict. options: {envRewrite:[key], askBeforeSwitch, dnsMode:'manual'}
   preview:(siteId,targetServerId,options)=>api('/moves',{siteId,targetServerId,...(options?{options}:{})}),
-  start:(moveId,{preflightHash,moveAnyway})=>api('/moves/'+id(moveId)+'/start',{preflightHash,...(moveAnyway?{moveAnyway:true}:{})}),
+  start:(moveId,{preflightHash,moveAnyway,ownershipChecked})=>api('/moves/'+id(moveId)+'/start',{preflightHash,...(moveAnyway?{moveAnyway:true}:{}),...(ownershipChecked?{ownershipChecked:true}:{})}),
   cancel:moveId=>api('/moves/'+id(moveId)+'/cancel',{}),
   // gate: 'owner-switch' (Switch now) or 'dns' (Check DNS now)
   proceed:(moveId,gate)=>api('/moves/'+id(moveId)+'/continue',{gate}),
@@ -29,10 +29,13 @@ export const BUSY_WORD=new Set(['cancelling','rolling_back','switching_back']);
 export const why=p=>p?.blockers?.[0]||p?.sentence||'This move is not possible right now.';
 export const blocked=p=>!p.ok||p.verdict==='blocked';
 export const warningText=w=>typeof w==='string'?w:w?.text||'';
+// The owner and permission notes an "I checked these" tick covers; a preview with other notes needs a new tick.
+export const ackNotes=p=>JSON.stringify((p?.warnings||[]).filter(w=>w?.requiresAcknowledgement).map(w=>[w.id,w.text]));
 export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(s<60)return s+' s';const m=Math.round(s/60);return m===1?'1 minute':m+' minutes'};
 // Plain sentences for the codes the screens react to. Anything else keeps the server's own sentence.
-export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your site will be offline for a long time. Tick the box to continue.'
- :e?.code==='SITE_MOVING'?'This site is already being moved. Wait for that move to finish.'
+export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your app will be offline for a long time. Tick the box to continue.'
+ :e?.code==='OWNERSHIP_CHECK_REQUIRED'?'Check the owner and file permission notes, then tick "I checked these" to continue.'
+ :e?.code==='SITE_MOVING'?'This app is already being moved. Wait for that move to finish.'
  :e?.message||'Something went wrong.';
 export const PACKAGE_NAME={nginx:'nginx',docker:'Docker',compose:'Compose',certbot:'Certbot',git:'Git'};
 // Preflight checks that offer an install: {id,title,text,install:{package,command,supported}}

@@ -1,8 +1,9 @@
 import React,{createContext,useContext,useEffect,useMemo,useRef,useState} from 'react';
-import {IconBrandGithub,IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconAlertCircle,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
+import {IconBrandGithub,IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
 import {createPortal} from 'react-dom';
 import {excerptFrom} from './redact.js';
 import {createFactsLoader,reportAllowed} from './access.js';
+import {AlertPanel} from '../system.jsx';
 import './report.css';
 
 // Who is signed in and the coarse install facts every report adds (docs/update-center.md section 13). The values are
@@ -17,7 +18,7 @@ export function ReportProvider({api,user,children}){
 }
 export const useReportContext=()=>useContext(ReportContext);
 
-const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
+const NEVER=['Server and app names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
 export const PUBLIC_WARNING='Issues on the DockNest repository are public and linked to your GitHub account. Anyone can read what you share.';
 
 // The review dialog: the exact title and values that will be sent, then GitHub in a new tab (no opener, no referrer).
@@ -54,7 +55,7 @@ export function ReviewDialog({build,facts,summary,excerptSource,excerptLabel='In
     <p className="t-caption rp-server-note">DockNest{'’'}s server sends nothing. Your browser opens a pre-filled GitHub form; nothing is posted until you submit it there.</p>
    </section>
   </div>
-  <div className="rp-note" role="note"><IconAlertCircle size={20} stroke={2} aria-hidden="true"/><span>{PUBLIC_WARNING}</span></div></div>
+  <div className="rp-note"><AlertPanel variant="warning">{PUBLIC_WARNING}</AlertPanel></div></div>
   <footer className="rp-foot">
    <button type="button" onClick={onClose}>Cancel</button>
    {report?<a className="button primary rp-open" href={report.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={()=>setTimeout(onClose,0)}><IconBrandGithub size={18} stroke={1.75} aria-hidden="true"/>Open GitHub<IconExternalLink size={16} stroke={2} aria-hidden="true"/><span className="sr-only"> (opens a new tab)</span></a>:<button type="button" className="primary" disabled><IconBrandGithub size={18} stroke={1.75} aria-hidden="true"/>Open GitHub</button>}

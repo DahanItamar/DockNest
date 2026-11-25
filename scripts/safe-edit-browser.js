@@ -75,7 +75,7 @@ const json=(route,body,status=200)=>route.fulfill({status,json:body});
 let browser;const errors=[];
 
 async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
- const context=await browser.newContext({viewport:{width,height:width<500?844:800},reducedMotion:'reduce',colorScheme:scheme});
+ const context=await browser.newContext({viewport:{width,height:width<500?844:1400},reducedMotion:'reduce',colorScheme:scheme});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  await context.addInitScript(()=>{const si=window.setInterval,ci=window.clearInterval;window.__iv=new Set();window.setInterval=(f,t,...a)=>{const id=si(f,t,...a);if(t===3000)window.__iv.add(id);return id};window.clearInterval=id=>{window.__iv.delete(id);return ci(id)}});
  const page=await context.newPage(),offOrigin=[];
@@ -141,14 +141,14 @@ async function layout(page,label){
  const r=await page.evaluate(()=>{
   const d=document.querySelector('dialog[open].dialog-edge');
   const wraps=[...d.querySelectorAll('button')].filter(b=>b.offsetParent&&!b.matches('[role=tab],.icon-button,.map-link')).filter(b=>b.getBoundingClientRect().height>48).map(b=>b.textContent.trim());
-  const foot=[...d.querySelectorAll('.map-dialog-foot button')].map(b=>Math.round(b.getBoundingClientRect().height*2)/2);
+  const foot=[...d.querySelectorAll('.map-dialog-foot button:not(.link-action)')].map(b=>Math.round(b.getBoundingClientRect().height*2)/2);
   const body=d.querySelector('.map-dialog-body');
   return {sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth,bw:body.scrollWidth,bc:body.clientWidth,wraps,foot,nowrap:[...d.querySelectorAll('.map-dialog-foot button,.rp-actions button')].every(b=>getComputedStyle(b).whiteSpace==='nowrap'),text:d.innerText};
  });
  assert.ok(r.sw<=r.cw,label+': page horizontal overflow');
  assert.ok(r.bw<=r.bc+1,label+': dialog horizontal overflow '+r.bw+' > '+r.bc);
  assert.deepEqual(r.wraps,[],label+': a button is taller than one line');
- assert.ok(new Set(r.foot).size<=1,label+': footer buttons differ in height '+r.foot);
+ assert.ok(new Set(r.foot).size<=1,label+': real footer buttons differ in height '+r.foot);
  assert.ok(r.nowrap,label+': buttons must not wrap');
  assert.ok(!r.text.includes(SECRET)&&!r.text.includes(OTHER),label+': an environment value is rendered');
 }
@@ -185,7 +185,7 @@ async function boards(width,scheme){
  await shot(page,'01','edit',width,scheme);await layout(page,'edit '+tag);
  // The new dialog carries the edge, and an existing dialog is unchanged.
  const edge=await dlg(page).evaluate(el=>{const c=getComputedStyle(el);return {w:c.borderTopWidth,c:c.borderTopColor}});
- assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(53, 50, 59)':'rgba(0, 0, 0, 0)','dialog edge colour');
+ assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(54, 58, 63)':'rgb(217, 217, 224)','dialog edge colour');
  // 02 environment: write-only values
  await dirtyEnv(page);
  await dlg(page).getByLabel('New value for SECRET_KEY').waitFor();
@@ -316,7 +316,7 @@ async function boards187(width,scheme){
  await disclose.click();
  const field=dlg(page).getByLabel('Time limit in seconds');
  assert.equal(await field.inputValue(),'120');
- await dlg(page).getByText('Seconds DockNest waits for the site to answer before it rolls back. 60 to 600.').waitFor();
+ await dlg(page).getByText('Seconds DockNest waits for the app to answer before it rolls back. 60 to 600.').waitFor();
  await shot(page,'187-02','limit-open',width,scheme);await layout(page,'limit open '+tag);
  await field.fill('300');
  assert.match(await dlg(page).innerText(),/Time limit\s*5 minutes/);
@@ -325,11 +325,12 @@ async function boards187(width,scheme){
  await dlg(page).getByText('Use 60 to 600 seconds.').waitFor();
  assert.equal(await apply187(page).isDisabled(),true,'Apply is off below the minimum');
  assert.equal(await field.getAttribute('aria-invalid'),'true');
+ await field.hover();
  assert.equal(await field.evaluate(el=>getComputedStyle(el).borderTopColor),await page.evaluate(()=>{const s=document.createElement('i');s.style.color='var(--error)';document.body.append(s);const c=getComputedStyle(s).color;s.remove();return c}),'a red border');
  await shot(page,'187-04','limit-bad',width,scheme);await layout(page,'limit bad '+tag);
  await field.fill('601');assert.equal(await apply187(page).isDisabled(),true,'Apply is off above the maximum');
  await field.fill('600');
- await dlg(page).getByText('The site can stay offline for up to 10 minutes before it rolls back.').waitFor();
+ await dlg(page).getByText('The app can stay offline for up to 10 minutes before it rolls back.').waitFor();
  assert.equal(await dlg(page).locator('.alert-warning').getByText('Longer wait').count(),1);
  await shot(page,'187-05','limit-long',width,scheme);await layout(page,'limit long '+tag);
  await field.fill('240');
@@ -350,9 +351,9 @@ async function boards187(width,scheme){
  await shot(page,'187-06','limit-short',width,scheme);await layout(page,'limit short '+tag);
  mock.dataRollback=false;
  // 07: the rolled-back message names the limit that was chosen.
- mock.editExtra={failedStep:'check_health',timeLimitSeconds:300,reason:'The site did not become healthy in 5 minutes.'};
+ mock.editExtra={failedStep:'check_health',timeLimitSeconds:300,reason:'The app did not become healthy in 5 minutes.'};
  mock.phase='rolled';await apply187(page).click();
- await dlg(page).getByText('The site did not answer within 5 minutes. The previous version runs again.').waitFor();
+ await dlg(page).getByText('The app did not answer within 5 minutes. The previous version runs again.').waitFor();
  await shot(page,'187-07','limit-rolled',width,scheme);await layout(page,'limit rolled '+tag);
  await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
  mock.editExtra=null;
@@ -430,12 +431,13 @@ async function boards187(width,scheme){
  assert.deepEqual(foot,['Undo change','Close'],'Undo change sits left of Close');
  assert.equal(await dlg(page).getByRole('button',{name:'Close',exact:true}).getAttribute('class'),'primary');
  assert.equal(await dlg(page).getByRole('button',{name:'Undo change'}).getAttribute('class')||'','','a secondary button');
- await dlg(page).getByText('You can undo this until the site changes again.').waitFor();
+ await dlg(page).getByText('You can undo this until the app changes again.').waitFor();
  await shot(page,'187-16','undo-offer',width,scheme);await layout(page,'undo offer '+tag);
  // 17: confirm.
  mock.undoReview={token:'tok-u',undoOf:'e1',diff:{files:[{path:'compose.yaml',hunks:[{oldStart:22,newStart:22,lines:[{type:'context',text:'  web:'},{type:'remove',text:'    image: demo/shop:1.5'},{type:'add',text:'    image: demo/shop:1.4'}]}]}],env:[]},summary:{health:'url',dataRollback:false,dataBytes:null},warnings:[]};
  await dlg(page).getByRole('button',{name:'Undo change'}).click();
  await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ await dlg(page).getByText('The Compose file goes back to how it was on').waitFor();
  assert.match(await dlg(page).innerText(),/The Compose file goes back to how it was on .+\./);
  assert.match(await dlg(page).innerText(),/Backup first\s*Yes/);assert.match(await dlg(page).innerText(),/Rollback\s*Automatic/);
  assert.equal(await dlg(page).getByText('Data is not rewound').count(),0);
@@ -528,7 +530,7 @@ async function roles(){
  assert.equal(await editButton(page).count(),0,'static sites hide Edit');
  await context.close();
  // Sites page: Edit and History on the card, history opens an edit timeline, static card has no Edit.
- ({context,page}=await open({width:1280,start:'Sites & schedules'}));
+ ({context,page}=await open({width:1280,start:'Apps & Schedules'}));
  await page.locator('.site-card').first().waitFor();
  const card=page.locator('.site-card',{hasText:'Demo Shop'});
  await card.getByRole('button',{name:'Edit history for Demo Shop'}).click();
@@ -563,9 +565,10 @@ async function roles(){
  await context.close();
  // Single-container site: no Compose tab. Image set through ${TAG}: guided edit declines.
  freshMock();
- mock.view=viewFor({kind:'container',files:[],env:[{file:'container',keys:[{key:'TAG',set:true}]}],services:[{name:'web',image:'shop:${TAG}',ports:[port(8080,8080)],frozen:false,healthcheck:true}],usable:{compose:false,env:true,ports:true,image:false},reasons:{compose:{code:'NO_COMPOSE',message:'This site has no Compose file to edit.'},image:{code:'IMAGE_FROM_ENV',message:'Edit TAG in Environment.'}}});
+ mock.view=viewFor({kind:'container',files:[],env:[{file:'container',keys:[{key:'TAG',set:true}]}],services:[{name:'web',image:'shop:${TAG}',ports:[port(8080,8080)],frozen:false,healthcheck:true}],usable:{compose:false,env:true,ports:true,image:false},reasons:{compose:{code:'NO_COMPOSE',message:'This app has no Compose file to edit.'},image:{code:'IMAGE_FROM_ENV',message:'Edit TAG in Environment.'}}});
  ({context,page}=await open({width:1280}));
  await startEdit(page,1280);
+ await dlg(page).getByRole('tab',{name:'Image'}).waitFor();
  assert.equal(await dlg(page).getByRole('tab',{name:'Compose'}).count(),0);
  await dlg(page).getByRole('tab',{name:'Image'}).click();
  await dlg(page).getByText('Edit TAG in Environment.').waitFor();
@@ -644,12 +647,13 @@ async function roles(){
  await dlg(page).getByRole('button',{name:'Review',exact:true}).waitFor();
  await context.close();
  // Rate limit, busy site and an unreachable server at Review are retryable notes, not the blocked panel.
- for(const [mode,text] of [['rate','Too many changes for this site. Try again later.'],['busy','This site is busy right now. Try again soon.'],['unreachable','The server could not be reached. Try again.']]){
+ for(const [mode,text] of [['rate','Too many changes for this app. Try again later.'],['busy','This app is busy right now. Try again soon.'],['unreachable','The server could not be reached. Try again.']]){
   freshMock();mock.reviewMode=mode;
   ({context,page}=await open({width:1280}));
   await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
   await dlg(page).getByText(text).waitFor();
-  assert.equal(await dlg(page).locator('.alert-error').count(),0,mode+': no blocked panel');
+  // v2 renders notes and blocked panels with the same alert-panel markup, so check for exactly one message instead of the old class.
+  assert.equal(await dlg(page).getByRole('alert').count(),1,mode+': one retryable message, nothing else');
   assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),false,mode+': Review can be pressed again');
   await context.close();
  }
@@ -685,7 +689,7 @@ async function roles(){
  ({context,page}=await open({width:1280}));
  await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
  await dlg(page).getByRole('button',{name:'Apply',exact:true}).click();
- await dlg(page).getByText('This site is busy right now. Try again soon.').waitFor();
+ await dlg(page).getByText('This app is busy right now. Try again soon.').waitFor();
  await context.close();
 }
 
@@ -750,11 +754,11 @@ async function realApi(){
   throw new Error('the edit did not finish');
  };
  try{
-  const context=await browser.newContext({viewport:{width:1280,height:800},reducedMotion:'reduce'});
+  const context=await browser.newContext({viewport:{width:1280,height:1400},reducedMotion:'reduce'});
   await context.addCookies([{name:'dbm_session',value:token,url:base}]);
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
-  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Sites & schedules',exact:true}).click();
+  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Apps & Schedules',exact:true}).click();
   const card=page.locator('.site-card',{hasText:'shop'});
   await card.getByRole('button',{name:'Edit shop with Safe Edit'}).click();
   const d=dlg(page);

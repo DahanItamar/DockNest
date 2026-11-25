@@ -34,7 +34,7 @@ const json=(route,body,status=200)=>route.fulfill({status,json:body});
 
 let browser;const errors=[];
 async function open({role='admin',width=1280,height=800,scheme='light'}={}){
- const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme,hasTouch:width<600,deviceScaleFactor:width<600?2:1});
+ const context=await browser.newContext({viewport:{width,height:width>=900?Math.max(height,1400):height},reducedMotion:'reduce',colorScheme:scheme,hasTouch:width<600,deviceScaleFactor:width<600?2:1});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  const page=await context.newPage();
  page.on('pageerror',e=>errors.push(e.message));
@@ -73,7 +73,7 @@ const shot=async(page,name)=>{if(shots){await page.mouse.move(2,2);await page.sc
 const rect=l=>l.evaluate(e=>{const r=e.getBoundingClientRect();return {top:Math.round(r.top),bottom:Math.round(r.bottom),height:Math.round(r.height)}});
 
 async function footerButtons(dlg,label){
- const boxes=await dlg.locator('.map-dialog-foot button').evaluateAll(bs=>bs.map(b=>({h:Math.round(b.getBoundingClientRect().height),lines:Math.round(b.getBoundingClientRect().height/parseFloat(getComputedStyle(b).lineHeight)),ws:getComputedStyle(b).whiteSpace,scrollW:b.scrollWidth,clientW:b.clientWidth})));
+ const boxes=await dlg.locator('.map-dialog-foot button:not(.link-action)').evaluateAll(bs=>bs.map(b=>({h:Math.round(b.getBoundingClientRect().height),lines:Math.round(b.getBoundingClientRect().height/parseFloat(getComputedStyle(b).lineHeight)),ws:getComputedStyle(b).whiteSpace,scrollW:b.scrollWidth,clientW:b.clientWidth})));
  assert.ok(boxes.length>=1,label+': footer buttons');
  assert.equal(new Set(boxes.map(b=>b.h)).size,1,label+': equal button heights '+JSON.stringify(boxes));
  for(const b of boxes){assert.equal(b.ws,'nowrap',label+': nowrap');assert.ok(b.scrollW<=b.clientW,label+': button text fits')}
@@ -84,10 +84,10 @@ async function board(name,over,{scheme,width}){
  const {context,page}=await open({scheme,width,height:width<600?844:800});
  const dlg=await openSheet(page,width),tag=`${name}-${width===1280?'desktop':'phone'}-${scheme}`;
  await noOverflow(page,tag);await footerButtons(dlg,tag);
- // Dark gets the 1px dialog edge, light stays borderless
+ // v2: both themes carry the 1px dialog edge (the border token)
  const edge=await dlg.evaluate(d=>{const c=getComputedStyle(d);return {w:c.borderTopWidth,color:c.borderTopColor}});
  assert.equal(edge.w,'1px',tag+': dialog-edge width');
- if(scheme==='light')assert.match(edge.color,/rgba\(0, 0, 0, 0\)|transparent/,tag+': light edge is transparent');
+ if(scheme==='light')assert.equal(edge.color,'rgb(217, 217, 224)',tag+': light edge is the v2 border token');
  else assert.doesNotMatch(edge.color,/rgba\(0, 0, 0, 0\)/,tag+': dark edge is visible');
  await shot(page,tag);
  if(name==='05-self-heal-settings'){
@@ -179,7 +179,7 @@ async function failures(){
  assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: this server already watches 50 containers.');
  await context.close();
  // Every real status keeps the sheet open with the right panel
- for(const [code,text] of [['SITE_REMOVED',/Site removed/],['FORBIDDEN',/Not allowed/],['INVALID',/Could not save/],['NOT_FOUND',/Could not save/]]){
+ for(const [code,text] of [['SITE_REMOVED',/App removed/],['FORBIDDEN',/Not allowed/],['INVALID',/Could not save/],['NOT_FOUND',/Could not save/]]){
   fresh();mock.putError=code;
   ({context,page}=await open({}));
   dlg=await openSheet(page,1280);
@@ -287,7 +287,7 @@ async function realApi(){
  db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at) VALUES(?,?,?,?,?,?,?,'connected',?,?)").run(serverId,'Commerce host','192.0.2.10',22,'root','fixture','0'.repeat(64),JSON.stringify({freeBytes:84*1024**3}),now());
  const site=(name,containers)=>{const id=randomUUID();db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(id,serverId,name,JSON.stringify({kind:'docker',containers,domains:[name+'.example.com']}),now());return id};
  const healthy=site('Demo Shop',['demo-web','demo-db']),plain=site('Plain Site',['demo-db']);
- const signedIn=async(token,width=1280)=>{const context=await browser.newContext({viewport:{width,height:width<600?844:800},reducedMotion:'reduce'});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
+ const signedIn=async(token,width=1280)=>{const context=await browser.newContext({viewport:{width,height:width<600?844:1400},reducedMotion:'reduce'});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
   if(width<900)await page.getByRole('button',{name:'Open navigation'}).click();
   await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).click();return {context,page}};
  const openFor=async(page,name)=>{const panel=page.locator('.map-panel');if(await panel.count()){await panel.getByRole('button',{name:'Close'}).first().click();await panel.waitFor({state:'detached'})}await page.locator('.map-site',{hasText:name}).first().click();await page.getByRole('button',{name:'Self-heal',exact:true}).click();const d=page.locator('dialog.sh-sheet');await d.getByRole('switch').waitFor();return d};
@@ -331,13 +331,13 @@ async function realApi(){
  }finally{listener.closeAllConnections?.();await new Promise(resolve=>listener.close(resolve))}
 }
 
-browser=await chromium.launch();
+browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 if(REAL){try{await realApi();assert.deepEqual(errors,[],'no page errors');console.log('Self-heal browser suite passed against the real API.')}finally{await browser.close()}process.exit(0)}
 try{
  for(const scheme of ['light','dark'])for(const width of [1280,390]){
   await board('05-self-heal-settings',{},{scheme,width});
   await board('16-self-heal-off',{enabled:false,events:{items:[],nextCursor:null}},{scheme,width});
-  await board('17-self-heal-no-healthcheck',{enabled:false,watched:[],stream:{state:'off',reason:'no_healthcheck',notWatching:'Not watching: no container in this site has a health check'},events:{items:[],nextCursor:null}},{scheme,width});
+  await board('17-self-heal-no-healthcheck',{enabled:false,watched:[],stream:{state:'off',reason:'no_healthcheck',notWatching:'Not watching: no container in this app has a health check'},events:{items:[],nextCursor:null}},{scheme,width});
  }
  await behaviour('light');await behaviour('dark');
  await failures();

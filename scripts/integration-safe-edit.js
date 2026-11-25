@@ -237,7 +237,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   let corrupted = false;
   row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!corrupted && current.progress.phase === 'check_health') { corrupted = true; await sh(`for f in $(find /var/lib/docknest/edits/${editId} -type f ! -name journal.json); do printf 'corrupted' > "$f"; done`); } } });
   assert.equal(row.state, 'needs_attention', JSON.stringify(row));
-  assert.equal(row.reason, 'The previous version could not be put back. The site stays behind the maintenance page.');
+  assert.equal(row.reason, 'The previous version could not be put back. The app stays behind the maintenance page.');
   // These fixture sites have no maintenance proxy set up (the helper warns and skips the page), so the check is on
   // DockNest's own record: the journal keeps maintenanceOn and finish, which would take the page down, never ran.
   assert.equal(JSON.parse(await sh(`cat /var/lib/docknest/edits/${editId}/journal.json`)).maintenanceOn, true, 'the edit still holds the maintenance page');

@@ -1,6 +1,7 @@
 import React,{useEffect,useId,useMemo,useState} from 'react';
+import {PasswordInput} from "./password-input.jsx";
 import {Eye,EyeOff,CircleX} from './icons.jsx';
-import {ThemeToggle} from './brand.jsx';
+import {Brand,ThemeToggle} from './brand.jsx';
 
 // Sign-in, first-run setup and enrollment share this split screen. Styles live in auth.css and are scoped to .auth-page.
 export function authErrorMessage(e){
@@ -17,6 +18,13 @@ function FloatingPaths(){
  return <svg className="lg-paths" viewBox="-380 -190 1076 1060" preserveAspectRatio="xMidYMid slice" fill="none" aria-hidden="true">{sets.map((set,s)=><g key={s} className={`lg-pg lg-pg${s+1}`}>{set.map((p,i)=><path key={i} className="lg-path" d={p.d} pathLength="100" style={{strokeWidth:p.width,strokeOpacity:p.opacity}}/>)}</g>)}</svg>;
 }
 
+// Feature highlights for the brand panel. Pure CSS rotation (no timer): one line at a time cross-fades every 4 s; hover or
+// keyboard focus pauses it, reduced motion shows the first line still. Screen readers get the whole list once.
+export const HIGHLIGHTS=Object.freeze(['Restore tests run on their own, so you know backups work.','Measured recovery time for every app.','Back up to Google Drive, OneDrive, Dropbox or WebDAV.','Docker, Podman and rootless engines.','Client reports as a PDF, ready to send.','TrueNAS SCALE support built in.']);
+function Highlights(){
+ return <div className="lg-bp-bottom"><ul className="sr-only" aria-label="Highlights">{HIGHLIGHTS.map(line=><li key={line}>{line}</li>)}</ul><div className="lg-rotator" aria-hidden="true">{HIGHLIGHTS.map((line,i)=><p key={line} className="lg-rot-line" style={{'--i':i}}>{line}</p>)}</div></div>;
+}
+
 export function AuthLayout({children,back}){
  useEffect(()=>{
   const root=document.documentElement,sync=()=>root.classList.toggle('lg-paused',document.hidden);
@@ -25,10 +33,10 @@ export function AuthLayout({children,back}){
  },[]);
  return <div className="auth-shell auth-page lg-t2"><div className="lg-split">
   <aside className="lg-brandpanel" aria-label="DockNest"><FloatingPaths/>
-   <div className="lg-bp-top"><span className="lg-logo" role="img" aria-label="DockNest" style={{width:176}}/></div>
-   <div className="lg-bp-bottom"><p className="lg-bp-line"><span className="lg-s lg-rise">Backups you can prove.</span><span className="lg-s lg-rise lg-rise2">Servers you can move.</span></p><p className="lg-bp-cap">Self-hosted Docker backup and restore</p></div>
+   <div className="lg-bp-top"><Brand tagline={false}/><p className="lg-bp-line"><span className="lg-s lg-rise">Worry less. Sleep more.</span><span className="lg-s lg-rise lg-rise2">Restore anytime.</span></p></div>
+   <Highlights/>
   </aside>
-  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-logo lg-head-logo" role="img" aria-label="DockNest"/><ThemeToggle/></header>
+  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-head-brand"><Brand tagline={false}/></span><ThemeToggle/></header>
    <main className="auth-main lg-formside"><div className="lg-col auth-card">{back}{children}</div></main>
   </div>
  </div></div>;
@@ -40,7 +48,7 @@ export function AuthField({label,help,error,...props}){
 
 export function PasswordField({label,help,error,...props}){
  const id=useId(),[shown,setShown]=useState(false);
- return <div className="field"><label htmlFor={id}>{label}</label><div className="lg-in lg-pw"><input {...props} id={id} type={shown?'text':'password'} aria-invalid={error?'true':undefined} aria-describedby={error?'lg-err':undefined}/><button type="button" className="lg-eye" aria-label={shown?'Hide password':'Show password'} aria-pressed={shown} onClick={()=>setShown(v=>!v)}>{shown?<EyeOff size={20} stroke={1.75} aria-hidden="true"/>:<Eye size={20} stroke={1.75} aria-hidden="true"/>}</button></div>{help&&<small>{help}</small>}</div>;
+ return <div className="field"><label htmlFor={id}>{label}</label><div className="lg-in lg-pw"><PasswordInput {...props} id={id} reveal={shown} aria-invalid={error?'true':undefined} aria-describedby={error?'lg-err':undefined}/><button type="button" className="lg-eye" aria-label={shown?'Hide password':'Show password'} aria-pressed={shown} onClick={()=>setShown(v=>!v)}>{shown?<EyeOff size={20} stroke={1.75} aria-hidden="true"/>:<Eye size={20} stroke={1.75} aria-hidden="true"/>}</button></div>{help&&<small>{help}</small>}</div>;
 }
 
 export function AuthError({children}){

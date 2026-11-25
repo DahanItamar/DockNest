@@ -21,6 +21,7 @@ import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES
 import { resolveInvocation, storedInvocation, allowedRoots, invocationHash, helperInvocation } from './invocation.js';
 import { issueToken, takeToken } from './tokens.js';
 import { reviewDiff, inlineSecretKeys } from './diff.js';
+import { confirmKnownGood, safeEditItems } from '../keys-safe/scan.js';
 
 // Seconds; tests shrink them with `editTiming.scale`.
 export const editTiming = { scale: 1, pollSeconds: 10, retrySeconds: [30, 60, 120, 300, 600, 900], callSeconds: { 'edit-load': 120, 'edit-check': 180, 'edit-prepare': 1200, 'edit-apply': 600, 'edit-poll': 120, 'edit-rollback': 900, 'edit-finish': 300, 'edit-status': 120, discover: 120 } };
@@ -250,7 +251,7 @@ const failReason = (code, fallback) => (code === 'FILE_CHANGED' ? SAY.filesChang
 const RUNNERS = {
   async prepare(edit, ctx, details) {
     const candidate = openPayload(details.payload);
-    if (!candidate || !invocationUnchanged(edit, ctx)) { conclude(edit, 'failed', { failedStep: 'prepare', reason: candidate ? 'The site\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
+    if (!candidate || !invocationUnchanged(edit, ctx)) { conclude(edit, 'failed', { failedStep: 'prepare', reason: candidate ? 'The app\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
     atomic(() => { save(edit, { prepareStarted: true }); setStep(edit.id, 'prepare', 'running'); });
     let answer;
     try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-prepare', files: candidate.files, env: candidate.env, ...(candidate.containerChanges ? { containerChanges: candidate.containerChanges } : {}), reviewedModelSha256: candidate.reviewedModelSha256 }); }
@@ -276,7 +277,7 @@ const RUNNERS = {
   },
   async apply(edit, ctx, details, job) {
     const reviewed = edit.progress.reviewedModelSha256;
-    if (!reviewed || !invocationUnchanged(edit, ctx)) { goFinish(edit, 'failed', { failedStep: 'apply', reason: reviewed ? 'The site\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
+    if (!reviewed || !invocationUnchanged(edit, ctx)) { goFinish(edit, 'failed', { failedStep: 'apply', reason: reviewed ? 'The app\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
     // Journalled before the first write: from here on, an unknown outcome is decided by edit-status, never guessed.
     atomic(() => { save(edit, { applyStarted: true }); setStep(edit.id, 'apply', 'running'); });
     let answer, failure = null;
@@ -346,6 +347,8 @@ const RUNNERS = {
       if (p.outcome === 'rolled_back') setStep(edit.id, 'roll_back', 'done', p.dataRestored ? 'Previous version and data back.' : 'Previous version back.');
       conclude(edit, p.outcome, { failedStep: p.failedStep, reason: p.reasonPending });
     });
+    // Keys safe (docs/keys-safe.md): what an applied edit wrote is known-good. Best effort: the edit is done either way.
+    if (p.outcome === 'applied') await confirmKnownGood(edit.site_id, { source: 'safe-edit', actor: 'edit:' + edit.id, only: safeEditItems(p.keysTrust), remote: (server, request) => editTransport.remote(server, request) }).catch(() => {});
   },
   // After a restart or an unreachable server during prepare/apply: the journal on the server decides.
   async recover(edit, ctx) {
@@ -409,8 +412,8 @@ export function recoverInterruptedSiteEdits() {
 // ---------- API side: load, review, apply, cancel, retry, restore backup ----------
 const siteFor = siteId => {
   const site = db.prepare('SELECT * FROM sites WHERE id=?').get(siteId);
-  if (!site) throw httpError(404, 'NOT_FOUND', 'Site not found.');
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) throw httpError(409, 'SITE_ARCHIVED', 'This site was removed from active sites.');
+  if (!site) throw httpError(404, 'NOT_FOUND', 'App not found.');
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) throw httpError(409, 'SITE_ARCHIVED', 'This app was removed from active apps.');
   const config = parseJson(site.config, {});
   if (config.kind === 'static') throw httpError(409, 'NOT_EDITABLE', 'A static site has no containers to edit.');
   const server = db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);
@@ -446,7 +449,7 @@ async function helperRead(server, request, { refusalIsAnswer = false } = {}) {
 }
 
 // Reasons a tab is not usable, by the helper's code. Unknown codes get a general sentence.
-const TAB_REASONS = Object.freeze({ EDIT_IN_COMPOSE: 'Edit this in Compose.', AMBIGUOUS: 'Edit this in Compose.', NO_COMPOSE: 'This site has no Compose file to edit.', NO_ENV: 'This site has no environment file.', SERVICE_FROZEN: REASONS.SERVICE_FROZEN, COMPOSE_TOO_OLD: REASONS.COMPOSE_TOO_OLD, FILE_TOO_LARGE: REASONS.FILE_TOO_LARGE, IMAGE_FROM_ENV: 'This image is set in Environment. Edit it there.' });
+const TAB_REASONS = Object.freeze({ EDIT_IN_COMPOSE: 'Edit this in Compose.', AMBIGUOUS: 'Edit this in Compose.', NO_COMPOSE: 'This app has no Compose file to edit.', NO_ENV: 'This app has no environment file.', SERVICE_FROZEN: REASONS.SERVICE_FROZEN, COMPOSE_TOO_OLD: REASONS.COMPOSE_TOO_OLD, FILE_TOO_LARGE: REASONS.FILE_TOO_LARGE, IMAGE_FROM_ENV: 'This image is set in Environment. Edit it there.' });
 const str = (value, max = 512) => (typeof value === 'string' ? value.slice(0, max) : '');
 // Compose reports published ports as text ("8080"); a range or a ${VAR} is not one number.
 const portNumber = value => { const number = typeof value === 'string' && /^\d{1,5}$/.test(value) ? Number(value) : value; return Number.isInteger(number) && number >= 1 && number <= 65535 ? number : null; };
@@ -460,7 +463,7 @@ function normalizeLoad(answer) {
   const services = (Array.isArray(answer?.services) ? answer.services : []).filter(item => typeof item?.name === 'string').map(item => ({ name: str(item.name, 128), image: str(item.image), ports: (Array.isArray(item.ports) ? item.ports : []).map(port => ({ host: portNumber(port?.host), container: portNumber(port?.container), protocol: port?.protocol === 'udp' ? 'udp' : 'tcp', hostIp: str(port?.hostIp, 64), at: location(port?.at), ...(helperCode(port?.reason) ? { reason: helperCode(port.reason) } : {}) })), frozen: !!item.frozen, healthcheck: !!item.healthcheck, imageAt: location(item.imageAt), imageReason: helperCode(item.imageReason), imageVariable: typeof item.imageVariable === 'string' && ENV_KEY.test(item.imageVariable) ? item.imageVariable : null }));
   const usable = Object.fromEntries(['compose', 'env', 'ports', 'image'].map(tab => [tab, !!answer?.usable?.[tab]]));
   const reasons = {};
-  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); { const variable = tab === 'image' && known === 'IMAGE_FROM_ENV' && typeof answer?.variables?.image === 'string' && ENV_KEY.test(answer.variables.image) ? answer.variables.image : null; reasons[tab] = { code: known ?? 'UNAVAILABLE', message: variable ? `Edit ${variable} in Environment.` : TAB_REASONS[known] ?? (known && Object.hasOwn(REASONS, known) ? REASONS[known] : 'Not available for this site.'), ...(variable ? { variable } : {}) }; } }
+  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); { const variable = tab === 'image' && known === 'IMAGE_FROM_ENV' && typeof answer?.variables?.image === 'string' && ENV_KEY.test(answer.variables.image) ? answer.variables.image : null; reasons[tab] = { code: known ?? 'UNAVAILABLE', message: variable ? `Edit ${variable} in Environment.` : TAB_REASONS[known] ?? (known && Object.hasOwn(REASONS, known) ? REASONS[known] : 'Not available for this app.'), ...(variable ? { variable } : {}) }; } }
   return { files, env, services, usable, reasons, composeVersion: str(answer?.composeVersion, 32) || null };
 }
 
@@ -478,7 +481,7 @@ export function checkEnvEntries(env) {
   const seen = new Set();
   for (const entry of env) {
     if (!ENV_KEY.test(entry.key)) throw refuse('ENV_REFUSED', `env.${String(entry.key).slice(0, 60).replace(/[^A-Za-z0-9_]/g, '_')}`, 'Environment keys use letters, digits and underscores, and do not start with a digit.');
-    if (ENV_REFUSED_PREFIX.test(entry.key)) throw refuse('ENV_REFUSED', `env.${entry.key}`, 'Keys starting with COMPOSE_, DOCKER_ or BUILDKIT_ cannot be set here: they would change how Docker runs the site.');
+    if (ENV_REFUSED_PREFIX.test(entry.key)) throw refuse('ENV_REFUSED', `env.${entry.key}`, 'Keys starting with COMPOSE_, DOCKER_ or BUILDKIT_ cannot be set here: they would change how Docker runs the app.');
     if (!entry.remove && /[\r\n\0]/.test(entry.value ?? '')) throw refuse('ENV_REFUSED', `env.${entry.key}`, 'Environment values cannot hold line breaks.');
     if (!entry.remove && Buffer.byteLength(entry.value ?? '', 'utf8') > LIMITS.valueBytes) throw refuse('ENV_REFUSED', `env.${entry.key}`, 'Environment values are at most 8 KB.');
     const key = entry.file + '\0' + entry.key;
@@ -507,15 +510,15 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }, { un
   }
   for (const file of files) {
     const original = byPath.get(file.path);
-    if (!original || envFiles.has(file.path)) throw refuse('PATH_REFUSED', 'files', 'Only the site\'s own Compose files can be edited here.');
+    if (!original || envFiles.has(file.path)) throw refuse('PATH_REFUSED', 'files', 'Only the app\'s own Compose files can be edited here.');
     if (!original.sha256 || original.sha256 !== file.sha256) throw refuse('FILE_CHANGED', 'files');
   }
   const changedFiles = files.filter(file => byPath.get(file.path).text !== file.text);
   const existing = new Map(loaded.env.map(item => [item.file, new Set(item.keys.map(key => key.key))]));
-  for (const entry of env) if (!existing.has(entry.file)) throw refuse('PATH_REFUSED', 'env', 'Only the site\'s own environment files can be edited here.');
+  for (const entry of env) if (!existing.has(entry.file)) throw refuse('PATH_REFUSED', 'env', 'Only the app\'s own environment files can be edited here.');
   const envChanges = env.filter(entry => !entry.remove || existing.get(entry.file).has(entry.key));
   // Ports and image of a single-container site travel as containerChanges (there is no Compose text to edit).
-  if (containerChanges && ctx.resolved.kind !== 'container') throw refuse('NOT_EDITABLE', 'containerChanges', 'Ports and image of a Compose site change in its Compose file.');
+  if (containerChanges && ctx.resolved.kind !== 'container') throw refuse('NOT_EDITABLE', 'containerChanges', 'Ports and image of a Compose app change in its Compose file.');
   if (!changedFiles.length && !envChanges.length && !containerChanges) throw httpError(422, 'NO_CHANGES', 'Nothing changed.');
   const request = { ...ctx.base, operation: 'edit-check', ...(undo ? { checkUnsetRefs: true } : {}), files: changedFiles.map(({ path, sha256, text }) => ({ path, sha256, text })), env: envChanges.map(entry => (entry.remove ? { file: entry.file, key: entry.key, remove: true } : { file: entry.file, key: entry.key, value: entry.value })), ...(containerChanges ? { containerChanges } : {}) };
   const answer = await helperRead(ctx.server, request, { refusalIsAnswer: true });
@@ -561,7 +564,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }, { un
   const secretKeys = [...new Set(changedFiles.flatMap(file => inlineSecretKeys(file.text)))];
   if (secretKeys.length) warnings.push({ code: 'INLINE_SECRETS', keys: secretKeys.slice(0, 20), message: 'Move secrets to Environment: they are safer there.' });
   if (dataBytes !== null && dataBytes >= 1024 ** 3) warnings.push({ code: 'LARGE_DATA_COPY', bytes: dataBytes, message: 'The safety copy of the data is large, so the change takes longer and needs that much free disk space.' });
-  if (!healthChecks && !healthUrl) warnings.push({ code: 'NO_HEALTH_CHECK', message: 'This site has no health check or health URL, so only "running and stable" counts.' });
+  if (!healthChecks && !healthUrl) warnings.push({ code: 'NO_HEALTH_CHECK', message: 'This app has no health check or health URL, so only "running and stable" counts.' });
   const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, dataBytes, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
   const diff = reviewDiff({ originals: loaded.files, files: changedFiles, env: envChanges.map(entry => ({ ...entry, existed: existing.get(entry.file).has(entry.key) })) });
   // What the Compose files were before this edit, for its Undo (sealed with the candidate; the apply step saves it sealed).
@@ -570,7 +573,10 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }, { un
   let keepUndo = undoFiles;
   if (Buffer.byteLength(JSON.stringify({ files: undoFiles }), 'utf8') > UNDO_MAX_BYTES) { keepUndo = []; warnings.push({ code: 'NO_UNDO', message: NO_UNDO }); }
   const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })), undoFiles: keepUndo };
-  const meta = { dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged, undoOf: undo?.edit.id }), imageChanged, undoOf: undo?.edit.id ?? null };
+  // Keys safe (docs/keys-safe.md): what this edit may mark known-good once applied. The full list of written files (the
+  // changes record can be truncated) and the services whose config changed, so they are recreated.
+  const keysTrust = { written: [...new Set([...hashes.map(item => item.path), ...envChanges.map(entry => entry.file).filter(file => file !== 'container')])], recreated: ctx.resolved.kind === 'compose' ? [...new Set(changed.map(path => /^services\.([^.[\]]+)/.exec(path)?.[1]).filter(Boolean))] : loaded.services.map(service => service.name), project: ctx.base.invocation?.project ?? null };
+  const meta = { keysTrust, dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged, undoOf: undo?.edit.id }), imageChanged, undoOf: undo?.edit.id ?? null };
   const { token, expiresAt } = issueToken({ userId, sessionHash, siteId, hashes, candidate, meta });
   return { token, expiresAt: iso(expiresAt), diff, summary, warnings };
 }
@@ -584,17 +590,17 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
   try {
     atomic(() => {
       if (deploymentHeld(db)) throw httpError(409, 'DEPLOYMENT_HOLD', 'An update is in progress. Try again when it finishes.');
-      if (movingSite(siteId)) throw httpError(409, 'MOVE_RUNNING', 'This site is being moved. Wait for the move to finish first.');
-      if (editingSite(siteId)) throw httpError(409, 'EDIT_RUNNING', 'This site already has a change in progress.');
-      if (busySite(siteId)) throw httpError(409, 'SITE_BUSY', 'This site is busy with a backup or restore. Try again when it finishes.');
+      if (movingSite(siteId)) throw httpError(409, 'MOVE_RUNNING', 'This app is being moved. Wait for the move to finish first.');
+      if (editingSite(siteId)) throw httpError(409, 'EDIT_RUNNING', 'This app already has a change in progress.');
+      if (busySite(siteId)) throw httpError(409, 'SITE_BUSY', 'This app is busy with a backup or restore. Try again when it finishes.');
       const recent = db.prepare('SELECT COUNT(*) AS n FROM site_edits WHERE site_id=? AND created_at>?').get(siteId, iso(clock() - 3600_000)).n;
-      if (recent >= LIMITS.editsPerHour) throw httpError(429, 'RATE_LIMITED', 'This site had 10 changes in the last hour. Try again later.');
+      if (recent >= LIMITS.editsPerHour) throw httpError(429, 'RATE_LIMITED', 'This app had 10 changes in the last hour. Try again later.');
       const stored = storedInvocation(siteId);
-      if (!stored || invocationHash(stored) !== meta.invocationSha) throw httpError(409, 'REVIEW_EXPIRED', 'The site\'s Compose setup changed. Review the change again.');
+      if (!stored || invocationHash(stored) !== meta.invocationSha) throw httpError(409, 'REVIEW_EXPIRED', 'The app\'s Compose setup changed. Review the change again.');
       // An undo goes through only while the edit it reverts is still the newest applied one (the files' hashes are checked on the server).
-      if (meta.undoOf && !undoStateOf(loadEdit(meta.undoOf))?.available) throw httpError(409, 'REVIEW_EXPIRED', 'The site changed since this review. Review the undo again.');
+      if (meta.undoOf && !undoStateOf(loadEdit(meta.undoOf))?.available) throw httpError(409, 'REVIEW_EXPIRED', 'The app changed since this review. Review the undo again.');
       db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,changes,progress,time_limit_seconds,data_rollback,created_by,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)")
-        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
+        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, keysTrust: meta.keysTrust, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
       for (const step of STEPS) db.prepare("INSERT INTO site_edit_steps(edit_id,step,state) VALUES(?,?,'pending')").run(editId, step);
       const details = { editId, step: 'backup', targetServerId: site.server_id, invocation: meta.invocation, allowedRoots: meta.allowedRoots, services: meta.services, payload: seal(JSON.stringify(candidate)) };
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-edit','edit_waiting','backup',?,?)").run(jobId, siteId, at, JSON.stringify(details));
@@ -603,7 +609,7 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
       audit(userId, 'site.edit.requested', siteId, { edit: editId, ...(meta.undoOf ? { undoOf: meta.undoOf } : {}), tabs: meta.changes.tabs, fields: meta.changes.changed, envKeys: meta.changes.env, files: meta.changes.files, dataRollback: !!meta.imageChanged, timeLimitSeconds });
     });
   } catch (error) {
-    if (/UNIQUE constraint failed: site_edits\.site_id/.test(error.message)) { taken.restore(); throw httpError(409, 'EDIT_RUNNING', 'This site already has a change in progress.'); }
+    if (/UNIQUE constraint failed: site_edits\.site_id/.test(error.message)) { taken.restore(); throw httpError(409, 'EDIT_RUNNING', 'This app already has a change in progress.'); }
     if (['DEPLOYMENT_HOLD', 'MOVE_RUNNING', 'EDIT_RUNNING', 'SITE_BUSY', 'RATE_LIMITED'].includes(error.code)) taken.restore();
     throw error;
   }

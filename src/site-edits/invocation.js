@@ -45,17 +45,17 @@ export function recordInvocation(siteId, kind, invocation, source, at = new Date
 export function invocationFromContainers(config, containers) {
   const names = config?.containers ?? [];
   const mine = names.map(name => (containers ?? []).find(item => item.name === name)).filter(Boolean);
-  if (!names.length || mine.length !== names.length) return { problem: 'Some of the site\'s containers were not found on the server.' };
+  if (!names.length || mine.length !== names.length) return { problem: 'Some of the app\'s containers were not found on the server.' };
   const labels = mine.map(item => item.labels ?? {});
   const projects = new Set(labels.map(item => item['com.docker.compose.project'] ?? ''));
   if (projects.size === 1 && projects.has('')) {
     if (mine.length === 1) return { kind: 'container', invocation: { container: mine[0].name }, source: 'site' };
     return { problem: 'These containers were not started with Docker Compose, so DockNest cannot edit them together.' };
   }
-  if (projects.size !== 1) return { problem: 'The site\'s containers belong to different Compose projects.' };
+  if (projects.size !== 1) return { problem: 'The app\'s containers belong to different Compose projects.' };
   const pick = key => { const values = new Set(labels.map(item => item[key] ?? '')); return values.size === 1 ? [...values][0] : null; };
   const project = [...projects][0], files = pick('com.docker.compose.project.config_files'), directory = pick('com.docker.compose.project.working_dir'), envFiles = pick('com.docker.compose.project.environment_file');
-  if (files === null || directory === null || envFiles === null) return { problem: 'The site\'s containers were started with different Compose files.' };
+  if (files === null || directory === null || envFiles === null) return { problem: 'The app\'s containers were started with different Compose files.' };
   const invocation = validInvocation('compose', { project, files: list(files), projectDirectory: directory, envFiles: list(envFiles) });
   return invocation ? { kind: 'compose', invocation, source: 'labels' } : { problem: 'DockNest could not read how this Compose project was started.' };
 }

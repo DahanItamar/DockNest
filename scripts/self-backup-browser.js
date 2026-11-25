@@ -32,7 +32,7 @@ try{
  // A first administrator sign-in asks about update checks before anything else; answer it as a user would.
  await page.getByRole('dialog',{name:'Check GitHub daily for new versions?'}).getByRole('button',{name:'No, keep checks off'}).click();
  await page.getByRole('dialog').waitFor({state:'detached'});
- await page.getByRole('button',{name:'DockNest backup',exact:true}).click();
+ await page.getByRole('button',{name:'Self Backup',exact:true}).click();
  await page.getByRole('heading',{name:'Recovery settings'}).waitFor();
  await page.locator('.backup-location').getByText('Connected backups',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Back up DockNest now',exact:true}).isDisabled(),true);
@@ -42,7 +42,7 @@ try{
  await page.getByRole('button',{name:'Save recovery settings',exact:true}).click();
  await page.getByText('Recovery settings saved.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Back up DockNest now',exact:true}).click();
- await page.getByText('DockNest backup queued. Progress appears here.',{exact:true}).waitFor();
+ await page.getByText('Self Backup queued. Progress appears here.',{exact:true}).waitFor();
  await executeSelfBackup(claimSelfBackup());
  await page.getByRole('button',{name:'Download recovery kit',exact:true}).waitFor();
  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent==='Download recovery kit'&&!button.disabled));
@@ -72,7 +72,7 @@ try{
  await page.getByText('Recovery passphrases do not match.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
- await page.getByRole('button',{name:'Browse backup folders',exact:true}).click();
+ await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Browse backup folders'}).click();
  await page.getByText('docknest-recovery',{exact:true}).waitFor();
  await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit',exact:true}).waitFor();
  assert.ok((await page.locator('.backup-tree code').allTextContents()).some(path=>/^BACKUP\/docknest-recovery\/docknest_.*\.dkit$/.test(path)));
@@ -81,5 +81,5 @@ try{
  assert.equal(await page.locator('.backup-tree-file').first().evaluate(el=>el.scrollWidth<=el.clientWidth),true,'Recovery filename fits inside its mobile card');
  await page.screenshot({path:'test-results/self-backup/storage-mobile.png',animations:'disabled'});
  assert.deepEqual(errors,[]);
- console.log('Synthetic DockNest backup UI passed: administrator setup, pinned loopback SFTP upload, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
+ console.log('Synthetic Self Backup UI passed: administrator setup, pinned loopback SFTP upload, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));await fixture.close();db.close();await rm(directory,{recursive:true,force:true});}

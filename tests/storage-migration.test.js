@@ -56,3 +56,16 @@ test('active downloads and destination collisions block changes; manager kits us
  assert.match(migrationPlan()[0].destination,/BACKUP\/docknest-recovery\/docknest_0123456789abcdef_/);
  assert.equal((await migrateStorage()).migrated,1);assert.ok(fixture.files.has(source));
 });
+test('an interrupted migration into an append-only destination resumes beside the kept partial file',async()=>{
+ const {recordWriteMode,leftovers}=await import('../src/storage/write-mode.js');
+ archive('kept');const entry=migrationPlan()[0],partial=entry.destination.slice('sftp:storage:'.length)+'.migration-partial';
+ fixture.faults.rename=true;await assert.rejects(migrateStorage());fixture.faults.rename=false;
+ assert.ok(fixture.files.has(partial),'the interrupted run left its partial file');
+ recordWriteMode(target,'append-only','test');
+ try{
+  assert.equal((await migrateStorage()).migrated,1);
+  assert.equal(db.prepare("SELECT path FROM backups WHERE id='kept'").get().path,entry.destination);
+  assert.ok(fixture.files.has(partial),'the kept partial file was never overwritten');
+  assert.ok(leftovers(target).some(item=>item.path==='sftp:storage:'+partial),'it is listed as a leftover');
+ }finally{recordWriteMode(target,'normal','test');}
+});

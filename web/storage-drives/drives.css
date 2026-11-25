@@ -1,0 +1,21 @@
+/* Cloud drives, shares and local folders (3.0.0). Product tokens only. */
+.dr-fields{display:grid;gap:var(--edge)}
+.dr-oauth{display:grid;gap:var(--edge)}
+.dr-steps{list-style:none;margin:0;padding:0;display:grid;gap:var(--edge)}
+.dr-steps li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:var(--edge);align-items:start}
+.dr-steps li p{margin:var(--dn-space-1) 0 0}
+.dr-num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:var(--dn-radius-full);background:var(--dn-brand-chip);color:var(--link);font-size:var(--fs-caption);font-weight:var(--dn-weight-medium)}
+.dr-link{display:inline-flex;align-items:center;gap:var(--dn-space-1);margin-top:var(--spacing);color:var(--link);font-weight:var(--dn-weight-medium)}
+.dr-paste{width:100%;margin-top:var(--spacing);font-family:var(--dn-font-mono);font-size:var(--fs-caption)}
+.dr-cmd{display:inline-block;margin-top:var(--spacing);padding:var(--dn-space-1) var(--spacing);background:var(--surface-muted);border-radius:var(--dn-radius-sm);font-family:var(--dn-font-mono);overflow-wrap:anywhere}
+.dr-bad{color:var(--error)}
+.dr-quiet{display:flex;flex-wrap:wrap;gap:var(--edge);padding-top:var(--spacing);border-top:1px solid var(--border-subtle)}
+.dr-own{display:grid;gap:var(--spacing)}.dr-own p{margin:0}
+.dr-own-actions{display:flex;align-items:center;gap:var(--edge)}
+.dr-signed{display:flex;align-items:center;gap:var(--spacing);color:var(--success)}
+.dr-signed b{font-weight:var(--dn-weight-medium)}
+.dr-code{border:1px solid var(--border-subtle);border-radius:var(--dn-radius-md);overflow:hidden}
+.dr-code-head{min-height:0;display:flex;align-items:center;justify-content:space-between;padding:var(--dn-space-1) var(--spacing) var(--dn-space-1) var(--edge);background:var(--surface-muted);color:var(--text-muted);font-size:var(--fs-caption)}
+.dr-code pre{margin:0;padding:var(--spacing) var(--edge) var(--edge);overflow:auto;font-family:var(--dn-font-mono);font-size:var(--fs-caption)}
+.dr-note{display:flex;align-items:flex-start;gap:var(--spacing);margin:0}.dr-note svg{flex:none;margin-top:2px}
+.storage-card-content>p.dr-trash{font-family:var(--dn-font-sans);margin:0;padding:var(--edge);background:var(--surface-muted);border-radius:var(--dn-radius-md)}

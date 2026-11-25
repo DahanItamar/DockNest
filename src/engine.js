@@ -1,5 +1,8 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
+import { bindNasGate, identityFor } from './nas/command.js';
+import { nasEnabled } from './nas/gate.js';
+bindNasGate(kind => nasEnabled(kind, db));
 import { config } from './config.js';
 import { helperSource } from './helper-bundle.js';
 import { deploymentHeld, requireNoDeploymentHold as requireNoHold } from './deployment-hold.js';
@@ -15,6 +18,7 @@ import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
 import { CLAIMABLE_JOB_SQL, CLAIMABLE_HEAL_SQL } from './job-claim.js';
 import { recordHardening, recordDiscoveredHardening } from './hardening.js';
+import { recordDiscoveredLinks } from './server-links.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -24,13 +28,54 @@ import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 import { takeCertificates } from './alerts/certificates.js';
+import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
+import { recordScan, cleanScan } from './keys-safe/store.js';
+import { takeRouting, withoutRouting } from './domains/check.js';
+import { parseCapabilities } from './nas/command.js';
+import { withRestoreDecisions } from './restore-decisions.js';
+import { NOT_VISIBLE_MESSAGE, notVisibleOnProvider } from './storage/rclone-errors.js';
+import { hiddenByClientChange } from './storage/rclone-state.js';
 const now=()=>new Date().toISOString();
-// Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
+// Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
-// facts of the sites on that server (docs/hardening-score.md); other roles only read.
-export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
-export const discover=async(server,{recordHardening:record=false}={})=>{const result=takeCertificates({serverId:server.id},await remote(server,{operation:'discover'}));if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
-export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+// facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
+// other roles only read.
+// A NAS server also names its persistent working folder, so free space is read there and not from '/' (RAM on Unraid).
+const nasStagingBase=server=>{const base=identityFor(server).nasKind?parseCapabilities(server)?.stagingBase:null;return typeof base==='string'&&/^\/[A-Za-z0-9_@. \/-]{1,200}$/.test(base)&&!base.includes('..')?base:null;};
+// The engines a server reports are checked again here (rootless users control part of that answer): anything off-shape is dropped.
+export const testServer=async server=>{const stagingBase=nasStagingBase(server);const result=takeCertificates({serverId:server.id},await remote(server,{operation:'test',...(stagingBase?{stagingBase}:{})}));return {...result,engines:cleanEngines(result?.engines)};};
+// App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
+// configuration files of the apps on that server. The scans are recorded here and never returned.
+const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);}catch(error){console.error(`Key scan of an app could not be recorded: ${error.code??error.name}`);}};
+// An app with work that may be changing it (a backup, restore, move, Safe Edit or restore test) is not scanned now, so
+// its own work never reads as a change made outside DockNest.
+export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
+const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!hasForeignRuntime(site.config)&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
+import { cleanEngines, cleanEngineErrors, cleanDiscovered, hasForeignRuntime, FOREIGN_REFUSAL, manifestRuntime, restoreRuntimeProblem } from './runtime.js';
+// Container names of this server's active apps that run in Podman or a rootless engine.
+const foreignNames=serverId=>new Set(db.prepare('SELECT config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>hasForeignRuntime(site.config)).flatMap(site=>site.config?.containers??[]));
+const refuseForeignNames=(server,names)=>{const foreign=foreignNames(server.id);if((names??[]).some(name=>foreign.has(name)))throw Object.assign(new Error(FOREIGN_REFUSAL),{status:409});};
+export const discover=async(server,{record=false,scanKeys=false}={})=>{
+  const apps=scanKeys?keyApps(server.id):[];
+  // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
+  let answer=await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})}),scans=null;
+  if(answer&&typeof answer==='object'&&!Array.isArray(answer)&&'keyScans' in answer)({keyScans:scans,...answer}=answer);
+  const checked=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
+  let capabilities={};try{capabilities=JSON.parse(server.capabilities||'{}')||{};}catch{capabilities={};}
+  const result=checked&&Array.isArray(checked.containers)?{...checked,containers:cleanDiscovered(checked.containers,capabilities),engineErrors:cleanEngineErrors(checked.engineErrors,capabilities)}:checked;
+  if(record){
+    // Hardening grades and links read rootful Docker facts only; containers of other engines never reach them.
+    const rootful=result&&Array.isArray(result.containers)?{...result,containers:result.containers.filter(container=>!container?.runtime||(container.runtime.engine==='docker'&&container.runtime.rootless===false))}:result;
+    try{recordDiscoveredHardening(server.id,rootful);}catch{/* A grade is never worth failing a scan. */}
+    try{recordDiscoveredLinks(server.id,rootful);}catch{/* Neither are links. */}
+  }
+  for(const app of apps)if(scans?.[app.id])recordKeyScan(app.id,scans[app.id]);
+  return result;
+};
+export const browseProjectFiles=(server,containers,directory)=>{refuseForeignNames(server,containers);return remote(server,{operation:'list-project-files',containers,directory});};
+// Read-only: how DockNest would recreate plain containers (run spec, unsupported settings, Compose preview). The helper
+// never returns environment values here, only their names.
+export const describeContainers=(server,containers)=>{refuseForeignNames(server,containers);return transport.remote(server,{operation:'describe-containers',containers});};
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
@@ -47,10 +92,13 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const result=takeCertificates({serverId:server.id,siteId},await remote(server,{operation:'readiness',config:site.config}));
+ const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},takeRouting({serverId:server.id},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})}),'readiness'));
+ if(keyScan)recordKeyScan(siteId,keyScan);
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
+ // The restore check never changes `ready`; stored Ignore and Note answers are joined onto its findings.
+ if(result.restoreGaps)result.restoreGaps=withRestoreDecisions(siteId,result.restoreGaps);
  return result;
 }
 export async function verifyRecovery(job){
@@ -63,7 +111,7 @@ export async function verifyRecovery(job){
  const {site,server}=siteInfo(job.site_id);
  return remote(server,{operation:'verify-recovery',job:job.id,config:site.config});
 }
-function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
+function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('App not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
 // Restore tests never make their site busy: a test runs on its test server and its clean-up blocks only that server.
 function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type NOT IN ('site-move','restore-test') AND status IN ('queued','running','recovery_required')").get(siteId);}
 export const busySite=siteId=>Boolean(busy(siteId));
@@ -71,12 +119,12 @@ export const busySite=siteId=>Boolean(busy(siteId));
 // backups pass the actor `move:<id>`.
 const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
 export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
-export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});requireNotEditing(siteId,actor);}
+export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This app is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});requireNotEditing(siteId,actor);}
 // A site with an unfinished Safe Edit (docs/safe-edit.md) refuses other mutating work, also while the edit waits for its
 // backup or a health poll and while it needs attention; the edit's own backup and restore pass the actor `edit:<id>`.
 const editsTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_edits'").get();
 export function editingSite(siteId){if(!editsTable())return null;return db.prepare('SELECT id,state FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)||null;}
-export function requireNotEditing(siteId,actor=''){const edit=editingSite(siteId);if(edit&&actor!=='edit:'+edit.id)throw Object.assign(new Error('This site is being changed by a Safe Edit. Wait for it to finish first.'),{status:409,code:'SITE_EDITING',publicCode:'SITE_EDITING'});}
+export function requireNotEditing(siteId,actor=''){const edit=editingSite(siteId);if(edit&&actor!=='edit:'+edit.id)throw Object.assign(new Error('This app is being changed by a Safe Edit. Wait for it to finish first.'),{status:409,code:'SITE_EDITING',publicCode:'SITE_EDITING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
 // `within` runs first inside the enqueue transaction (Full backup now: its settings change and the job commit together).
 export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}){
@@ -84,14 +132,14 @@ export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
- if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{}),...(extra.editId?{editId:extra.editId}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ if(busy(siteId))throw new Error('App already has an active job or unresolved recovery');
+ const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This app was removed from active apps.'),{status:409});if(busy(siteId))throw new Error('App already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{}),...(extra.editId?{editId:extra.editId}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)throw new Error('Backup not found');
  db.exec('BEGIN IMMEDIATE');
- try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
+ try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');if(busy(backup.site_id))throw new Error('App already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
@@ -101,7 +149,7 @@ async function executeScrub(job){
  // manifests, which mirror the sealed ones), so a broken chain is found from any of its packages. A broken chain fails
  // the job, marks the backups that can no longer be restored as unverified (the next backup is then full) and raises
  // the site's "Backup failed" alert (src/alerts/detect.js, details.chainBroken).
- let members=null,damaged=null,chainError=null;const brokenDependents=[];let dependentError=null;
+ let members=null,damaged=null,chainError=null,invisible=null;const brokenDependents=[];let dependentError=null;
  if(backup&&linkOf(backupId)){
   try{members=verifyChainLinks(loadChain(backupId));}catch(error){chainError=error;}
   for(const dependent of dependentsOf(backupId)){try{verifyChainLinks(loadChain(dependent));}catch(error){brokenDependents.push(dependent);dependentError??=error;}}
@@ -110,7 +158,13 @@ async function executeScrub(job){
  try{
   stage(job.id,'verifying');
   if(chainError)throw chainError;
-  for(const member of members??[backup]){if(await verifyEncrypted(packagePath(member)).catch(()=>null)!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}}
+  for(const member of members??[backup]){
+   // Google Drive hides files another app (or access level) uploaded: that is not damage, and nothing is marked failed or unverified.
+   const sum=await verifyEncrypted(packagePath(member)).catch(error=>{if(notVisibleOnProvider(error)&&hiddenByClientChange(packagePath(member),member.created_at))invisible=error;return null;});
+   if(invisible)break;
+   if(sum!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}
+  }
+  if(invisible){transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?,details=?",now(),NOT_VISIBLE_MESSAGE,JSON.stringify({backupId,notVisible:true})))return;audit('worker','backup.scrub.not_visible',backupId,{job:job.id});});return;}
   const passed=()=>{for(const member of members??[backup]){recordVerification(member.id,'integrity',{status:'passed',method:member.id===backupId?'full AES-256-GCM authentication and SHA256':'full AES-256-GCM authentication and SHA256, as part of the chain of '+backupId},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(member.id);}};
   if(brokenDependents.length){
    // This package and the chain below it authenticate; a backup built on it cannot be restored.
@@ -142,7 +196,7 @@ const publicSource=({path:_path,...source})=>source;
 // The first source that authenticates in full against the stored checksum. Without a choice: the main copy, then each
 // verified copy. With `sourceTargetId`: only that one.
 async function authenticatedSource(backup,sourceTargetId=null){
- const candidates=restoreSources(backup).filter(source=>source.path&&(sourceTargetId?source.targetId===sourceTargetId:source.role==='main'||source.status==='verified'));
+ const candidates=restoreSources(backup).filter(source=>source.path&&(sourceTargetId?source.targetId===sourceTargetId&&source.status==='verified':source.role==='main'||source.status==='verified'));
  for(const source of candidates){
   try{const inspected=await inspectEncrypted(source.path);if(inspected.checksum===backup.checksum)return {...inspected,source};}catch{/* Try the next source. */}
  }
@@ -152,8 +206,20 @@ async function authenticatedSource(backup,sourceTargetId=null){
 // from its first readable source after every chain link was checked. Nothing is sent before all of them pass. A backup
 // outside a chain is one package, read exactly as before. With `sourceTargetId` the chosen copy is used for the backup
 // itself; the packages it builds on prefer that destination and fall back to any verified source (the bytes are the same).
-async function authenticatedChain(backup,sourceTargetId=null){
+// `strict` (a restore test from a copy, docs/restore-tests.md "Testing a copy"): every package is read from that
+// destination only, and one that is not there, not verified or does not authenticate stops it with `copy_unavailable`.
+export class CopyUnavailableError extends Error{
+ constructor(backupId,own){super(own?'The chosen copy could not be read or did not authenticate':`Backup ${backupId}, which this backup builds on, has no readable verified copy on the chosen storage`);this.code='copy_unavailable';this.backupId=backupId;this.own=own;}
+}
+async function authenticatedChain(backup,sourceTargetId=null,{strict=false}={}){
  const members=verifyChainLinks(loadChain(backup.id));
+ const strictly=async member=>{
+  const own=member.id===backup.id;let found;
+  try{found=await authenticatedSource(member,sourceTargetId);}catch{throw new CopyUnavailableError(member.id,own);}
+  if(inChain(members)&&found.size!==member.size)throw new CopyUnavailableError(member.id,own);
+  return {member,...found};
+ };
+ if(strict&&sourceTargetId){const chain=[];for(const member of members)chain.push(await strictly(member));return chain;}
  if(!inChain(members))return [{member:members[0],...await authenticatedSource(backup,sourceTargetId)}];
  const chain=[];
  for(const member of members){
@@ -182,7 +248,7 @@ async function sendPackage(server,item,remotePath,{signal,upload=transport.uploa
  try{await upload(server,pass,remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
  finally{signal?.removeEventListener('abort',stop);}
 }
-export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null}={}){
+export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null,runtime}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));
  if(!backup)throw new Error('Verified backup not found');
@@ -207,10 +273,14 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  }catch(error){blockers.push(error.message);}
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
  const staticSite=backup.manifest.kind==='static';
+ if(!staticSite&&!backup.manifest.runtime&&capabilities.docker==null)blockers.push('This server has no rootful Docker, which this backup needs');
+ // Podman and rootless apps (docs/podman-rootless.md): the target engine must be one the server reported, of the same kind.
+ const targetRuntime=backup.manifest.runtime?(runtime??backup.manifest.runtime):undefined;
+ {const problem=restoreRuntimeProblem(backup.manifest.runtime,runtime,capabilities,{containers:backup.manifest.containers?.length??0,chainLength});if(problem)blockers.push(problem);}
  if(!staticSite&&capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
  const grouped=(backup.manifest.containers?.length||0)>1;
  if(!staticSite&&(!backup.manifest.containers?.length||backup.manifest.containers.length>30))blockers.push('Restore requires 1 to 30 containers');
- if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
+ if(grouped&&!(Number.parseInt(capabilities.docker,10)>=28))blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  const externalOnly=Object.keys(mappings||{}).every(name=>name==='externalReadOnly')&&(!mappings.externalReadOnly||Array.isArray(mappings.externalReadOnly));
  if(!externalOnly)blockers.push('Custom port and writable host directory maps require reviewed offline restore');
@@ -222,17 +292,20 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
   catch{blockers.push('Required external storage is unavailable or not a reviewed read-only mount on the restore target.');}
  }
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
- return {backupId,serverId,mode,mappings,capabilities,...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,...(targetRuntime?{runtime:targetRuntime}:{}),...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
+// What a client plan may ask for again at enqueue time: nothing else of it is trusted, and a requested runtime (the user of a Podman or
+// rootless restore) is kept so the fresh plan re-checks it against the engines the target server reported (an unknown user is a blocker).
+export const freshPlanOptions=plan=>({serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null,...(plan?.runtime!==undefined?{runtime:plan.runtime}:{})});
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id,actor);}
- const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null});
+ const fresh=await planRestore(backupId,freshPlanOptions(plan));
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  const restoreId=id(),jobId=id();
  db.exec('BEGIN IMMEDIATE');
  try{
-  if(busy(backup.site_id))throw new Error('Site already has active work or unresolved recovery');
+  if(busy(backup.site_id))throw new Error('App already has active work or unresolved recovery');
   requireNoDeploymentHold();
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
   db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,?,?,'queued',?)").run(restoreId,backupId,fresh.serverId,fresh.mode,JSON.stringify(fresh),now());
@@ -300,6 +373,12 @@ export function protectedPathWarning(items){
  const list=notCopiedList(items,'path');
  return list&&`${list} These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`;
 }
+// Online dumps (docs/online-dumps.md): each database that kept the stopped file copy, and why.
+export function onlineDumpWarnings(config,{incremental=false,move=false,fallbacks=[]}={}){
+ if(config?.onlineDumps!==true||config.kind==='static'||move)return [];
+ if(incremental)return ['Online dumps: incremental backups are on, so every database stopped for a file copy.'];
+ return (Array.isArray(fallbacks)?fallbacks:[]).filter(item=>item&&typeof item.container==='string'&&typeof item.reason==='string').map(item=>`Online dumps: ${item.container} stopped for a file copy because ${item.reason}.`);
+}
 // Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
 function probeWarnings(job,skipped=[]){
  let details={};try{details=JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job)?.details||'{}');}catch{}
@@ -348,11 +427,12 @@ export async function discardIncrementalState(siteId,{server=null}={}){
 // Restore tests pass `prepare` (their own journalled staging) and `signal` (cancel and time limit stop the transfer).
 // An increment sends its whole chain (full first) after every package and link passed: `prepare` (or prepare-restore)
 // gets `chainLength` and answers `remotePaths`, and the result carries `chain` for the helper's own link check.
-export async function uploadBackupTo(server,backupId,jobId,{prepare,signal}={}){
+// `sourceTargetId` (a restore test from a copy): every package comes from that destination or nothing is sent.
+export async function uploadBackupTo(server,backupId,jobId,{prepare,signal,sourceTargetId=null}={}){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  if(!backup||!(backup.verified||db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(backupId)))throw new Error('Verified backup not found');
  // The main copy, or a verified copy when the main one is missing or fails authentication.
- const chain=await authenticatedChain(backup),last=chain.at(-1);
+ const chain=await authenticatedChain(backup,sourceTargetId,{strict:Boolean(sourceTargetId)}),last=chain.at(-1);
  if(!inChain(chain.map(item=>item.member))){
   const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
   await sendPackage(server,last,staging.remotePath,{signal});
@@ -381,20 +461,26 @@ async function executeRestoreJob(job){
    audit('worker',details.sourceTargetId?'restore.source_chosen':'restore.source_fallback',backup.id,{job:job.id,targetId:source.targetId,targetName:source.name});
   }
   let result;
-  const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint};
+  const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint,...(restore.plan.runtime?{runtime:restore.plan.runtime}:{})};
   if(!chained){
-   const staging=await remote(server,{operation:'prepare-restore',job:job.id});
+   const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id});
    stage(job.id,'transferring');
-   await sendPackage(server,chain[0],staging.remotePath,{upload:uploadStream});
+   await sendPackage(server,chain[0],staging.remotePath,{upload:transport.uploadStream});
    // Only invoke extraction after the complete GCM-authenticated stream finishes.
-   stage(job.id,'restoring');result=await remote(server,restoreRequest);
+   stage(job.id,'restoring');result=await transport.remote(server,restoreRequest);
   }else{
-   const staging=await remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
+   const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
    const paths=chainPaths(staging,chain.length);
    stage(job.id,'transferring');
-   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:uploadStream});
+   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:transport.uploadStream});
    // The helper checks every package's checksum and link again before it extracts the full package, then each increment.
-   stage(job.id,'restoring');result=await remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
+   stage(job.id,'restoring');result=await transport.remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
+  }
+  // Unraid only, and only after the app restored: put the saved template back so the Unraid Docker page keeps managing the app.
+  // Best effort and never overwriting a different file; a failure is a note on the result, never a failed restore.
+  if(identityFor(server).nasKind==='unraid'){
+   try{const put=await transport.remote(server,{operation:'nas-template-restore',job:job.id});const templates=Array.isArray(put?.templates)?put.templates.slice(0,20).map(item=>({status:String(item?.status??'').slice(0,20)})):[];result={...result,nasTemplates:templates};audit('worker','restore.nas_template',backup.id,{job:job.id,statuses:templates.map(item=>item.status)});}
+   catch{result={...result,nasTemplates:[{status:'failed'}]};}
   }
   // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
   if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
@@ -403,6 +489,9 @@ async function executeRestoreJob(job){
    db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
    audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
  }catch(error){
+  // A restore into Podman or a rootless engine that failed leaves no copy behind: its containers (by this job's label) and its
+  // data folder are removed by the helper, whatever step failed. Best effort; the failure itself is what gets recorded.
+  if(restore?.plan?.runtime){try{await transport.remote(server,{operation:'runtime-restore-cleanup',job:job.id,runtime:restore.plan.runtime});}catch{console.error('Cleanup of a failed Podman or rootless restore did not finish.');}}
   if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
    for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
    db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
@@ -476,7 +565,10 @@ export async function executeJob(job){
   // Without the option the request and the package are exactly as before.
   const decision=decideCapture({site,plan,directory,jobDetails});
   // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{})};
+  // Online dumps (opt-in per app, docs/online-dumps.md): never for a move, whose copy must be a stopped one, nor with
+  // incremental backups, whose chains store files.
+  const onlineDumps=site.config.kind!=='static'&&site.config.onlineDumps===true&&!jobDetails.moveId&&!decision;
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(onlineDumps?{onlineDumps:true}:{}),...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -494,16 +586,23 @@ export async function executeJob(job){
    published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
   captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
-  result=takeCertificates({serverId:site.server_id,siteId:site.id},result);
+  result=takeCertificates({serverId:site.server_id,siteId:site.id},takeRouting({serverId:site.server_id},result,'backup'));
+  // The key proof (docs/keys-safe.md): rule ids, locations and fingerprints only, kept with the backup so a restore test
+  // can compare the restored copy with what this package holds.
+  const keyProof=cleanScan(result.keys);
   try{recordHardening(site.id,result.hardening);}catch{/* A grade is never worth failing a backup. */}
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   manifest.deliveryMode=direct?'direct':'staged';
+  {const recorded=manifestRuntime(result.manifest,site.config?.runtime);if(recorded.error)throw new Error(recorded.error);Object.assign(manifest,recorded);}
   manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
   if(result.manifest.backupScope)manifest.backupScope=result.manifest.backupScope;
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
+  if(result.manifest.onlineDumpFallbacks)manifest.onlineDumpFallbacks=result.manifest.onlineDumpFallbacks;
+  // keysCheck: which fingerprint key made the proof, so a restore test after a key change does not compare across keys.
+  if(keyProof){manifest.keys=keyProof.keys;manifest.keysServerId=server.id;manifest.keysCheck=fingerprintKeyCheck(server.id);}
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
   // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
   const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});
@@ -524,7 +623,8 @@ export async function executeJob(job){
   const notCopied=protectedMountWarning(manifest.protectedMounts);if(notCopied)warnings.push(notCopied);
   const keysNotCopied=protectedPathWarning(manifest.protectedPaths);if(keysNotCopied)warnings.push(keysNotCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
-  if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
+  if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the app server can run the current helper.');
+  warnings.push(...onlineDumpWarnings(site.config,{incremental:!!decision,move:!!jobDetails.moveId,fallbacks:manifest.onlineDumpFallbacks}));
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
   const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{}),...(jobDetails.editId?{editId:jobDetails.editId}:{})}});
@@ -533,6 +633,7 @@ export async function executeJob(job){
   // Its snapshot files are not committed, so the next backup of the site is full.
   if(!owned){if(chain)setForceFull(site.id,FORCE.uncommitted);console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size,...(chain?{backupKind:chain.backupKind}:{})});
+  if(keyProof)recordKeyScan(site.id,keyProof,{backup:{id:backupId,backupKind:chain?.backupKind??'full',chainId:chain?.chain?.id??null}});
   if(chain){
    if(chain.incremental.fallback)audit('worker','backup.incremental_fallback',site.id,{job:job.id,backupId,reason:chain.incremental.fallback});
    clearForceFull(site.id,decision.force);
@@ -561,12 +662,36 @@ export async function executeJob(job){
   if(finishJob(job.id,'status=?,stage=?,finished_at=?,error=?,details=?',recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details)))audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
  }
 }
+// Missed runs (docs/alerts.md, "Missed scheduled backups"). A scheduled occurrence that could not start within its grace
+// (DockNest or its worker was down, or the site stayed busy past it, for example with a backup that never finished) is
+// written once as a `backup.missed` audit row, which the alert detector turns into the site's alert. One row per miss:
+// none is written again until a backup of the site completes after it. The grace is the schedule's own interval, at
+// least 15 minutes and at most one hour, so a busy site on a short schedule is not reported every few minutes.
+export const MISSED_GRACE_MS=Object.freeze({min:15*60_000,max:60*60_000});
+export function missedGraceMs(policy,occurrence){
+ const after=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate:occurrence}).next().getTime();
+ return Math.min(MISSED_GRACE_MS.max,Math.max(MISSED_GRACE_MS.min,after-occurrence.getTime()));
+}
+// The occurrence each site was last checked for, so a site that stays busy is looked up once, not on every tick.
+const missedChecked=new Map();
+function noteMissed(policy,occurrence,currentDate){
+ try{
+  const due=occurrence.toISOString();
+  if(missedChecked.get(policy.site_id)===due||currentDate.getTime()-occurrence.getTime()<=missedGraceMs(policy,occurrence))return;
+  // A site that needs recovery already has its own alert and waits for the owner: not a miss on top of it.
+  const recovering=db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='recovery_required'").get(policy.site_id);
+  const open=recovering||db.prepare("SELECT 1 FROM audit_events WHERE action='backup.missed' AND target=? AND created_at>COALESCE((SELECT MAX(finished_at) FROM jobs WHERE site_id=? AND type='backup' AND status='completed'),'')").get(policy.site_id,policy.site_id);
+  if(!open)audit('scheduler','backup.missed',policy.site_id,{scheduledFor:due});
+  missedChecked.set(policy.site_id,due);
+ }catch{/* a miss check never stops the schedule itself */}
+}
 export function tickScheduler(currentDate=new Date()){
  if(deploymentHeld(db))return;
  const policies=db.prepare('SELECT * FROM policies WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all();
  for(const policy of policies){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
+   if(next&&next<=currentDate)noteMissed(policy,next,currentDate);
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
    if(next&&next<=currentDate){if(busy(policy.site_id)||movingSite(policy.site_id)||editingSite(policy.site_id))continue;enqueueBackup(policy.site_id);}
    if(!next||next<=currentDate){
@@ -594,10 +719,10 @@ export function claimJob({healOnly=false}={}){
    const reason=claimHooks.heal?claimHooks.heal.check(job):'unavailable';
    if(reason){if(claimHooks.heal)claimHooks.heal.skip(job,reason);else db.prepare("UPDATE jobs SET status='completed',stage='skipped',finished_at=? WHERE id=? AND status='heal_queued'").run(now(),job.id);db.exec('COMMIT');continue;}
   }
-  // Site-move, restore-test and self-heal jobs use their own statuses so a release without them (for example after a
+  // Site-move, restore-test, self-heal and domain-check jobs use their own statuses so a release without them (for example after a
   // rollback) never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.
-  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'edit_queued' THEN 'edit_running' WHEN 'heal_queued' THEN 'heal_running' ELSE 'running' END,stage=CASE WHEN status IN ('test_queued','edit_queued') THEN stage WHEN status='heal_queued' THEN 'restarting' ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
+  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'edit_queued' THEN 'edit_running' WHEN 'heal_queued' THEN 'heal_running' WHEN 'domain_queued' THEN 'domain_running' ELSE 'running' END,stage=CASE WHEN status IN ('test_queued','edit_queued') THEN stage WHEN status='heal_queued' THEN 'restarting' WHEN status='domain_queued' THEN 'checking' ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
  }

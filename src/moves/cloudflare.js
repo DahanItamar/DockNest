@@ -44,7 +44,7 @@ export async function connect(raw, actor) {
     if (batch.length < 50) break;
   }
   const zones = listed.map(zone => ({ id: String(zone.id), name: String(zone.name).toLowerCase() })).filter(zone => /^[a-f0-9]{32}$/.test(zone.id));
-  if (!zones.length) throw httpError(400, 'This token cannot see any zone. Give it Zone.DNS:Edit on the zone of your site.');
+  if (!zones.length) throw httpError(400, 'This token cannot see any zone. Give it Zone.DNS:Edit on the zone of your app.');
   for (const zone of zones) await call(value, `/zones/${zone.id}/dns_records?per_page=1`);
   db.prepare("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(KEY, JSON.stringify({ token: seal(value), zones, savedAt: new Date().toISOString() }));
   audit(actor, 'dns.connect', null, { provider: 'cloudflare', zones: zones.length });
@@ -68,6 +68,19 @@ export async function records(domain) {
 }
 
 export const available = () => !!stored();
+// Read-only token check for the domain path (docs/domains.md, "DNS"): the token is opened in memory for the call only,
+// and the answer keeps only 'active' or 'expired' and the names of missing scopes. null when Cloudflare cannot be
+// reached, so an outage is never reported as a bad token.
+export async function tokenStatus(domain) {
+  if (!stored()) return null;
+  const refused = error => error.status === 400;
+  try { if ((await call(token(), '/user/tokens/verify'))?.status !== 'active') return { state: 'expired', missing: [] }; }
+  catch (error) { return refused(error) ? { state: 'expired', missing: [] } : null; }
+  const zone = zoneFor(domain);
+  if (!zone) return { state: 'active', missing: [] };
+  try { await call(token(), `/zones/${zone.id}/dns_records?per_page=1`); return { state: 'active', missing: [] }; }
+  catch (error) { return refused(error) ? { state: 'active', missing: ['Zone.DNS:Read'] } : null; }
+}
 // Points the A record (and an AAAA record when the new server has IPv6) at the new server. Returns the journal entry
 // needed to switch back: record ids and their previous content, never the token.
 // The journal (record ids and previous content) is handed to `onJournal` and must be stored BEFORE any change. A

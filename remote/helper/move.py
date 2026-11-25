@@ -4,12 +4,14 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
-    hardening_args, inspect, mount_option, run, target_hardening_problem, verify_hardening)
+    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, SAFE_NAME, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
+    hardening_args, inspect, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
 from .databases import (
     restart_services)
+from .dumps import (
+    dumped_services)
 from .backup import (
     backup_plan, tree_digest)
 from .net import (
@@ -17,14 +19,18 @@ from .net import (
 from .maintenance import (
     maintenance)
 from .discovery import (
-    nginx_sites, temporary_mounts, tmpfs_argument)
+    engine_rootless, nginx_sites, rootless_users)
+from .runtime import (
+    current_runtime, engine_architecture, runtime_is_default)
+from .runspec import (
+    UNREADABLE_MOUNTS, create_args, fit_host, port_argument, port_bindings, run_spec, unbound_exposed, yaml_str)
 from .restore import (
     extract_archives, image_archives, mount_archive, mount_bytes, owned_job_root, restore_network_plan,
     unpack_verified)
 from .install import (
     install_candidates, os_release, package_manager)
 from .restore_test import (
-    load_images_keeping_tags)
+    cpu_count, load_images_keeping_tags)
 # </build:header>
 # ---- Site moves (docs/moving-sites.md) ----
 # Rules: facts are read-only and never include env values (masked host and port only); a deploy journals every
@@ -33,7 +39,6 @@ from .restore_test import (
 MOVES_ROOT=pathlib.Path('/var/lib/docknest/moves')
 NGINX_CONF_DIRS=['/etc/nginx/conf.d','/etc/nginx/http.d','/etc/nginx/sites-enabled']
 ACME_ROOT=pathlib.Path('/var/lib/docknest/acme')
-SAFE_NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')
 DOMAIN=re.compile(r'(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)+')
 PROTECTED_PATHS={'/','/bin','/boot','/dev','/etc','/home','/lib','/lib64','/media','/mnt','/opt','/proc','/root','/run','/sbin','/srv','/sys','/tmp','/usr','/var','/var/lib','/var/lib/docker','/var/lib/docker/volumes','/var/www','/var/lib/docknest','/var/lib/docker-backup-manager'}
 MAIL_PORTS='25,465,587'
@@ -67,6 +72,16 @@ def move_path(value,own=False):
         allowed=own and any(within(path,root) and path!=root for root in MOVE_OWN_ROOTS)
         if protected_lexical(path) or (not allowed and any(within(path,root) for root in MOVE_FORBIDDEN)):raise ValueError('%s is a system or protected location; DockNest never writes there during a move.'%text)
     return pathlib.Path(text)
+def move_placeable(path):
+    """True when a move may create this path; a configuration file anywhere else (such as /etc/cron.d) is put back by hand."""
+    try:move_path(path)
+    except ValueError:return False
+    return all(move_root_allowed(form) for form in resolved(path) if form.startswith('/'))
+def hand_placed(files,kept=()):
+    """Configuration files a move may not create, to put back by hand. A file that is, or lies inside, a `kept` path
+    (the project's Compose files, the bind mounts) is never named here: placing it refuses exactly as before."""
+    kept=[lexical(path) for path in kept]
+    return [f for f in dict.fromkeys(files) if not any(within(lexical(f),path) for path in kept) and not move_placeable(lexical(f))]
 def move_state(mid,create=False):
     d=MOVES_ROOT/mid
     if create:MOVES_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
@@ -198,14 +213,11 @@ def env_findings(containers,files,tokens):
             match=re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$',line)
             if match:scan(match[1],match[2].strip().strip('"\''),'file '+str(p))
     return findings[:100]
-def port_bindings(c):
-    result=[]
-    for internal,bindings in (c.get('HostConfig',{}).get('PortBindings') or {}).items():
-        port,_,protocol=internal.partition('/')
-        for binding in bindings or []:
-            host=str(binding.get('HostPort') or '')
-            if host.isdigit() and port.isdigit():result.append({'container':c['Name'].lstrip('/'),'hostIp':binding.get('HostIp') or '0.0.0.0','hostPort':int(host),'containerPort':int(port),'protocol':protocol or 'tcp'})
-    return result
+# Names a container's network list can hold that are modes, not networks to inspect: Docker's three, and Podman's `private`, `pasta`,
+# `slirp4netns` (with options after a colon), `ns:<path>` and `container:<id>`.
+NETWORK_MODES=('bridge','host','none','private','pasta','slirp4netns')
+def engine_network_mode(name):
+    return name in NETWORK_MODES or str(name).startswith(('ns:','container:','pasta:','slirp4netns:'))
 def source_site_facts(cfg,tokens):
     domains=[d for d in cfg.get('domains',[]) if isinstance(d,str) and DOMAIN.fullmatch(d)]
     nginx=nginx_domain_facts(domains) if domains else {'directives':[],'upstreamPorts':[]}
@@ -221,7 +233,8 @@ def source_site_facts(cfg,tokens):
     networks={}
     for c in cs:
         for name in (c.get('NetworkSettings',{}).get('Networks') or {}):
-            if name in ['bridge','host','none'] or name in networks:continue
+            # pasta and slirp4netns are how rootless Podman reaches the network, not networks: `network inspect pasta` exits 125.
+            if engine_network_mode(name) or name in networks:continue
             n=json.loads(docker('network','inspect',name))[0]
             networks[name]={'name':name,'driver':n.get('Driver'),'internal':bool(n.get('Internal')),'ipv6':bool(n.get('EnableIPv6')),'labels':{k:v for k,v in (n.get('Labels') or {}).items() if k.startswith('com.docker.compose.')}}
     # The web port nginx proxies to; then the configured loopback health URL; then the first published TCP port.
@@ -243,10 +256,19 @@ def source_site_facts(cfg,tokens):
     files=[f.strip() for f in (labels[0].get('com.docker.compose.project.config_files','') if labels else '').split(',') if f.strip()]
     if compose and len(names)==1 and all(l.get('com.docker.compose.service') for l in labels) and files and all(f in cfg.get('composeFiles',[]) for f in files):
         project={'project':labels[0]['com.docker.compose.project'],'workingDir':labels[0].get('com.docker.compose.project.working_dir',''),'files':files,'services':{c['Name'].lstrip('/'):l['com.docker.compose.service'] for c,l in zip(cs,labels)}}
-    return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
-        'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
+    hand=hand_placed(cfg.get('composeFiles',[])+cfg.get('configFiles',[]),(project['files'] if project else [])+[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind'])
+    return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':engine_architecture(),
+        'ports':ports,'bindPaths':[b for b in binds if b not in hand],'handPlaced':hand,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
-        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []}}
+        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []},
+        **run_spec_facts(cs)}
+def run_spec_facts(cs):
+    """What the move preview names per container (runspec): settings a docker create copy cannot recreate, mounts it
+    must refuse, and CPU limits the new server may have to fit."""
+    specs=[run_spec(c) for c in cs]
+    return {'unsupported':[{'container':s['name'],'settings':settings} for s in specs for settings in [[x for x in s['unsupported'] if x!=UNREADABLE_MOUNTS]] if settings],
+        'unreadableMounts':[s['name'] for s in specs if UNREADABLE_MOUNTS in s['unsupported']],
+        'cpuLimits':[{'container':s['name'],'cpus':s['cpus'],'cpuset':s['cpusetCpus']} for s in specs if s['cpus'] or s['cpusetCpus']]}
 # A seccomp profile path in a Compose security_opt entry: absolute, no variables, ends at a quote, space, comma or ].
 COMPOSE_SECCOMP=re.compile(r'seccomp[:=]\s*(/[A-Za-z0-9._/@+-]{1,4095})(?=["\'\s,\]]|$)')
 def compose_seccomp_paths(files):
@@ -287,6 +309,119 @@ def target_probe(probe):
     seccomp=[p for p in (probe.get('seccomp') or [])[:30] if isinstance(p,str) and COMPOSE_SECCOMP.fullmatch('seccomp='+p) and '..' not in pathlib.PurePosixPath(p).parts]
     return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES),
         'seccompPresent':[p for p in seccomp if os.path.isfile(p) and not os.path.islink(p)]}
+# ---- Ownership, modes and file system (docs/adr-3.0.0-keys-safe.md, section 6). Read-only, except one probe file that is
+# created in a private folder and removed in every case. Every function returns an error marker instead of raising, so an
+# unreadable fact reaches the preview as "could not be checked" and blocks, and never as a silent pass.
+OWNERSHIP_SCAN_LIMIT=20000
+OWNERSHIP_FINDINGS=20
+def mount_details(text=None):
+    """Mount point, file system and options from /proc/self/mountinfo (paths.mount_table keeps only read-only)."""
+    if text is None:text=pathlib.Path('/proc/self/mountinfo').read_text()
+    def unescape(value):return re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),value)
+    result=[]
+    for line in text.splitlines():
+        fields=line.split();divider=fields.index('-')
+        options=set(fields[5].split(','))|set(fields[divider+3].split(','))
+        result.append({'path':unescape(fields[4]),'filesystem':fields[divider+1],'options':options})
+    if not result:raise ValueError('empty mount table')
+    return result
+def covering_mount(path,table):
+    covering=[m for m in table if path==m['path'] or path.startswith(m['path'].rstrip('/')+'/')]
+    return max(covering,key=lambda m:len(m['path'])) if covering else None
+def nearest_existing(path):
+    p=pathlib.Path(path)
+    while not (p.exists() or p.is_symlink()):
+        if p.parent==p:break
+        p=p.parent
+    return p
+def source_modes(paths):
+    """Setuid and setgid bits, ACLs and extended attributes below the site's bind paths: names paths only, never content."""
+    try:
+        findings=[];scanned=0;unreadable=0;truncated=False;xattr=hasattr(os,'listxattr')
+        stack=[str(p) for p in (paths or [])[:50] if isinstance(p,str) and os.path.isabs(p) and '..' not in pathlib.PurePosixPath(p).parts]
+        while stack and not truncated:
+            current=stack.pop()
+            try:info=os.lstat(current)
+            except OSError:unreadable+=1;continue
+            if stat.S_ISLNK(info.st_mode):continue
+            scanned+=1
+            if scanned>OWNERSHIP_SCAN_LIMIT:truncated=True;break
+            kinds=[]
+            if info.st_mode&(stat.S_ISUID|stat.S_ISGID):kinds.append('setid')
+            if xattr:
+                try:names=os.listxattr(current,follow_symlinks=False)
+                except OSError as error:
+                    if error.errno not in (errno.ENOTSUP,errno.ENODATA):unreadable+=1
+                    names=[]
+                if any(n.startswith('system.posix_acl') for n in names):kinds.append('acl')
+                if any(n.startswith('user.') or n=='security.capability' for n in names):kinds.append('xattr')
+            if kinds and len(findings)<OWNERSHIP_FINDINGS:findings.append({'key':'file-mode','kind':'file-mode','path':current,'modes':kinds})
+            if stat.S_ISDIR(info.st_mode):
+                try:stack.extend(os.path.join(current,name) for name in sorted(os.listdir(current),reverse=True))
+                except OSError:unreadable+=1
+        return {'checked':True,'scanned':min(scanned,OWNERSHIP_SCAN_LIMIT),'truncated':truncated,'unreadable':unreadable,'xattrChecked':xattr,'findings':findings}
+    except Exception:return {'checked':False,'error':'scan'}
+def staging_features(directory):
+    """Whether the file system under the staging folder keeps setuid bits and extended attributes (tested on a probe file)."""
+    try:
+        made=tempfile.mkdtemp(prefix='.docknest-probe-',dir=str(directory))
+        try:
+            probe=os.path.join(made,'f');open(probe,'w').close()
+            os.chmod(probe,0o4755);setid=bool(os.stat(probe).st_mode&stat.S_ISUID)
+            try:os.setxattr(probe,'user.docknest',b'1');xattr=True
+            except OSError as error:
+                if error.errno not in (errno.ENOTSUP,errno.EPERM):raise
+                xattr=False
+            return {'setid':setid,'xattr':xattr}
+        finally:shutil.rmtree(made,ignore_errors=True)
+    except Exception:return None
+def squashes_root(directory):
+    """True when root cannot own files on this (NFS) mount, False when it can, None when that could not be tested."""
+    folder=nearest_existing(directory)
+    if not folder.is_dir():folder=folder.parent
+    try:made=tempfile.mkdtemp(prefix='.docknest-probe-',dir=str(folder))
+    except PermissionError:return True
+    except OSError:return None
+    try:
+        probe=os.path.join(made,'f');open(probe,'w').close()
+        try:os.chown(probe,1,1);return False
+        except PermissionError:return True
+    except PermissionError:return True
+    except OSError:return None
+    finally:shutil.rmtree(made,ignore_errors=True)
+def target_filesystem(paths,staging):
+    try:
+        table=mount_details();mounts={}
+        for value in (paths or [])[:200]:
+            if not isinstance(value,str) or not os.path.isabs(value) or '..' in pathlib.PurePosixPath(value).parts:continue
+            where=nearest_existing(value);mount=covering_mount(os.path.realpath(where),table)
+            if mount is None:return {'error':'mounts'}
+            if mount['path'] in mounts:continue
+            nfs=mount['filesystem'].startswith('nfs')
+            mounts[mount['path']]={'mount':mount['path'],'filesystem':mount['filesystem'],'readOnly':'ro' in mount['options'],'noexec':'noexec' in mount['options'],'nosuid':'nosuid' in mount['options'],'rootSquash':squashes_root(where) if nfs else False,'sample':str(value)}
+        features=staging_features(staging)
+        return {'mounts':list(mounts.values()),'features':features} if features else {'error':'probe'}
+    except Exception:return {'error':'mounts'}
+def runtime_facts():
+    """What a move preflight needs to judge a rootless target (docs/podman-rootless.md, decision 10): the lowest port a
+    non-root user may bind, and whether each rootless user keeps its services after logout (loginctl enable-linger).
+    A fact that cannot be read is None, never a guess."""
+    try:floor=int(pathlib.Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text().strip())
+    except (OSError,ValueError):floor=None
+    try:users=rootless_users()
+    except Exception:users=[]
+    linger={}
+    for user,_,_ in users:
+        try:linger[user]=pathlib.Path('/var/lib/systemd/linger',user).is_file() and not pathlib.Path('/var/lib/systemd/linger',user).is_symlink()
+        except OSError:linger[user]=None
+    return {'portFloor':floor,'linger':linger}
+def ownership_facts(role,req,facts):
+    runtime=current_runtime()
+    # The engine of a Podman or rootless app, not the rootful Docker daemon the literal `docker info` would read.
+    result={'engine':{'mode':engine_rootless() if runtime_is_default(runtime) else ('rootless' if runtime.rootless else 'none')}}
+    if role=='source':result['modes']=source_modes((facts.get('site') or {}).get('bindPaths'))
+    elif req.get('probe'):result['filesystem']=target_filesystem(req['probe'].get('paths'),facts.get('stagingExisting'))
+    return result
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
     cfg=req.get('config') or {}
@@ -297,13 +432,16 @@ def move_facts(req):
         'freeBytes':usage.free,'totalBytes':usage.total,'stagingWritable':os.access(existing,os.W_OK),'usedPorts':ports,'nginx':nginx,
         'webPortOwner':None if 80 not in ports else ('nginx' if nginx.get('running') else 'other'),
         'certbot':{'installed':bool(shutil.which('certbot')),'account':pathlib.Path('/etc/letsencrypt/accounts').is_dir()},'addresses':host_addresses()}
-    facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}'])
+    facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}']);facts['cpuCount']=cpu_count()
     facts['firewall']={'mailBlocking':firewall_ready()}
     facts['os']=os_release();facts['packageManager']=package_manager(facts['os']['id'])
     facts['candidates']=install_candidates(facts['packageManager'])
     tokens=[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)]+[a for a in facts['addresses'] if not a.startswith(('127.','::1'))]
     if req.get('role')=='source':facts['site']=source_site_facts(cfg,list(dict.fromkeys(tokens)))
     if req.get('probe'):facts['probe']=target_probe(req['probe'])
+    facts['stagingExisting']=str(existing)
+    facts['ownership']=ownership_facts(req.get('role'),req,facts)
+    facts['runtimeFacts']=runtime_facts()
     emit(result=facts)
 IMAGE_BASED_LINKS=('home','srv','opt','mnt')
 def image_based_form(path):
@@ -393,11 +531,7 @@ def mapped_port(port_map,binding,mode):
             break
     else:to=binding['hostPort']
     if not 1<=to<=65535:raise ValueError('Invalid port in the move plan')
-    ip='127.0.0.1' if mode=='test' else binding['hostIp']
-    if ip in ['','0.0.0.0']:host=''
-    elif ':' in ip:host='['+ip+']:'
-    else:host=ip+':'
-    return host+str(to)+':'+str(binding['containerPort'])+'/'+binding['protocol'],to
+    return port_argument('127.0.0.1' if mode=='test' else binding['hostIp'],to,binding['containerPort'],binding['protocol']),to
 def firewall_ready():
     """Docker's DOCKER-USER chain exists, so DockNest can reject SMTP from test containers without touching other rules."""
     if not shutil.which('iptables'):return False
@@ -524,11 +658,29 @@ def deploy_restore(req):
         if root.exists():shutil.rmtree(root,ignore_errors=True)
     state['deployed'][mode]=result;save_state(d,state)
     emit(result=result)
+def place_configuration(manifest,unpacked,hand,placed,d,state,mid):
+    """Put the backup's configuration files back at their paths and return them. A file inside a mount just placed comes
+    with it. Only the files the reviewed preview named to put back by hand (`hand`) are left out; any other file the
+    move may not create refuses, as it always did."""
+    configuration=[]
+    for filename in manifest.get('configurationFiles',[]):
+        # Relative names and '..' are refused; other spellings the site form accepts (//, ./, a trailing /) are
+        # normalised, so the lexical containment test below compares like with like.
+        if not isinstance(filename,str) or not filename.startswith('/') or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('Unsupported path for a move: %s'%filename)
+        configuration.append(lexical(filename))
+    skipped={lexical(f) for f in hand if isinstance(f,str)}
+    for i,filename in enumerate(configuration):
+        if filename in skipped or any(filename==p or filename.startswith(p.rstrip('/')+'/') for p in placed):continue
+        placed.append(str(place_tree(unpacked/('config-%d.tar'%i),filename,d,state,mid)))
+    return configuration
 def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
     port_map=req.get('portMap') or [];rewrite=req.get('envRewrite') or {}
     keys=set(rewrite.get('keys') or []);tokens=[t for t in rewrite.get('from') or [] if isinstance(t,str) and t];target=str(rewrite.get('to') or '')
     if keys and (not tokens or not re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',target)):raise ValueError('Settings rewrite needs the old and new server address')
     placed=[]
+    # A move copies data folders as they are; a package with an online database dump has an empty one (moves always
+    # take a stopped copy, so this only refuses a package that was not made for a move).
+    if dumped_services(manifest):raise ValueError('This backup holds an online database dump; a move needs a stopped copy of every database')
     if manifest.get('kind')=='static':
         if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
         document=place_tree(unpacked/'static-files.tar',manifest['documentRoot'],d,state,mid)
@@ -562,15 +714,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             elif m['Type']=='volume':place_volume(mount_archive(unpacked,i,j),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
             else:raise ValueError('Unsupported mount type')
             sources[key]=True
-    configuration=[]
-    for filename in manifest.get('configurationFiles',[]):
-        # Relative names and '..' are refused; other spellings the site form accepts (//, ./, a trailing /) are
-        # normalised, so the lexical containment test below compares like with like.
-        if not isinstance(filename,str) or not filename.startswith('/') or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('Unsupported path for a move: %s'%filename)
-        configuration.append(lexical(filename))
-    for i,filename in enumerate(configuration):
-        if any(filename==p or filename.startswith(p.rstrip('/')+'/') for p in placed):continue
-        placed.append(str(place_tree(unpacked/('config-%d.tar'%i),filename,d,state,mid)))
+    configuration=place_configuration(manifest,unpacked,req.get('handPlaced') or [],placed,d,state,mid)
     # Settings are rewritten only in files this move just placed, after following links.
     rewritten=sum(rewrite_env_file(f,keys,tokens,target) for f in configuration if pathlib.Path(f).name.endswith('.env') and placed_by_move(f,placed)) if keys else 0
     for network in req.get('networks') or []:
@@ -588,35 +732,23 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         docker('network','create','--driver','bridge','--label','docknest.move='+mid,test_network)
     for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
     for archive in image_archives(unpacked):load_images_keeping_tags(archive)
-    created=[];ports=[];names=[]
+    created=[];ports=[];names=[];adjusted=[]
     try:
         compose=req.get('compose')
         if compose:created,names,ports,rewritten=compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rewritten)
         for i,c in enumerate([] if compose else containers):
             name=c['Name'].lstrip('/')
             if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported container name')
-            hc=c.get('HostConfig',{})
-            policy='no' if mode=='test' else (hc.get('RestartPolicy') or {}).get('Name') or 'no'
-            if policy not in ['no','always','unless-stopped','on-failure']:policy='no'
-            networks=[n for n in (c.get('NetworkSettings',{}).get('Networks') or {}) if n!='none']
-            primary=hc.get('NetworkMode') if hc.get('NetworkMode') in networks else (networks[0] if networks else 'none')
-            if primary=='default':primary='bridge'
-            if primary=='bridge' and mode=='test':primary=test_network
-            args=['create','--name',name,'--restart',policy,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,'--network',primary]
-            def aliases(network):
-                values=[a for a in (c['NetworkSettings']['Networks'][network].get('Aliases') or []) if a and a!=c['Id'][:12] and SAFE_NAME.fullmatch(a)]
-                return [part for alias in dict.fromkeys(values) for part in ['--alias' if network!=primary else '--network-alias',alias]]
-            if primary not in ['bridge','none'] and primary in networks:args+=aliases(primary)
-            for binding in port_bindings(c):
-                spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
-            for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
-            args+=hardening_args(c,d)
-            for m in c['Mounts']:
-                mount=mount_option('volume' if m['Type']=='volume' else 'bind',m['Name'] if m['Type']=='volume' else m['Source'],m['Destination'],not m.get('RW',True))
-                args+=['--mount',mount]
-            for host in hc.get('ExtraHosts') or []:
-                if re.fullmatch(r'[A-Za-z0-9.-]+:[0-9a-fA-F.:]+|[A-Za-z0-9.-]+:host-gateway',host):args+=['--add-host',host]
-            if hc.get('Init'):args.append('--init')
+            # The settings the copy keeps come from the run spec (remote/helper/runspec.py); env travels in the image.
+            spec,notes=fit_host(run_spec(c),cpu_count())
+            if notes:adjusted.append({'container':name,'settings':notes})
+            primary=test_network if spec['network']=='bridge' and mode=='test' else spec['network']
+            published=[]
+            for binding in spec['ports']:
+                value,to=mapped_port(port_map,binding,mode);published.append(value);ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
+            # A test copy never publishes on every interface: -P becomes loopback ports Docker picks.
+            if mode=='test':published+=['127.0.0.1::'+port for port in unbound_exposed(spec)]
+            args=['create','--name',name,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,*create_args(spec,'no' if mode=='test' else spec['restart'],primary,published,mode!='test'),*hardening_args(c,d)]
             for item in c.get('Config',{}).get('Env') or []:
                 key,_,value=item.partition('=')
                 if key in keys and tokens:
@@ -625,9 +757,9 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             journal_resource(d,state,'containers',name)
             created.append(docker(*args,manifest['snapshotImages'][i]).decode().strip());names.append(name)
             if primary not in ['bridge','none']:
-                for other in networks:
+                for other,aliases in spec['networks'].items():
                     # A test copy never joins Docker's shared default bridge.
-                    if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*aliases(other),other,created[-1])
+                    if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*[part for alias in aliases for part in ['--alias',alias]],other,created[-1])
         verify_hardening(containers,created,every=bool(compose))  # never less protected than the original
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
         contracts=manifest.get('backupPlan',{}).get('services',[])
@@ -641,7 +773,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('The copied containers did not become healthy')
-        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':mail_blocked}
+        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':mail_blocked,'adjusted':adjusted}
         if mode=='live' and req.get('nginx'):
             n=req['nginx'];deploy_maintenance_dir(d,state,n)
             result['nginx']=write_nginx(d,state,mid,n)
@@ -654,7 +786,6 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             if created:docker('stop','--time','30',*created)
         except Exception:pass
         raise
-def yaml_str(value):return json.dumps(str(value))  # a JSON string is a valid YAML double-quoted scalar
 def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
     """Override file for the site's own Compose files: snapshot image, remapped host ports (Compose 2.24+ !override),
     no restart for the test copy, DockNest labels and opted-in setting rewrites. The user's files are never edited."""
@@ -675,7 +806,7 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
             key,_,value=item.partition('=')
             if key in keys and tokens:
                 new=rewrite_value(value,tokens,target)
-                if new!=value:env.append((key,new.replace('$','$$')))
+                if new!=value:env.append((key,new))
         if env:lines+=['    environment:']+['      %s: %s'%(yaml_str(k),yaml_str(v)) for k,v in env];rewritten+=len(env)
     return '\n'.join(lines)+'\n',ports,rewritten
 # Allow-lists for the merged Compose configuration (docker compose config). Anything not listed is refused, so a

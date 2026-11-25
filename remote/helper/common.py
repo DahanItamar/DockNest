@@ -6,7 +6,7 @@
 # These imports exist only so editors and linters can resolve names.
 # </build:header>
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno,hmac,base64,configparser
 VERSION=1
 
 EVENT_STREAM=sys.stdout
@@ -89,7 +89,8 @@ def run(args,timeout=3600,input=None,cwd=None):
     except subprocess.CalledProcessError as error:
         diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='exit',exitCode=error.returncode)
         raise
-def docker(*args): return run(['docker',*args])
+RUNTIME=None  # the engine of the running operation (runtime.py: using_runtime); None means rootful Docker
+def docker(*args): return current_runtime().cli(*args)  # default: the same argv as always
 def inspect(ids): return [tmpfs_as_host_config(c) for c in json.loads(docker('inspect',*ids))]
 # Compose long-syntax tmpfs mounts appear in Mounts; fold them into HostConfig.Tmpfs so capture and restore see one RAM folder form.
 def tmpfs_as_host_config(c):
@@ -120,6 +121,7 @@ def capability_name(value):
 def extra_capabilities(added):
     """True when anything is added beyond Docker's defaults (ALL, NET_RAW, SYS_ADMIN, ... or a value that is no name)."""
     return any(capability_name(cap) not in DEFAULT_CAPABILITIES for cap in added or [])
+SAFE_NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')  # container, network, volume and alias names
 def container_label(c):return str(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12] or 'A container'
 def seccomp_profile(value,name):
     """'default', 'unconfined' or the profile as canonical JSON. Docker stores a custom profile's contents; an absolute

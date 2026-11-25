@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateMove, planPorts, maskValue, estimateDowntime, describeDuration, preflightHash, PORT_SEARCH_RANGE } from '../src/moves/preflight.js';
+import { evaluateMove, cpuFit, planPorts, maskValue, estimateDowntime, describeDuration, preflightHash, PORT_SEARCH_RANGE } from '../src/moves/preflight.js';
 
 const GiB = 1024 ** 3;
 // A Compose site that can move without notes. Each test changes only what it is about.
@@ -9,10 +9,11 @@ function facts(change = f => f) {
     site: { id: 'site', name: 'Shop', kind: 'compose', domains: ['shop.example.com'], containerCount: 2, architecture: 'x86_64', packageBytes: 2 * GiB,
       ports: [{ hostIp: '127.0.0.1', hostPort: 8082, containerPort: 80 }], bindPaths: ['/srv/shop/data'], names: { containers: ['shop-web'] },
       nginxDirectives: [], maintenanceReady: true, env: [], timings: { backupSeconds: 20, restoreSeconds: 15 } },
-    source: { id: 'old', name: 'old-srv', addresses: ['203.0.113.7'] },
+    source: { id: 'old', name: 'old-srv', addresses: ['203.0.113.7'], ownership: { engine: { mode: 'none' }, modes: { checked: true, scanned: 3, truncated: false, unreadable: 0, xattrChecked: true, findings: [] } } },
     target: { id: 'new', name: 'new-srv', reachable: true, hostKeyOk: true, uid: 0, architecture: 'x86_64', dockerVersion: '28.1.1', composeVersion: '2.29.1',
       freeBytes: 100 * GiB, totalBytes: 200 * GiB, usedPorts: [22, 80, 443], reservedPorts: [], existingPaths: [], conflicts: {},
-      nginx: { installed: true, configOk: true, serverNames: ['other.example.com'] }, webPortOwner: 'nginx', certbot: { installed: true, account: true }, stagingWritable: true, addresses: ['198.51.100.9'] },
+      nginx: { installed: true, configOk: true, serverNames: ['other.example.com'] }, webPortOwner: 'nginx', certbot: { installed: true, account: true }, stagingWritable: true, addresses: ['198.51.100.9'],
+      ownership: { engine: { mode: 'none' }, filesystem: { mounts: [{ mount: '/', filesystem: 'ext4', readOnly: false, noexec: false, nosuid: false, rootSquash: false, sample: '/srv/shop/data' }], features: { setid: true, xattr: true } } } },
     state: {}, backupStorage: { freeBytes: 50 * GiB },
     dns: { mode: 'cloudflare', records: [{ type: 'A', name: 'shop.example.com', value: '203.0.113.7' }] },
   };
@@ -36,7 +37,7 @@ test('manual DNS says the downtime lasts until the DNS change is live', () => {
 
 test('blocked moves lead with one plain sentence naming the first reason', () => {
   const cases = [
-    [f => { f.target.id = 'old'; }, 'This site is already on new-srv.'],
+    [f => { f.target.id = 'old'; }, 'This app is already on new-srv.'],
     [f => { f.target.reachable = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
     [f => { f.target.hostKeyOk = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
     [f => { f.state.busy = true; }, 'Shop is busy with another job. Try again when it finishes.'],
@@ -56,7 +57,7 @@ test('blocked moves lead with one plain sentence naming the first reason', () =>
     [f => { f.target.nginx.configOk = false; }, 'nginx on new-srv has a setup error. Fix it, then try again.'],
     [f => { f.target.nginx.serverNames = ['SHOP.example.com']; }, 'new-srv already serves shop.example.com.'],
     [f => { f.target.webPortOwner = 'other'; }, 'Another program uses port 80 on new-srv.'],
-    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'new-srv has no free port for this site (tried 8082 and the next 100).'],
+    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'new-srv has no free port for this app (tried 8082 and the next 100).'],
     [f => { f.dns.records = [{ type: 'CNAME', name: 'shop.example.com', value: 'shop.host.example.net' }]; }, 'shop.example.com is a CNAME record, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
     [f => { f.dns.records.push({ type: 'A', name: 'shop.example.com', value: '203.0.113.8' }); }, 'shop.example.com has 2 A records, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
   ];
@@ -85,7 +86,7 @@ test('warnings proceed and stay under Advanced details', () => {
   assert.equal(result.verdict, 'ready-with-notes'); assert.equal(result.canStart, true);
   assert.match(result.sentence, /^Shop is ready to move to new-srv\./);
   const text = id => only(result, id).map(item => item.text);
-  assert.deepEqual(text('port'), ['Port 8082 is already used on new-srv. The site will listen on 8083 instead. Its own settings stay the same.']);
+  assert.deepEqual(text('port'), ['Port 8082 is already used on new-srv. The app will listen on 8083 instead. Its own settings stay the same.']);
   assert.equal(only(result, 'port')[0].automatic, true);
   assert.deepEqual(result.details.portMap, [{ hostIp: '127.0.0.1', protocol: 'tcp', containerPort: 80, from: 8082, to: 8083 }]);
   assert.match(text('compose')[0], /older than 2\.24/);
@@ -216,4 +217,100 @@ test('security settings: a copy keeps them, so unreproducible settings and missi
   assert.deepEqual(host(f => { f.target.apparmorEnabled = true; }), []); assert.deepEqual(host(() => {}), [], 'unknown is not claimed');
   assert.equal(evaluateMove(facts(f => { f.site.hardening = { hardened: false, problems: [], apparmor: [], hostAppArmor: ['docker-default'] }; f.target.apparmorEnabled = false; })).verdict, 'ready', 'a note, not a warning');
   assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.hardening = { hardened: true, problems: ['x'], apparmor: [] }; })), 'security'), []);
+});
+
+test('configuration files outside the folders a move may create are a note to put back by hand, never a blocker', () => {
+  const result = evaluateMove(facts(f => { f.site.handPlaced = ['/etc/cron.d/shop']; }));
+  assert.equal(result.verdict, 'ready-with-notes'); assert.equal(result.canStart, true);
+  assert.deepEqual(only(result, 'paths').map(item => [item.status, item.title, item.text]), [['warn', 'Put back by hand', 'Put back by hand: /etc/cron.d/shop. DockNest does not write there during a move; copy it from the backup to the same path on new-srv.']]);
+  assert.equal(evaluateMove(facts()).verdict, 'ready', 'a site without such files is unchanged');
+});
+
+test('settings a plain container copy cannot recreate are named warnings, never a refusal, and do not change what was reviewed', () => {
+  const unsupported = [{ container: 'shop-gpu', settings: ['GPUs and other device requests', 'the gelf log driver'] }];
+  const result = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unsupported = unsupported; }));
+  assert.equal(result.canStart, true); assert.equal(result.verdict, 'ready-with-notes');
+  assert.deepEqual(only(result, 'settings').map(item => [item.status, item.text]), [['warn', 'shop-gpu uses GPUs and other device requests, the gelf log driver, which DockNest does not recreate on new-srv.']]);
+  assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { f.site.kind = 'container'; }))));
+  assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.unsupported = unsupported; })), 'settings'), []);
+});
+
+test('a mount a copy cannot read blocks the move; CPU limits the new server must fit are named without changing what was reviewed', () => {
+  const blocked = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unreadableMounts = ['shop-db']; }));
+  assert.equal(blocked.canStart, false);
+  assert.equal(blocked.sentence, 'shop-db has a mount without a source or target, which DockNest cannot recreate. Move this app by hand.');
+  const cpu = f => { f.site.kind = 'container'; f.site.cpuLimits = [{ container: 'shop-web', cpus: '8', cpuset: '0-7' }, { container: 'shop-db', cpus: '1.5', cpuset: null }]; f.target.cpuCount = 4; };
+  const result = evaluateMove(facts(cpu));
+  assert.equal(result.canStart, true);
+  assert.deepEqual(only(result, 'settings').map(item => [item.status, item.text]), [
+    ['warn', 'shop-web may use 8 CPUs, but new-srv has 4. The copy may use 4.'],
+    ['warn', 'shop-web runs on CPUs 0-7, which new-srv does not have. The copy may run on any CPU.']]);
+  assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { cpu(f); f.target.cpuCount = 16; }))));
+  assert.deepEqual(cpuFit('2', '0-2', 2), { cpus: '2', cpuset: null }); assert.deepEqual(cpuFit('2', '0-1', 2), { cpus: '2', cpuset: '0-1' });
+  assert.deepEqual(cpuFit(null, null, 1), { cpus: null, cpuset: null });
+});
+
+// Keys safe: owners, modes and the target file system (docs/adr-3.0.0-keys-safe.md, section 6).
+const own = result => result.details.checks.filter(item => ['owner-map', 'file-mode', 'target-filesystem'].includes(item.id));
+test('a normal pair of servers shows no ownership notes and stays ready', () => {
+  const result = evaluateMove(facts());
+  assert.deepEqual(own(result), []); assert.equal(result.verdict, 'ready');
+});
+test('owner-map warns when either Docker remaps user IDs, and never blocks', () => {
+  for (const [from, to] of [['none', 'userns'], ['rootless', 'none'], ['userns', 'userns']]) {
+    const result = evaluateMove(facts(f => { f.source.ownership.engine.mode = from; f.target.ownership.engine.mode = to; }));
+    assert.deepEqual(own(result).map(item => [item.id, item.status]), [['owner-map', 'warn']]); assert.equal(result.canStart, true);
+  }
+});
+test('file-mode names the path when the target file system drops special permissions', () => {
+  const result = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }, { path: '/srv/shop/data/a', modes: ['xattr'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.deepEqual(own(result).map(item => [item.id, item.status]), [['file-mode', 'warn']]);
+  assert.match(own(result)[0].text, /^\/srv\/shop\/data\/bin\/tool use special permissions/); assert.equal(result.canStart, true);
+  const kept = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }]; }));
+  assert.deepEqual(own(kept), [], 'a file system that keeps them has nothing to say');
+});
+test('target-filesystem blocks read-only, noexec, nosuid and root squash mounts', () => {
+  for (const [key, value, words] of [['readOnly', true, /read-only/], ['noexec', true, /noexec/], ['nosuid', true, /nosuid/], ['rootSquash', true, /root squash/]]) {
+    const result = evaluateMove(facts(f => { f.target.ownership.filesystem.mounts[0][key] = value; }));
+    assert.deepEqual(own(result).map(item => [item.id, item.status]), [['target-filesystem', 'block']]); assert.match(own(result)[0].text, words); assert.equal(result.canStart, false);
+  }
+});
+test('a probe that could not run blocks as "could not be checked", never passes', () => {
+  const cases = [
+    [f => { delete f.source.ownership; }, ['owner-map', 'file-mode']],
+    [f => { delete f.target.ownership; }, ['owner-map', 'target-filesystem']],
+    [f => { f.source.ownership.modes = { checked: false, error: 'scan' }; }, ['file-mode']],
+    [f => { f.target.ownership.engine.mode = null; }, ['owner-map']],
+    [f => { f.target.ownership.filesystem = { error: 'probe' }; }, ['target-filesystem']],
+    [f => { f.target.ownership.filesystem.mounts[0].rootSquash = null; }, ['target-filesystem']],
+    [f => { f.source.ownership.modes.findings = [{ path: '/x', modes: ['setid'] }]; f.target.ownership.filesystem.features = null; }, ['file-mode']],
+  ];
+  for (const [change, ids] of cases) {
+    const result = evaluateMove(facts(change));
+    assert.deepEqual(own(result).map(item => item.id).sort(), ids.sort()); assert.ok(own(result).every(item => item.status === 'block' && /could not check/.test(item.text)));
+    assert.equal(result.canStart, false);
+  }
+});
+test('owner decision: findings are warnings that need "I checked these"; a failed or missing probe blocks and is not an acknowledgement case', () => {
+  assert.equal(evaluateMove(facts()).needsOwnershipCheck, false, 'nothing found, nothing to tick');
+  const remapped = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; }));
+  assert.equal(remapped.canStart, true); assert.equal(remapped.needsOwnershipCheck, true);
+  assert.ok(own(remapped).every(item => item.status === 'warn' && item.requiresAcknowledgement === true));
+  const lost = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.equal(lost.canStart, true); assert.equal(lost.needsOwnershipCheck, true);
+  const partial = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(partial.needsOwnershipCheck, true);
+  const failed = evaluateMove(facts(f => { delete f.source.ownership; }));
+  assert.equal(failed.canStart, false); assert.equal(failed.needsOwnershipCheck, false, 'a missing probe blocks; a tick cannot override it');
+  assert.notEqual(preflightHash(remapped), preflightHash(evaluateMove(facts())), 'the acknowledgement need is part of what was reviewed');
+  // A tick covers the notes that were shown: a new or different note (still needing a tick) changes the hash.
+  const both = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(both.needsOwnershipCheck, true);
+  assert.notEqual(preflightHash(both), preflightHash(remapped), 'an extra note needs a fresh review');
+  const otherPath = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/other', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.notEqual(preflightHash(otherPath), preflightHash(lost), 'a note about another path needs a fresh review');
+});
+test('a partly scanned folder is a warning that says so', () => {
+  const result = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.deepEqual(own(result).map(item => [item.id, item.status]), [['file-mode', 'warn']]); assert.match(own(result)[0].text, /first 20000 files/);
 });

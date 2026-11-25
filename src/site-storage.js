@@ -27,12 +27,12 @@ export const siteCopyTargets=siteId=>db.prepare('SELECT target_id,retention,crea
 export function siteMainStorage(siteId){
  const chosen=siteMainTargetId(siteId);
  if(chosen===null)return activeStorage();
- if(!targetSummary(chosen))throw fail(409,'destination_missing','The main destination chosen for this site was removed. Choose another main destination in the site storage settings.');
+ if(!targetSummary(chosen))throw fail(409,'destination_missing','The main destination chosen for this app was removed. Choose another main destination in the app storage settings.');
  return targetOptions(chosen);
 }
 // The destination id a stored path belongs to: "sftp:<id>:/path", "s3:<id>:/key", legacy "sftp:/path" (env) or local.
 export function targetIdOfPath(file){
- const match=/^(sftp|s3):([^:/]*):/.exec(String(file??''));
+ const match=/^(sftp|s3|rclone|folder):([^:/]*):/.exec(String(file??''));
  return match&&match[2]!==''?match[2]:'env';
 }
 // Where a destination physically stores files. Two destination rows with the same server (or bucket) and the same or a
@@ -47,6 +47,15 @@ export function locationOf(targetId){
   let settings={};try{settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');}catch{/* unknown */}
   return {kind:'s3',place:`${String(settings.endpoint||'').toLowerCase()}|${String(settings.bucket||row.username).toLowerCase()}`,root:(row.root||'/').replace(/\/+$/,'')||'/'};
  }
+ if(targetMode(row)==='folder'){
+  let settings={};try{settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');}catch{/* unknown */}
+  return {kind:'folder',place:String(settings.path||row.id).toLowerCase(),root:(row.root||'/').replace(/\/+$/,'')||'/'};
+ }
+ if(targetMode(row)==='rclone'){
+  let settings={};try{settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');}catch{/* unknown */}
+  // One place per drive account (or share) and drive: the same folder there is the same location.
+  return {kind:'rclone',place:`${settings.backend}|${String(settings.account||settings.endpoint||settings.host||row.id).toLowerCase()}|${String(settings.share||'').toLowerCase()}|${settings.driveId||''}`,root:(row.root||'/').replace(/\/+$/,'')||'/'};
+ }
  return {kind:'sftp',place:`${row.host.toLowerCase()}:${row.port}`,root:row.root.replace(/\/+$/,'')||'/'};
 }
 const nested=(a,b)=>a==='/'||b==='/'||a===b||a.startsWith(b+'/')||b.startsWith(a+'/');
@@ -57,7 +66,7 @@ export function sameLocation(first,second){
 }
 // The copy of a backup keeps the main copy's folder layout and file name under the copy destination's own root.
 export function copyPathFor(targetId,server,site,mainPath){
- const summary=targetSummary(targetId);if(!summary||!['sftp','s3'].includes(summary.mode))throw fail(409,'unknown_destination','Copy destinations must be connected SFTP or S3 destinations.');
+ const summary=targetSummary(targetId);if(!summary||!['sftp','s3','rclone','folder'].includes(summary.mode))throw fail(409,'unknown_destination','Copy destinations must be connected SFTP, S3, cloud drive or folder destinations.');
  const root=targetId==='env'?config.storage.root:db.prepare('SELECT root FROM storage_targets WHERE id=?').get(targetId).root;
  // Local main copies (development and tests) may use either separator.
  const filename=String(mainPath).split(/[\\/]/).pop();
@@ -89,7 +98,7 @@ export function siteStorageView(siteId){
 // The `storage` object each site carries in /api/state.
 export const siteStorageSummary=siteId=>({mainTargetId:siteMainTargetId(siteId),copyTargetIds:siteCopyTargets(siteId).map(row=>row.target_id),copyMissing:copyMissing(siteId)});
 
-const remoteTarget=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3'].includes(summary.mode)?summary:null;};
+const remoteTarget=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3','rclone','folder'].includes(summary.mode)?summary:null;};
 // Validates and saves PUT /api/sites/:id/storage. Existing backups never move: a new main destination applies to the next
 // backup, and a removed copy destination only stops new copies (the copies already made stay until their backup goes).
 export function updateSiteStorage(siteId,body,actor){
@@ -99,19 +108,19 @@ export function updateSiteStorage(siteId,body,actor){
  if(mainTargetId!==null&&mainTargetId!=='env'&&!remoteTarget(mainTargetId))throw fail(400,'unknown_destination','The chosen main destination does not exist.');
  const copies=body.copies===undefined?[]:body.copies;
  if(!Array.isArray(copies))throw fail(400,'invalid_request','copies must be a list.');
- if(copies.length>MAX_COPIES)throw fail(400,'too_many_copies',`A site can keep at most ${MAX_COPIES} extra copies.`);
+ if(copies.length>MAX_COPIES)throw fail(400,'too_many_copies',`An app can keep at most ${MAX_COPIES} extra copies.`);
  const effectiveMain=mainTargetId??defaultTargetId(),seen=[];
  for(const copy of copies){
   if(!copy||typeof copy!=='object'||typeof copy.targetId!=='string'||!remoteTarget(copy.targetId))throw fail(400,'unknown_destination','A copy destination does not exist.');
   const retention=copy.retention===undefined?null:copy.retention;
-  if(retention!==null&&!(Number.isInteger(retention)&&retention>=MIN_RETENTION&&retention<=MAX_RETENTION))throw fail(400,'invalid_retention',`Keep between ${MIN_RETENTION} and ${MAX_RETENTION} copies, or use the site's count.`);
+  if(retention!==null&&!(Number.isInteger(retention)&&retention>=MIN_RETENTION&&retention<=MAX_RETENTION))throw fail(400,'invalid_retention',`Keep between ${MIN_RETENTION} and ${MAX_RETENTION} copies, or use the app's count.`);
   if(sameLocation(copy.targetId,effectiveMain))throw fail(400,'copy_equals_main','A copy must go to a different destination than the main one.');
   if(seen.some(other=>sameLocation(other,copy.targetId)))throw fail(400,'duplicate_copy','Each copy needs its own destination.');
   seen.push(copy.targetId);
  }
  const at=new Date().toISOString();
  transaction(()=>{
-  if(!db.prepare('SELECT 1 FROM sites WHERE id=?').get(siteId))throw fail(404,'not_found','Site not found.');
+  if(!db.prepare('SELECT 1 FROM sites WHERE id=?').get(siteId))throw fail(404,'not_found','App not found.');
   db.prepare('INSERT INTO site_storage(site_id,main_target_id,updated_at) VALUES(?,?,?) ON CONFLICT(site_id) DO UPDATE SET main_target_id=excluded.main_target_id,updated_at=excluded.updated_at').run(siteId,mainTargetId,at);
   const previous=new Map(siteCopyTargets(siteId).map(row=>[row.target_id,row]));
   db.prepare('DELETE FROM site_storage_copies WHERE site_id=?').run(siteId);

@@ -1,6 +1,8 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
-import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
+import {LinkedLines} from '../linked/LinkedWarning.jsx';
+import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,ackNotes,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
+import {isDomainWarning} from './domains-model.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
 export function Sheet({title,labelId,onClose,children,actions,className,fixedHead}){
@@ -50,22 +52,28 @@ export function useGuard(client,{verifyLabel}={}){
 }
 
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
-export const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
+const NOTE_TONE={error:'error',warn:'warning',ok:'success'};
+export const Note=({kind,icon:Icon,role,children})=><div className={'alert-panel alert-'+(NOTE_TONE[kind]||'info')} role={role}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body"><span>{children}</span></div></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
-export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
+// Keys safe: what the new server does to owners, modes and the target folder (docs/adr-3.0.0-keys-safe.md, section 6). They come
+// as preflight checks with these ids and show as their own notes, a block stays a block.
+const OWNERSHIP=new Set(['owner-map','file-mode','target-filesystem']);
+const ownershipChecks=p=>[...(p?.advanced?.checks||[]),...(p?.checks||[])].filter(c=>OWNERSHIP.has(c?.id)&&c.text).filter((c,i,all)=>all.findIndex(x=>x.id===c.id&&x.text===c.text)===i);
+export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
  const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
- const [anyway,setAnyway]=useState(false);
+ const [anyway,setAnyway]=useState(false),[checkedOwn,setCheckedOwn]=useState(false);
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
- const canMove=!blocked&&(!long||anyway)&&!busy;
- const warns=(preview.warnings||[]).filter(w=>!w.advanced),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
+ const ackKey=ackNotes(preview);useEffect(()=>setCheckedOwn(false),[ackKey]);
+ const needOwn=!blocked&&!!preview.needsOwnershipCheck,canMove=!blocked&&(!long||anyway)&&(!needOwn||checkedOwn)&&!busy;
+ const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
  const cfReady=tokenSaved||cfConfigured;
  useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
- const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
+ const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway,ownershipChecked:needOwn&&checkedOwn}));
  async function saveToken(){
   setTokenBusy(true);setTokenErr('');
   await guard.run(async()=>{await client.saveCloudflareToken(token);setToken('');setTokenSaved(true);setCf(true)},e=>setTokenErr(friendly(e)));
@@ -73,20 +81,24 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
  }
  const portsText=p=>`${p.from} to ${p.to}${p.changed?' (changed, the old number is taken)':''}`;
  const unknown='Not known yet';
- return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
+ return <Sheet className={blocked?undefined:"map-fit"} title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
-  {blocked&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
+  {blocked&&!own.some(c=>c.status==='block'&&c.text===why(preview))&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
+  {own.map(c=><Note key={c.id+c.text} kind={c.status==='block'?'error':'warn'} icon={c.status==='block'?IconCircleX:IconAlertTriangle} role={c.status==='block'?'alert':undefined}>{c.text}</Note>)}
+  {needOwn&&<label className="map-check"><input type="checkbox" checked={checkedOwn} onChange={e=>setCheckedOwn(e.target.checked)}/>I checked these</label>}
   {installChecks(preview).map(c=>{const i=c.install,name=PACKAGE_NAME[i.package];return <div key={c.id||i.package} className="map-install">
    <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
    <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>
   </div>})}
+  {!blocked&&linked.length>0&&<Note kind="warn" icon={IconAlertTriangle}><LinkedLines items={linked} onOpenApp={onOpenApp}/></Note>}
   {!blocked&&<div className="map-facts">
    <Fact label="Takes about" value={duration(preview.estimateSeconds)||unknown}/>
-   <Fact label="Site offline about" value={duration(preview.downtimeSeconds)||unknown}/>
+   <Fact label="App offline about" value={duration(preview.downtimeSeconds)||unknown}/>
    <Fact label="Can undo for" value={preview.undoDays+' days'}/>
   </div>}
-  {long&&<Note kind="warn" icon={IconAlertTriangle} role="alert">Your site will be offline for a long time.{warns[0]?' '+warningText(warns[0]):''}</Note>}
+  {long&&<Note kind="warn" icon={IconAlertTriangle} role="alert">Your app will be offline for a long time.{warns[0]?' '+warningText(warns[0]):''}</Note>}
   {!blocked&&!long&&warns.length>0&&<Note kind="warn" icon={IconAlertTriangle}>{warns.map(warningText).join(' ')}</Note>}
+  {!blocked&&domainNotes.map((w,i)=><Note key={'d'+i} kind="warn" icon={IconAlertTriangle}>{w.text}</Note>)}
   {long&&<label className="map-check"><input type="checkbox" checked={anyway} onChange={e=>setAnyway(e.target.checked)}/>I accept about {duration(preview.downtimeSeconds)||"a long time"} offline</label>}
   {!blocked&&<div className="map-advanced">
    <button type="button" className="map-disclose" aria-expanded={open} aria-controls="map-adv" onClick={()=>setOpen(!open)}>Advanced settings<IconChevronDown size={18} stroke={1.75} aria-hidden="true" className={open?'open':''}/></button>
@@ -95,7 +107,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
     {adv.ports?.length>0&&<section><h3>Ports</h3>{adv.ports.map((p,i)=><p key={i}>{portsText(p)}</p>)}</section>}
     {adv.nginx&&<section><h3>Nginx file</h3><p>{adv.nginx.file||'Not found'}</p>{adv.nginx.notCopied?.length>0&&<><p>These custom lines will not be copied:</p><pre>{adv.nginx.notCopied.join('\n')}</pre></>}</section>}
     {adv.envKeys?.length>0&&<section><h3>.env values to rewrite</h3><p className="map-caption">Off by default. Turn on only the values that point to the old server.</p>{adv.envKeys.map(k=><label key={k.key} className="map-check"><input type="checkbox" checked={!!env[k.key]} onChange={e=>setEnv({...env,[k.key]:e.target.checked})}/><span><code>{k.key}</code> <span className="map-caption">{k.masked}</span></span></label>)}</section>}
-    <section><h3>Block outgoing email during the test</h3><p>{preview.mailBlocked?'Yes. The test copy cannot send email.':'Not possible on this server. The test copy could send real email, so check that your site does not send mail while it is being tested.'}</p></section>
+    <section><h3>Block outgoing email during the test</h3><p>{preview.mailBlocked?'Yes. The test copy cannot send email.':'Not possible on this server. The test copy could send real email, so check that your app does not send mail while it is being tested.'}</p></section>
     <section><h3>Switching</h3><label className="map-check"><input type="checkbox" checked={ask} onChange={e=>setAsk(e.target.checked)}/>Ask me before switching</label></section>
     <section><h3>Old copy</h3><p>DockNest asks you what to do with it after 7 days.</p></section>
     <section><h3>Domain</h3>
@@ -108,7 +120,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
       {tokenErr&&<Note kind="error" icon={IconCircleX} role="alert">{tokenErr}</Note>}
      </div>}
     </section>
-    {adv.checks?.length>0&&<section><h3>Checks</h3><ul className="map-checks">{adv.checks.map(c=>{const I=CHECK_ICON[c.status]||IconInfoCircle;return <li key={c.id} className={'chk-'+c.status}><I size={18} stroke={2} aria-hidden="true"/><span><b>{c.title}</b> <span className="sr-only">{CHECK_WORD[c.status]}. </span>{c.text}</span></li>})}</ul></section>}
+    {adv.checks?.some(c=>!OWNERSHIP.has(c.id))&&<section><h3>Checks</h3><ul className="map-checks">{adv.checks.filter(c=>!OWNERSHIP.has(c.id)).map(c=>{const I=CHECK_ICON[c.status]||IconInfoCircle;return <li key={c.id} className={'chk-'+c.status}><I size={18} stroke={2} aria-hidden="true"/><span><b>{c.title}</b> <span className="sr-only">{CHECK_WORD[c.status]}. </span>{c.text}</span></li>})}</ul></section>}
    </div>}
   </div>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
@@ -127,11 +139,11 @@ const STATUS_WORD={done:'done',running:'in progress',failed:'failed',pending:'wa
 
 function RemoveDialog({site,onCancel,onRemove,error,busy,prompt}){
  const [name,setName]=useState(''),[data,setData]=useState(false);
- return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
+ return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
   <p>The old copy of <b>{site.name}</b> is stopped and no longer needed. Removing it deletes the old containers. You will not be able to switch back.</p>
   <label className="map-check"><input type="checkbox" checked={data} onChange={e=>setData(e.target.checked)}/>Also delete the old data</label>
   {data&&<Note kind="error" icon={IconAlertTriangle}>The old data will be deleted and cannot be brought back.</Note>}
-  <label className="map-field">Type the site name to confirm<input type="text" autoComplete="off" value={name} onChange={e=>setName(e.target.value)} aria-describedby="map-remove-name"/></label>
+  <label className="map-field">Type the app name to confirm<input type="text" autoComplete="off" value={name} onChange={e=>setName(e.target.value)} aria-describedby="map-remove-name"/></label>
   <p id="map-remove-name" className="map-caption">{site.name}</p>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {prompt}
@@ -140,8 +152,8 @@ function RemoveDialog({site,onCancel,onRemove,error,busy,prompt}){
 
 function SwitchBackDialog({site,to,move,onCancel,onConfirm,error,busy,prompt}){
  const src=move?.sourceName||'the old server',when=move?.downtimeText||'a few minutes';
- return <Sheet title={`Switch back to ${src}?`} labelId="map-back-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Switch back</button></>}>
-  <p>The site goes offline for {when}. Changes made since the switch stay on {move?.targetName||to.name} (not copied back).</p>
+ return <Sheet title={`Switch back to ${src}?`} labelId="map-back-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Switch back</button></>}>
+  <p>The app goes offline for {when}. Changes made since the switch stay on {move?.targetName||to.name} (not copied back).</p>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {prompt}
  </Sheet>;
@@ -172,9 +184,9 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  if(state==='waiting_dns'||state==='done'){
   const d=move.dns,done=state==='done';
   return <Sheet title={done?`${site.name} is live on ${to.name}`:`${site.name} is ready on ${to.name}`} labelId="map-done-title" onClose={onClose} actions={<>
-   {!done&&<button type="button" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
-   {acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}
-   {acts.askRemoveOldCopy&&<button type="button" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
+   {!done&&<button type="button" className="link-action" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
+   {acts.switchBack&&<button type="button" className="link-action" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}
+   {acts.askRemoveOldCopy&&<button type="button" className="link-action" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
    <button type="button" className="primary" onClick={onClose}>Close</button></>}>
    {done?<><Note kind="ok" icon={IconCircleCheck} role="status">The domain points to the new server. All done.</Note>
     {acts.askRemoveOldCopy?<p>It has been 7 days. <b>Remove old copy?</b> The old copy is stopped and still on {move.sourceName||'the old server'}.</p>:acts.switchBack&&<p className="map-caption">The old copy is kept and stopped. You can switch back within 7 days.</p>}</>
@@ -187,14 +199,14 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  }
  const titles={failed:`Moving ${site.name} stopped`,cancelled:'Move cancelled',rolled_back:'Move undone',needs_attention:`${site.name} needs your attention`,cancelling:'Cancelling the move',rolling_back:'Undoing the move',waiting_switch:`${site.name} is ready to switch`,switching_back:'Switching back',switched_back:`${site.name} is back on ${move?.sourceName||'the old server'}`,cleaned:'Old copy removed'};
  const bad=state==='failed'||state==='needs_attention';
- const line=state==='cancelled'?(move.statusLine||'Nothing changed for your visitors.'):state==='rolled_back'?(move.statusLine||'Your site is back on the old server.'):(move?.statusLine||'Starting…');
+ const line=state==='cancelled'?(move.statusLine||'Nothing changed for your visitors.'):state==='rolled_back'?(move.statusLine||'Your app is back on the old server.'):(move?.statusLine||'Starting…');
  const cancelable=move&&acts.cancel&&!BUSY_WORD.has(state);
  const resolve=acts.resolve||[];
- const close=<button type="button" className={resolve.length?'':'primary'} onClick={onClose}>Close</button>;
+ const close=<button type="button" className={resolve.length?'link-action':'primary'} onClick={onClose}>Close</button>;
  let actions;
- if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
- else if(finished)actions=<>{acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}{close}</>;
- else actions=<><button type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
+ if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button className="link-action" type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
+ else if(finished)actions=<>{acts.switchBack&&<button className="link-action" type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}{close}</>;
+ else actions=<><button className="link-action" type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
  return <Sheet title={titles[state]||`Moving ${site.name}`} labelId="map-moving-title" onClose={finished?onClose:undefined} actions={actions}>
   {!finished&&<div className="map-bar" role="progressbar" aria-label="Move progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>}
   {bad?<Note kind="error" icon={IconCircleX} role="alert">{move.error||line}</Note>:<p className="map-status" role="status">{line}</p>}
@@ -207,7 +219,7 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
 
 // Phone: choose where to move a site. Same dialog look as the others.
 export function TargetDialog({site,servers,results,onPick,onCancel,verb='Move'}){
- return <Sheet title={`${verb} ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" onClick={onCancel}>Cancel</button>}>
+ return <Sheet title={`${verb} ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" className="link-action" onClick={onCancel}>Cancel</button>}>
   <ul className="map-targets">{servers.map(s=>{const r=results[s.id],bad=r&&(!r.ok||r.verdict==='blocked'),wait=!r;
    return <li key={s.id}><button type="button" disabled={bad||wait} onClick={()=>onPick(s.id)}><b>{s.name}</b><span className="map-caption">{bad?why(r):wait?'Checking…':'Ready'}</span></button></li>})}
    {!servers.length&&<li className="map-caption">There is no other server to move to.</li>}</ul>
@@ -228,7 +240,7 @@ export function InstallConfirmDialog({server,siteId,check,client,onCancel,onStar
   await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package,siteId);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
   setBusy(false);
  }
- return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
+ return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button className="link-action" type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
   <p>DockNest installs {name} on {server.name}.{i.command?' It runs this command there:':''}</p>
   {i.command&&<CommandBox command={i.command}/>}
   <p className="map-caption">Nothing else on the server is changed.</p>
@@ -249,7 +261,7 @@ export function InstallProgressDialog({server,pkg,client,jobId,onClose,onCheckAg
  },[client,jobId]);
  const state=jobState(job),finished=state==='completed'||state==='failed',steps=jobSteps(job);
  const title=state==='completed'?`${name} is installed`:state==='failed'?`Installing ${name} stopped`:`Installing ${name}`;
- return <Sheet title={title} labelId="map-install-run-title" onClose={finished?onClose:undefined} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" disabled={!finished} onClick={onCheckAgain}>Check again</button></>}>
+ return <Sheet title={title} labelId="map-install-run-title" onClose={finished?onClose:undefined} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" disabled={!finished} onClick={onCheckAgain}>Check again</button></>}>
   {state==='failed'?<Note kind="error" icon={IconCircleX} role="alert">{job?.error||`${server.name} could not install ${name}. You can install it yourself and check again.`}</Note>
    :state==='completed'?<Note kind="ok" icon={IconCircleCheck} role="status">{name} is ready on {server.name}. Press Check again to continue.</Note>
    :<p className="map-status" role="status">{server.name} is installing {name}. You can close this and come back.</p>}
@@ -260,7 +272,7 @@ export function InstallProgressDialog({server,pkg,client,jobId,onClose,onCheckAg
 
 export function CommandDialog({server,check,onClose,onCheckAgain}){
  const i=check.install,name=PACKAGE_NAME[i.package];
- return <Sheet title={`Install ${name} yourself`} labelId="map-command-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={onCheckAgain}>Check again</button></>}>
+ return <Sheet title={`Install ${name} yourself`} labelId="map-command-title" onClose={onClose} actions={<><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={onCheckAgain}>Check again</button></>}>
   <p>Run this command on {server.name}, then press Check again.</p>
   <CommandBox command={i.command}/>
   <p className="map-caption">DockNest does not run this command for you here.</p>

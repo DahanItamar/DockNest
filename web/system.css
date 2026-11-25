@@ -1,5 +1,5 @@
 /* DockNest 2.3.0 system primitives. Tokens come from tokens.css; no hex values here. Loaded after style.css and rebrand.css. */
-@keyframes dn-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
 @keyframes dn-spin{to{transform:rotate(360deg)}}
 
 /* Type roles */
@@ -17,28 +17,14 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 /* Status label: icon plus text in the semantic colour; no pill, border or dot */
 .status{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;white-space:nowrap;background:none;border:0;padding:0}
 .status-icon{flex:none;width:16px;height:16px}
-.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
+.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-pending{color:var(--warning)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
 .status-running .status-icon{animation:dn-spin 1s linear infinite}
 
-/* Buttons: one height, one type size, label never wraps */
-button,.button{min-height:var(--control-height);height:var(--control-height);padding-block:0;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;white-space:nowrap;transition:background-color var(--dur-base) var(--ease),border-color var(--dur-base) var(--ease),color var(--dur-base) var(--ease)}
-button:active{transform:none}
-button.danger,.button.danger,.destructive{color:var(--primary-foreground);background:var(--error);border-color:var(--error)}
-:root[data-theme=dark] button.danger,:root[data-theme=dark] .destructive{color:var(--surface);}
-td button,td .button{min-height:var(--control-height);height:var(--control-height);padding:0 16px;font-size:var(--fs-button)}
-.icon-button,button.icon,.icon-button:hover,button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;background:var(--transparent);color:var(--text-secondary)}
-.icon-button,button.icon{flex:none}
-/* Icon-only buttons are frameless at every width on every page (beats page-scoped button rules) */
-.rebrand-page .icon-button,.rebrand-page button.icon,.rebrand-page a.icon-button,.rebrand-page .icon-button:hover,.rebrand-page button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;border-radius:var(--radius);background:var(--transparent);color:var(--text-secondary);justify-content:center}
-.rebrand-page .icon-button:hover,.rebrand-page .icon-button:focus-visible,.rebrand-page button.icon:hover{background:var(--surface-hover);color:var(--heading)}
-.rebrand-page .icon-button[aria-pressed=true]{background:var(--accent-soft);color:var(--link)}
-.icon-button:hover,.icon-button:focus-visible,button.icon:hover{background:var(--surface-hover);color:var(--heading)}
-.alert .icon,.notice .icon{height:var(--control-height)}
 
 /* Switch timing follows the motion tokens (geometry lives in style.css) */
 
 /* Alert panel */
-.alert-panel{display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);font-size:var(--fs-body);line-height:var(--lh-body);animation:dn-enter var(--dur-slow) var(--ease) both}
+.alert-panel{display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);font-size:var(--fs-body);line-height:var(--lh-body)}
 .alert-panel-icon{flex:none;margin-top:0}
 .alert-panel-body{display:flex;flex-direction:column;gap:4px;min-width:0}
 .alert-panel-body b{font-weight:600}
@@ -48,7 +34,7 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 .alert-info{background:var(--info-surface);border-color:var(--alert-info-border);color:var(--alert-info-text)}.alert-info .alert-panel-icon{color:var(--info)}
 
 /* Card with optional pinned footer */
-.card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);animation:dn-enter var(--dur-slow) var(--ease) both}
+.card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius)}
 .card-body{flex:1 1 auto;padding:24px;min-width:0}
 .card-footer{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:var(--card-footer-height);height:var(--card-footer-height);padding:0 24px;border-top:1px solid var(--border-subtle)}
 .card-title{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--heading)}
@@ -70,9 +56,65 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 @media(max-width:767px){.data-table{min-width:640px}}
 
 /* Enter motion for existing panels */
-.panel{animation:dn-enter var(--dur-slow) var(--ease) both}
+
 
 /* Focus ring for the new primitives */
-.icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.icon-button:focus-visible,.card a:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 
-@media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
+@media(prefers-reduced-motion:reduce){.status-running .status-icon{animation:none}.icon-button{transition:none}}
+
+/* Overflow menu: one icon button and a short list of actions. The list opens upward (.up) where it would be clipped. */
+.overflow-menu{position:relative;display:inline-flex}
+.overflow-menu-list{position:absolute;z-index:20;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:var(--dn-shadow-2)}
+.overflow-menu-list.up{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}
+.overflow-menu-list button[role=menuitem]{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:var(--control-height);padding:0 12px;border:0;background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left;white-space:nowrap}
+.overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.overflow-menu-list button[role=menuitem]:focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
+.overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}
+
+/* List row head (design system v2, section 4): one button opens details. Hover bg-hover, focus ring, trailing chevron. */
+.row-open{display:flex;align-items:center;justify-content:flex-start;gap:var(--dn-space-3);width:100%;min-width:0;height:auto;min-height:var(--dn-control-h);padding:var(--dn-space-2) var(--dn-space-3);border:0;border-radius:var(--dn-radius-md);background:transparent;color:var(--dn-text-primary);text-align:left;white-space:normal}
+.row-open-text{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:var(--dn-space-1)}
+.row-open-icon{flex:none;display:inline-flex;color:var(--dn-brand-text)}
+.row-open-chevron{flex:none;color:var(--dn-text-tertiary)}
+@media(hover:hover){.row-open:hover:not(:disabled){background:var(--dn-bg-hover)}.row-open:hover:not(:disabled) .row-open-chevron{color:var(--dn-text-primary)}}
+.row-open:active:not(:disabled){background:var(--dn-bg-pressed)}
+/* Coloured icon chip from the dashboard: 40px square behind a 20px icon. */
+.icon-chip{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;background:none;color:var(--dn-brand-text)}
+/* Text link action: quiet, brand text, icon allowed. Used where a menu would be overkill. */
+button.text-link{height:auto;min-height:var(--dn-control-h-sm);padding:0 var(--dn-space-2);border:0;background:transparent;color:var(--link);font-weight:500;gap:var(--dn-space-1)}
+@media(hover:hover){button.text-link:hover:not(:disabled){background:transparent;text-decoration:underline;text-underline-offset:3px}}
+button.text-link:disabled{background:transparent;border:0;color:var(--dn-text-disabled)}
+@media(max-width:767px){button.text-link{min-height:var(--dn-control-h-touch)}}
+/* Empty, loading and error state: icon in a neutral 40px square, title, one sentence, one action. */
+.empty-state{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;gap:var(--dn-space-2);padding:var(--dn-space-10) var(--dn-space-6);min-height:240px}
+.empty-state-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:var(--dn-space-1);color:var(--dn-text-secondary)}
+.empty-state.is-error .empty-state-icon{color:var(--dn-danger-text)}
+.empty-state.is-loading .empty-state-icon svg{animation:dn-spin 1s linear infinite}
+.empty-state h3{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--heading)}
+.empty-state p{max-width:50ch;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-secondary)}
+.empty-state>button,.empty-state>.button,.empty-state>a{margin-top:var(--dn-space-2)}
+@media(prefers-reduced-motion:reduce){.empty-state.is-loading .empty-state-icon svg{animation:none}}
+/* Card head: a coloured icon chip, the title and optionally one action. */
+.card-head{display:flex;align-items:center;gap:var(--dn-space-3);min-width:0}
+.card-head .card-title{margin:0;min-width:0;overflow-wrap:anywhere}
+.card-title>.row-open{font:inherit;font-weight:600;color:inherit;margin:calc(-1*var(--dn-space-2));width:calc(100% + var(--dn-space-4));min-height:var(--dn-control-h)}
+.row-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.site-card-actions .overflow-menu-list{left:0;right:auto}
+.icon.small,.icon-button.small{padding:0}
+
+/* Secondary actions: one shared docs-style link. Real filled buttons stay for the single primary action of a view. */
+button.link-action,.map-root button.link-action,.map-root .map-panel-foot button.link-action,.map-root .map-inline-actions button.link-action,.rb button.link-action{display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;width:auto;height:auto;min-height:0;margin:0;padding:4px 0;border:0;border-radius:2px;background:transparent;box-shadow:none;color:var(--link);font-size:inherit;line-height:inherit;font-weight:500;text-decoration:underline;text-underline-offset:3px;white-space:normal;text-align:left;cursor:pointer}
+button.link-action:hover:not(:disabled),.map-root button.link-action:hover:not(:disabled){background:transparent;color:var(--accent-hover)}
+button.link-action:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+button.link-action:disabled,.map-root button.link-action:disabled{background:transparent;border:0;color:var(--text-muted);cursor:not-allowed}
+.link-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px}
+@media(max-width:767px){.link-row button.link-action{min-height:44px}}
+/* Secondary actions in dialog and card footers are quiet text links, the only filled button is the main action; the phone keeps a 44px tap height without a box. */
+:root:root :is(.modal-foot,.map-dialog-foot,.card-footer,.form-actions) button.link-action{min-width:0;min-height:var(--control-height);padding:4px 12px;white-space:nowrap}
+:root:root .map-root .map-toolbar button.link-action{min-height:var(--control-height);padding:4px 8px}
+@media(max-width:767px){:root:root :is(.modal-foot,.card-footer,.form-actions) button.link-action,:root:root .map-root .map-toolbar button.link-action{min-height:44px}}
+.map-root .map-dialog-foot button.link-action,.map-root .map-panel-foot button.link-action{min-height:44px;padding-inline:8px}
+
+/* Touch targets: 44px on small screens for buttons and text links (icon buttons and switches size themselves). */
+@media(max-width:899px){button:not(.icon,[role=switch],.theme-toggle,.berry-bell,.alert-panel-close,.berry-menu,.berry-nav-toggle),a.link-ext,.link-btn,.sr-info,.cp-link,.site-metadata .cp-link,button.text.link-btn,.berry-customizer a{min-height:var(--dn-control-h-touch)}a.link-ext,.cp-link,.site-metadata .cp-link,.sr-info,.berry-customizer a{display:inline-flex;align-items:center}.sr-info{min-width:var(--dn-control-h-touch);justify-content:center}}

@@ -16,8 +16,12 @@ import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
+import { cleanEngines } from '../runtime.js';
+import { coverageConflict } from '../site-coverage.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
+import { confirmKnownGood } from '../keys-safe/scan.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
+import { moveDomains, checkDomains } from '../domains/check.js';
 
 export const RETENTION_DAYS = 7;
 export const DRAFT_TTL_MS = 60 * 60 * 1000;
@@ -95,6 +99,7 @@ function healthPath(cfg) { try { const url = new URL(cfg.healthUrl); return (url
 
 // Collects facts from both servers (read-only) and evaluates them. Returns the owner-facing result and the private
 // execution plan the worker needs. Neither holds secret values: env findings are masked by the helper and again here.
+const targetEngines = target => { try { return cleanEngines(JSON.parse(target.capabilities || '{}')?.engines); } catch { return []; } };
 export async function previewFacts(siteId, targetServerId, options, ownMove = null) {
   const { site, server: source } = siteInfo(siteId);
   const target = server(targetServerId);
@@ -120,14 +125,15 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const recordValue = [...literal(target.host), ...targetAddresses].find(ipv4) ?? null;
   const recordValue6 = (targetFacts?.addresses ?? []).find(value => isIP(value) === 6 && !/^f[cde]|^::1$/i.test(value)) ?? null;
   const sourceValue = [...literal(source.host), ...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])].find(ipv4) ?? null;
+  const domainPaths = await movePaths(site, source, sf.domains, options);
   const composeOverride = sf.kind === 'compose' && !!sf.compose && composeAtLeast(targetFacts?.composeVersion, [2, 24]);
   const mailBlocking = sf.kind !== 'static' && !!targetFacts?.firewall?.mailBlocking;
   const facts = {
-    site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
-      ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
-      timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
-    source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
-    target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
+    site: { ...(cfg.runtime ? { runtime: cfg.runtime } : {}), id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
+      ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening, domainPaths,
+      ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
+    source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])], ownership: sourceFacts.ownership },
+    target: targetFacts ? { engines: targetEngines(target), id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
     state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id) || !!editingSite(site.id),
       archived: !!db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id), deploymentHold: deploymentHeld(db),
@@ -150,8 +156,20 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     Object.assign(result, { verdict: 'blocked', canStart: false, sentence: result.details.checks.at(-1).text });
   }
   const plan = { kind: sf.kind, domains: sf.domains, nginxDirectives: sf.nginxDirectives ?? [], web: sf.web ?? null, running: sf.running, networks: sf.networks, portMap: result.details.portMap, healthPath: healthPath(cfg),
-    targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
+    targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, handPlaced: sf.handPlaced ?? [], volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
   return { site, source, target, result, plan, hash: preflightHash(result, options) };
+}
+// The domains a move breaks, from every server's stored routes (src/domains/). Their paths are checked first (DNS at most
+// once an hour), so the domain path shows the state the preview was made in. A check that fails never stops a preview.
+async function movePaths(site, source, domains, options) {
+  try {
+    const { own, viaProxy } = await moveDomains(site.id, source.id);
+    await checkDomains([...domains, ...own, ...viaProxy.map(item => item.domain)], { trigger: 'move' });
+    // With Cloudflare switching, DockNest points the first domain at the new server itself.
+    const switched = options.dnsMode === 'cloudflare' ? domains[0] : null;
+    return { stopping: [...new Set([...domains, ...own])].filter(domain => domain !== switched && !viaProxy.some(item => item.domain === domain && !own.includes(domain))),
+      viaProxy: viaProxy.map(item => ({ domain: item.domain, proxy: server(item.serverId)?.name ?? 'another server' })) };
+  } catch { return { stopping: domains.filter(domain => !(options.dnsMode === 'cloudflare' && domain === domains[0])), viaProxy: [] }; }
 }
 function composeAtLeast(text, need) {
   const match = /(\d+)\.(\d+)/.exec(String(text ?? ''));
@@ -174,14 +192,21 @@ export function normaliseOptions(options = {}) {
 
 // POST /api/moves: a preview. It is stored as a draft so Start is bound to exactly what the owner reviewed; a newer
 // preview for the same site replaces it. Drafts block no other work and expire after an hour.
+// A move never makes a second app on the new server for a container or folder one of its apps already backs up: the
+// same refusal as adding or editing an app (src/site-coverage.js).
+function refuseCovered(siteId, targetServerId) {
+  const { site } = siteInfo(siteId), conflict = coverageConflict(targetServerId, site.config, { exceptSiteId: site.id });
+  if (conflict) throw httpError(409, conflict.error, { code: conflict.code });
+}
 export async function previewMove({ siteId, targetServerId, options: raw }, actor) {
+  refuseCovered(siteId, targetServerId);
   const options = normaliseOptions(raw);
   const preview = await previewFacts(siteId, targetServerId, options);
   preview.plan.dnsMode = options.dnsMode;
   const moveId = id(), at = now();
   transaction(() => {
     const active = db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('rolled_back','cancelled','failed','switched_back','cleaned')").get(siteId);
-    if (active && active.state !== 'draft') throw httpError(409, 'This site is already being moved. Open the move to follow it or cancel it first.', { moveId: active.id });
+    if (active && active.state !== 'draft') throw httpError(409, 'This app is already being moved. Open the move to follow it or cancel it first.', { moveId: active.id });
     if (active) db.prepare("UPDATE site_moves SET state='cancelled',finished_at=?,updated_at=? WHERE id=?").run(at, at, active.id);
     // A preview to the site's own server is still answered (with its reason) but never stored.
     if (preview.source.id !== preview.target.id) db.prepare("INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,'draft',?,?,?,?,?,?)")
@@ -194,10 +219,10 @@ export function previewView(moveId, { result, plan, hash, target, site }) {
   const checks = result.details.checks;
   return {
     id: moveId, siteId: site.id, targetServerId: target.id, ok: result.canStart, mailBlocked: !!plan.mailBlocking, verdict: result.verdict, sentence: result.sentence,
-    needsMoveAnyway: !!result.needsMoveAnyway, estimateSeconds: plan.estimateSeconds, downtimeSeconds: result.details.downtime?.seconds ?? null,
+    needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck, estimateSeconds: plan.estimateSeconds, downtimeSeconds: result.details.downtime?.seconds ?? null,
     downtimeText: result.details.downtime?.text ?? null, undoDays: RETENTION_DAYS, preflightHash: hash,
     blockers: checks.filter(item => item.status === 'block').map(item => item.text),
-    warnings: checks.filter(item => item.status === 'warn').map(item => ({ id: item.id, text: item.text, advanced: !!item.advanced, requiresConfirmation: !!item.requiresConfirmation })),
+    warnings: checks.filter(item => item.status === 'warn').map(item => ({ id: item.id, text: item.text, advanced: !!item.advanced, requiresConfirmation: !!item.requiresConfirmation, requiresAcknowledgement: !!item.requiresAcknowledgement })),
     advanced: {
       ports: result.details.portMap.map(({ from, to, containerPort, protocol, hostIp }) => ({ from, to, containerPort, protocol, hostIp, changed: from !== to })),
       nginx: { file: plan.domains.length ? `/etc/nginx/conf.d/docknest-${site.id}.conf` : null, notCopied: plan.nginxDirectives ?? [] },
@@ -220,17 +245,20 @@ function refuseWhileInstalling(move) {
     if (launchActive(serverId) || launchHeld(serverId)) throw httpError(409, `DockNest is launching a new site on ${server(serverId)?.name ?? 'a server'}. Start the move when the launch has finished.`, { code: 'LAUNCH_RUNNING' });
   }
 }
-export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false }, actor) {
+export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false, ownershipChecked = false }, actor) {
   const move = loadMove(moveId);
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'draft') throw httpError(409, 'This move has already started.');
   refuseWhileInstalling(move);
+  refuseCovered(move.site_id, move.target_server_id);
   if (Date.parse(move.created_at) + DRAFT_TTL_MS < Date.now()) throw httpError(409, 'This check is more than an hour old. Press Save changes to check again.');
   const preview = await previewFacts(move.site_id, move.target_server_id, move.options);
   preview.plan.dnsMode = move.options.dnsMode;
   if (!preview.result.canStart) throw httpError(409, preview.result.sentence, { code: 'PREFLIGHT_CHANGED', preview: previewView(move.id, preview) });
   if (reviewed !== move.preflight_hash || preview.hash !== move.preflight_hash) throw httpError(409, 'Something changed since you reviewed this move. Press Save changes to check again.', { code: 'PREFLIGHT_CHANGED', preview: previewView(move.id, preview) });
   if (preview.result.needsMoveAnyway && moveAnyway !== true) throw httpError(409, 'This move has a long downtime. Confirm with Move anyway to start it.', { code: 'MOVE_ANYWAY_REQUIRED' });
+  // Fail closed: findings about owners or file permissions need the person's tick, whatever the client sent before.
+  if (preview.result.needsOwnershipCheck && ownershipChecked !== true) throw httpError(409, 'Check the owner and file permission notes, then confirm "I checked these" to start this move.', { code: 'OWNERSHIP_CHECK_REQUIRED' });
   transaction(() => {
     const current = loadMove(moveId);
     if (current.state !== 'draft') throw httpError(409, 'This move has already started.');
@@ -242,7 +270,7 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
       const row = !preview.plan.domains.length && ['switch_dns', 'verify_dns', 'certificate'].includes(step.step) ? skipStep(step, 'The site has no domain.', now()) : step;
       insert.run(row.move_id, row.step, row.attempt, row.state, row.started_at, row.finished_at, JSON.stringify(row.resources), JSON.stringify(row.result));
     }
-    audit(actor, 'move.start', move.site_id, { move: moveId, target: move.target_server_id, moveAnyway: !!moveAnyway });
+    audit(actor, 'move.start', move.site_id, { move: moveId, target: move.target_server_id, moveAnyway: !!moveAnyway, ownershipChecked: !!ownershipChecked });
   });
   return moveView(moveId);
 }
@@ -382,7 +410,7 @@ function advance(moveId, at) {
       const extra = action.waiting_for ? { waiting_for: action.waiting_for } : {};
       if (action.to === 'recovery_required' && move.switched_at) {
         const target = server(move.target_server_id)?.name ?? 'the new server';
-        extra.error = `${move.error ?? 'A step failed after the switch.'} The site already runs on ${target}, so DockNest did not undo anything. Press Try again, or Switch back.`;
+        extra.error = `${move.error ?? 'A step failed after the switch.'} The app already runs on ${target}, so DockNest did not undo anything. Press Try again, or Switch back.`;
       }
       transition(move, action.to, extra);
       if (action.waiting_for === 'dns') markDnsWait(moveId);
@@ -446,7 +474,7 @@ function pollBackupStep(move, steps, name) {
     });
     return;
   }
-  const error = job.status === 'recovery_required' ? 'The final copy stopped partway. Resolve the backup job on the Jobs page; then DockNest restarts the old site.' : 'The backup did not finish, so nothing was changed.';
+  const error = job.status === 'recovery_required' ? 'The final copy stopped partway. Resolve the backup job on the Jobs page; then DockNest restarts the old app.' : 'The backup did not finish, so nothing was changed.';
   transaction(() => { saveStep(failStep(step, { result: { error } }, now())); saveMove({ ...move, error, updated_at: now() }); });
 }
 // A backup step that runs longer than its limit stops the move; the backup itself finishes on its own.
@@ -604,7 +632,7 @@ export const targetMaintenanceDirectory = site => `/var/lib/docknest/maintenance
 async function fallbackHtml() { try { return await maintenanceHtml(); } catch { return (await readFile(new URL('../../remote/maintenance.html', import.meta.url))).toString('base64'); } }
 async function deploy(context, mode, backupId) {
   const { move, job, site, target, plan } = context;
-  const request = { operation: 'deploy-restore', moveId: move.id, job: job.id, mode, portMap: plan.portMap, networks: plan.networks, volumes: plan.volumes ?? [], ...(plan.compose ? { compose: plan.compose } : {}),
+  const request = { operation: 'deploy-restore', moveId: move.id, job: job.id, mode, portMap: plan.portMap, networks: plan.networks, volumes: plan.volumes ?? [], handPlaced: plan.handPlaced ?? [], ...(plan.compose ? { compose: plan.compose } : {}),
     ...(move.options.envRewrite.length && plan.recordValue ? { envRewrite: { keys: move.options.envRewrite, from: plan.oldAddresses, to: plan.recordValue } } : {}),
     ...(mode === 'live' && plan.domains.length ? { nginx: { siteId: site.id, domains: plan.domains, upstreamPort: plan.web ? mappedPort(plan, plan.web) : null, maintenanceDirectory: plan.maintenanceDirectory ?? targetMaintenanceDirectory(site), stagingRoot: site.config.stagingRoot || '/var/lib/docknest', maintenanceHtml: await fallbackHtml(), path: plan.healthPath } } : {}) };
   if (mode === 'live' && plan.kind !== 'static' && plan.domains.length && !plan.web) throw new Error('DockNest could not find which port serves the website, so it cannot route the domain on the new server.');
@@ -669,6 +697,8 @@ const STEPS = {
     // Incremental backups: the old server's snapshot files are of no use any more; the next backup is full anyway
     // (the site's server changed). Best effort, never fails the move.
     if (incrementalSettings(site.id).enabled) await discardIncrementalState(site.id, { server: source });
+    // Keys safe (docs/keys-safe.md): the app now runs from a restored backup, which is its known-good. Best effort.
+    await confirmKnownGood(site.id, { source: 'restore', actor: 'move:' + move.id, rekey: true, remote }).catch(() => {});
   },
 };
 
@@ -760,7 +790,7 @@ export function removeOldCopy(moveId, { confirmation, deleteData = false }, acto
     if (!move) throw httpError(404, 'Move not found.');
     if (!['completed', 'retention_expired'].includes(move.state)) throw httpError(409, 'There is no stopped old copy to remove for this move.');
     const site = db.prepare('SELECT name FROM sites WHERE id=?').get(move.site_id);
-    if (confirmation !== site?.name) throw httpError(409, 'Type the site name to confirm removing the old copy.');
+    if (confirmation !== site?.name) throw httpError(409, 'Type the app name to confirm removing the old copy.');
     if (loadSteps(move).some(step => step.step === REMOVE_STEP && step.state === 'running')) throw httpError(409, 'The old copy is already being removed.');
     addOwnerSteps(moveId, [REMOVE_STEP], { deleteData: !!deleteData });
     saveMove({ ...move, error: null, updated_at: now() });
@@ -784,7 +814,7 @@ export async function resolveMove(moveId, action, actor, { confirmation } = {}) 
       const site = db.prepare('SELECT name FROM sites WHERE id=?').get(move.site_id);
       const finalize = steps.find(step => step.step === 'finalize');
       if (!['failed', 'running'].includes(finalize?.state)) throw httpError(409, 'This is possible only when finishing the move failed.');
-      if (confirmation !== site?.name) throw httpError(409, 'Type the site name to confirm finishing without the old server.');
+      if (confirmation !== site?.name) throw httpError(409, 'Type the app name to confirm finishing without the old server.');
       saveStep({ ...finalize, state: 'pending', finished_at: null });
       saveMove(applyTransition({ ...move, preflight: { ...move.preflight, skipRetire: true, oldCopyRunning: true } }, 'running', now(), { error: null }));
       audit(actor, 'move.resolve', move.site_id, { move: moveId, action });

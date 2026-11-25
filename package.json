@@ -1,6 +1,6 @@
 {
   "name": "docknest",
-  "version": "2.16.4",
+  "version": "3.0.0",
   "license": "AGPL-3.0-only",
   "private": true,
   "docknest": {
@@ -35,6 +35,8 @@
     "docs:screenshots": "node scripts/readme-screenshots.js",
     "test:self-backup": "node scripts/self-backup-browser.js",
     "test:storage": "node scripts/storage-browser.js",
+    "test:notifications": "node --no-addons scripts/notifications-browser.js",
+    "test:clients-drives": "node --no-addons scripts/clients-drives-browser.js",
     "test:storage-report": "node scripts/storage-report-browser.js",
     "test:cleanup": "node scripts/cleanup-browser.js",
     "test:copies": "node scripts/copies-browser.js",
@@ -48,15 +50,23 @@
     "test:reports": "node scripts/problem-reports-browser.js",
     "test:status-pages": "node scripts/status-pages-browser.js",
     "test:map": "node scripts/map-browser.js",
+    "test:domains": "node scripts/domains-browser.js",
     "test:connections": "node scripts/connections-browser.js",
     "test:zip": "node scripts/zip-dialog-browser.js",
     "test:hardening": "node scripts/hardening-browser.js",
+    "test:keys-safe": "node scripts/keys-safe-browser.js",
+    "test:restore-check": "node scripts/restore-check-browser.js",
+    "test:backup-coverage": "node scripts/coverage-browser.js",
     "test:restore-tests": "node scripts/restore-tests-browser.js",
     "test:safe-edit": "node scripts/safe-edit-browser.js",
+    "test:dumps": "node scripts/online-dumps-browser.js",
     "test:self-heal": "node scripts/self-heal-browser.js",
+    "test:login-typing": "node scripts/login-typing-browser.js",
     "test:auth": "node scripts/auth-browser.js",
     "test:launch": "node scripts/launch-browser.js",
-    "test:jobs-sqlite": "node scripts/jobs-sqlite-browser.js"
+    "test:jobs-sqlite": "node scripts/jobs-sqlite-browser.js",
+    "test:recovery-guide": "node scripts/recovery-guide-browser.js",
+    "test:nas": "node scripts/nas-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/roboto": "^5.3.0",

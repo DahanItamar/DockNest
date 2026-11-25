@@ -1,7 +1,11 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ChevronDown} from '../icons.jsx';
+import {AlertCircle,ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
+import {RuntimeBadge} from '../runtime-ui.jsx';
+import {isRootful,testServerProblem} from '../runtime-ui.js';
 import {useGuard} from '../map/MoveFlow.jsx';
+import {RecoveryCard} from '../recovery/RecoveryCard.jsx';
+import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
 
@@ -14,12 +18,12 @@ function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMo
    {spec.presets.map(([value,text])=><option key={value} value={String(value)}>{text}</option>)}
    <option value="custom">Custom</option>
   </select>
-  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
-  <small className={error?'rt-err':undefined} role={error?'alert':undefined}>{error||help}</small>
+  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} aria-describedby={id+'-msg'} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
+  {error?<span className="field-error" id={id+'-msg'} role="alert"><AlertCircle size={16} stroke={2} aria-hidden="true"/>{error}</span>:<small id={id+'-msg'}>{help}</small>}
  </div>;
 }
 
-export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
+export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
  const [card,setCard]=useState(null),[loaded,setLoaded]=useState(false),[loadError,setLoadError]=useState('');
  const [form,setForm]=useState(null),[startN,setStartN]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[started,setStarted]=useState(false),[tried,setTried]=useState(false),[advOpen,setAdvOpen]=useState(false);
  const focusRef=useRef(null),guard=useGuard(client);
@@ -39,7 +43,7 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
   if(!loaded)return;
   const s={...DEFAULT_SETTINGS,...(card?.settings||{})};
   setForm({enabled:!!s.enabled,cadence:s.cadence||'weekly',serverId:s.serverId||'',allow:!!s.allowLiveServer,allowInternet:!!s.allowInternet,
-   time:limitFrom(TIME,s.timeLimitMinutes),memory:limitFrom(MEMORY,s.memoryMb),cpu:limitFrom(CPU,s.cpus),path:s.probe?.path||'',probe:s.probe||null});
+   time:limitFrom(TIME,s.timeLimitMinutes),memory:limitFrom(MEMORY,s.memoryMb),cpu:limitFrom(CPU,s.cpus),path:s.probe?.path||'',probe:s.probe||null,source:s.sourceTargetId||''});
  },[loaded]);
 
  if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load restore tests">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button></div></div>;
@@ -48,15 +52,16 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
  const live=!!form.serverId&&form.serverId===site.serverId,target=servers.find(x=>x.id===form.serverId);
  const cores=Number(target?.capabilities?.cpus??target?.capabilities?.cpuCount)||null;
  const time=timeLimit(form.time),memory=memoryLimit(form.memory),cpu=cpuLimit(form.cpu,cores);
- const active=!!card?.active;
- const reason=whyNoRun({serverId:form.serverId,liveServer:live,allowLive:form.allow})||(active?'A test is already running.':'');
+ const active=!!card?.active,copyTargets=Array.isArray(card?.copyTargets)?card.copyTargets:[];
+ const engineProblem=testServerProblem(site,target);
+ const reason=whyNoRun({serverId:form.serverId,liveServer:live,allowLive:form.allow})||(active?'A test is already running.':'')||(engineProblem?engineProblem.split('. ')[0].replace(/^This server/,target.name)+'.':'');
  const shown=(state,result)=>(tried||(state.pick==='custom'&&state.custom.trim()))?result.error:'';
  const set=patch=>{setForm(previous=>({...previous,...patch}));setStarted(false);setError('')};
  const invalid=!!(time.error||memory.error||cpu.error);
 
  function settingsBody(){
   const probe=form.path.trim()?{...(form.probe||{}),path:form.path.trim()}:null;
-  return {enabled:form.enabled,cadence:form.cadence,serverId:form.serverId||null,allowLiveServer:live&&form.allow,allowInternet:form.allowInternet,timeLimitMinutes:time.value,memoryMb:memory.value,cpus:cpu.value,probe};
+  return {enabled:form.enabled,cadence:form.cadence,serverId:form.serverId||null,allowLiveServer:live&&form.allow,allowInternet:form.allowInternet,timeLimitMinutes:time.value,memoryMb:memory.value,cpus:cpu.value,probe,sourceTargetId:form.source||null};
  }
  // Checks the page before anything is sent. Operators have no settings to check.
  function check(){
@@ -82,7 +87,10 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
  }
 
  return <form className="modal-body site-wizard rt-form" onSubmit={save} noValidate>
+  <RecoveryCard card={card}/>
   {!isAdmin&&<p className="t-caption">Only an administrator can change these settings.</p>}
+   {site.config?.runtime&&!isRootful(site.config.runtime)&&<div className="rt-engine"><span>Engine</span><RuntimeBadge runtime={site.config.runtime}/></div>}
+   {engineProblem&&<AlertPanel variant="warning" title={`${target.name} cannot test ${site.name}`}>{engineProblem}</AlertPanel>}
    <div className="sb-switch-row">
     <span className="sb-switch-text"><span id="rt-auto" className="sb-switch-label">Auto tests</span><span id="rt-auto-help" className="t-caption">Restores your latest backup and checks it.</span></span>
     <button type="button" role="switch" className="switch" aria-checked={form.enabled} aria-labelledby="rt-auto" aria-describedby="rt-auto-help" disabled={!isAdmin} onPointerDown={event=>event.preventDefault()} onClick={()=>set({enabled:!form.enabled})}></button>
@@ -97,6 +105,13 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
     </select>
     <small>Pick a spare server.</small>
    </label>
+   {copyTargets.length>0&&<label className="field"><span>Test from</span>
+    <select value={form.source} disabled={!isAdmin} onChange={event=>set({source:event.target.value})}>
+     <option value="">Main storage</option>
+     {copyTargets.map(copy=><option key={copy.targetId} value={copy.targetId}>{'Copy on '+copy.name}</option>)}
+    </select>
+    <small>{form.source?'Restores the copy from its own storage. If any part is missing there, the test doesn’t run.':'Restores the main backup.'}</small>
+   </label>}
    {live&&<AlertPanel variant="warning" title="Live server" action={<label className="check"><input type="checkbox" checked={form.allow} disabled={!isAdmin} onChange={event=>set({allow:event.target.checked})}/> Allow live server</label>}>Tests use this server’s CPU, memory and disk.</AlertPanel>}
    <details className="rt-adv" open={advOpen} onToggle={event=>setAdvOpen(event.currentTarget.open)}>
     <summary>Advanced settings<ChevronDown size={18} stroke={2} className="rt-chev" aria-hidden="true"/></summary>
@@ -113,12 +128,13 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
      <small>Optional</small>
     </label>
    </details>
+  <LinkedWarning items={linked} onOpenApp={onOpenApp}/>
   {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title="Could not finish">{error}</AlertPanel>}
   <div className="modal-foot">
    <span key={started?'started'+startN:'idle'} className={'t-caption rt-why'+(started?' rt-done':'')} role="status">{started?'Test started.':reason}</span>
-   <button type="button" onClick={onClose}>Cancel</button>
-   <button type="button" disabled={busy||guard.waiting||!!reason} onClick={run}>Run test</button>
+   <button type="button" className="link-action" onClick={onClose}>Cancel</button>
+   <button type="button" className="link-action" disabled={busy||guard.waiting||!!reason} onClick={run}>Run test</button>
    {isAdmin&&<button type="submit" className="primary" disabled={busy||guard.waiting}>Save</button>}
   </div>
  </form>;

@@ -1,0 +1,135 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { parsePastedAddress, parseToken, looksLikeToken, parseClient } from '../src/storage/rclone-input.js';
+import { classify } from '../src/storage/rclone-errors.js';
+import { RCLONE_VERSION } from '../src/storage/rclone-pin.js';
+
+const STATE = 'AbCdEf12_-xyz789', CODE = '4/0AfakeCodeForTests-1234567890';
+const address = (query, base = 'http://127.0.0.1:53682/') => base + '?' + query;
+
+// Synthetic codes shaped like a personal Microsoft account's: long, with ! * $ in them (not real codes).
+const MSA_CODE = 'M.C543_BAY.2.U.' + 'a1B2c3D4-e5F6!g7H8*i9J0$k1L2'.repeat(24) + '!*$';
+test('localhost is accepted next to 127.0.0.1, with the same port and path', () => {
+  for (const base of ['http://localhost:53682/', 'http://localhost:53682', 'http://LOCALHOST:53682/', 'http://127.0.0.1:53682/']) {
+    assert.deepEqual(parsePastedAddress(address('state=' + STATE + '&code=' + CODE, base), STATE), { code: CODE, state: STATE }, base);
+  }
+});
+test('a personal Microsoft account code with ! * $ and a long body is accepted, a hostile one is not', () => {
+  assert.ok(MSA_CODE.length > 600 && MSA_CODE.length < 2048);
+  const encoded = encodeURIComponent(MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=' + MSA_CODE + '&state=' + STATE, 'http://localhost:53682/'), STATE).code, MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=' + encoded + '&state=' + STATE), STATE).code, MSA_CODE);
+  assert.equal(parsePastedAddress(address('code=Mabc!*$def12&state=' + STATE), STATE).code, 'Mabc!*$def12');
+  for (const hostile of ['abcd efgh', 'abcd\nefgh', 'abcdefgh<script>', 'abcdefgh"x', "abcdefgh'x", 'abcdefgh(x)', 'abcdefgh;x', 'abc', 'a'.repeat(2049)]) {
+    assert.throws(() => parsePastedAddress(address('code=' + encodeURIComponent(hostile) + '&state=' + STATE), STATE), /sign-in code/, hostile.slice(0, 20));
+  }
+});
+test('the pasted address is accepted only for 127.0.0.1:53682 (or localhost) with the issued state', () => {
+  assert.deepEqual(parsePastedAddress(address(`state=${STATE}&code=${CODE}`), STATE), { code: CODE, state: STATE });
+  assert.deepEqual(parsePastedAddress(`  ${address(`state=${STATE}&code=${CODE}&scope=email%20profile&authuser=0`)}  `, STATE).state, STATE);
+  const bad = {
+    'localhost on another port': address(`state=${STATE}&code=${CODE}`, 'http://localhost:8080/'),
+    'localhost lookalike': address(`state=${STATE}&code=${CODE}`, 'http://localhost.evil.example.invalid:53682/'),
+    'localhost over https': address(`state=${STATE}&code=${CODE}`, 'https://localhost:53682/'),
+    'localhost other path': address(`state=${STATE}&code=${CODE}`, 'http://localhost:53682/auth'),
+    'other loopback name': address(`state=${STATE}&code=${CODE}`, 'http://[::1]:53682/'),
+    'other host': address(`state=${STATE}&code=${CODE}`, 'http://evil.example.invalid:53682/'),
+    'dns lookalike': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1.evil.example.invalid:53682/'),
+    'wrong port': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1:8080/'),
+    'no port': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1/'),
+    https: address(`state=${STATE}&code=${CODE}`, 'https://127.0.0.1:53682/'),
+    credentials: address(`state=${STATE}&code=${CODE}`, 'http://user:pw@127.0.0.1:53682/'),
+    'other path': address(`state=${STATE}&code=${CODE}`, 'http://127.0.0.1:53682/auth'),
+    'other state': address(`state=OtherState123456&code=${CODE}`),
+    'missing state': address(`code=${CODE}`),
+    'missing code': address(`state=${STATE}`),
+    'extra parameter': address(`state=${STATE}&code=${CODE}&redirect=http://evil.example.invalid`),
+    'repeated code': address(`state=${STATE}&code=${CODE}&code=${CODE}`),
+    'repeated state': address(`state=${STATE}&state=${STATE}&code=${CODE}`),
+    fragment: address(`state=${STATE}&code=${CODE}`) + '#frag',
+    'empty fragment': address(`state=${STATE}&code=${CODE}`) + '#',
+    'provider error': address(`state=${STATE}&error=access_denied`),
+    'spaces inside': address(`state=${STATE}&code=${CODE} extra`),
+    'line break': address(`state=${STATE}&code=${CODE}`) + '\nhttp://evil.example.invalid/',
+    'not an address': 'hello',
+    empty: '',
+    'huge code': address(`state=${STATE}&code=${'a'.repeat(5000)}`),
+  };
+  for (const [name, value] of Object.entries(bad)) assert.throws(() => parsePastedAddress(value, STATE), error => error.status === 400 && error.expose === true && !String(error.message).includes(CODE), name);
+  // The issued state is never missing: a session without one accepts nothing.
+  assert.throws(() => parsePastedAddress(address(`state=${STATE}&code=${CODE}`), ''), /different sign-in/);
+});
+
+test('token JSON is parsed strictly and never echoed', () => {
+  const good = { access_token: 'fixture-access-token', token_type: 'Bearer', refresh_token: 'fixture-refresh-token', expiry: '2031-01-01T00:00:00.123456789Z' };
+  assert.deepEqual(parseToken(JSON.stringify(good)), good);
+  assert.deepEqual(parseToken(`Paste the following into your remote machine --->\n${JSON.stringify(good)}\n<---End paste`), good);
+  assert.equal(parseToken(JSON.stringify({ ...good, expires_in: 3599 })).expires_in, 3599);
+  assert.equal(parseToken(JSON.stringify({ access_token: 'a', refresh_token: 'r' })).token_type, 'Bearer');
+  assert.equal(looksLikeToken(JSON.stringify(good)), true);
+  assert.equal(looksLikeToken('http://127.0.0.1:53682/?state=x'), false);
+  const bad = [
+    '[]', '"text"', 'not json', '{', JSON.stringify({ ...good, extra: 'field' }), JSON.stringify({ ...good, scope: 'x' }),
+    JSON.stringify({ ...good, access_token: '' }), JSON.stringify({ ...good, access_token: 5 }), JSON.stringify({ ...good, access_token: 'a\nb' }),
+    JSON.stringify({ ...good, refresh_token: undefined }), JSON.stringify({ ...good, token_type: 'Bearer\nx' }), JSON.stringify({ ...good, expiry: 'tomorrow' }),
+    JSON.stringify({ ...good, expires_in: '3600' }), JSON.stringify({ ...good, access_token: 'x'.repeat(9000) }), JSON.stringify({ __proto__: null, ...good, constructor: {} }),
+  ];
+  for (const value of bad) assert.throws(() => parseToken(value), error => error.status === 400 && !String(error.message).includes('fixture-access-token'), value.slice(0, 40));
+});
+
+test('own client credentials are checked', () => {
+  assert.deepEqual(parseClient({}), { clientId: '', clientSecret: '' });
+  assert.deepEqual(parseClient({ clientId: '1234-fixture.apps.example.invalid', clientSecret: 'GOCSPX-fixture_secret' }), { clientId: '1234-fixture.apps.example.invalid', clientSecret: 'GOCSPX-fixture_secret' });
+  assert.throws(() => parseClient({ clientId: 'has space', clientSecret: 'x' }));
+  assert.throws(() => parseClient({ clientId: 'valid-id-123', clientSecret: 'has space' }));
+  assert.throws(() => parseClient({ clientId: 'a\nb', clientSecret: 'x' }));
+});
+
+test('error mapping turns known rclone failures into plain reasons and drops everything else', () => {
+  const secret = 'ya29.fixture-secret-token';
+  const cases = [
+    [`Failed to create file system: couldn't fetch token: invalid_grant: Token has been expired or revoked. https://x/?access_token=${secret}`, 1, 'drive', 'needs_reconnect', /Google Drive needs you to sign in again/],
+    ['AADSTS70008: The provided authorization code or refresh token has expired', 1, 'onedrive', 'needs_reconnect', /OneDrive needs you to sign in again/],
+    ['Failed to create file system for "dn:": AADSTS70043: The refresh token has expired or is invalid due to sign-in frequency checks', 1, 'onedrive', 'needs_reconnect', /OneDrive needs you to sign in again/],
+    ['error reading source root directory: InvalidAuthenticationToken: Access token has expired or is not yet valid', 1, 'onedrive', 'needs_reconnect', /OneDrive needs you to sign in again/],
+    ['oauth2: "interaction_required" "AADSTS50076: due to a configuration change made by your administrator"', 1, 'onedrive', 'needs_reconnect', /sign in again/],
+    ['AADSTS700082: The refresh token has expired due to inactivity', 1, 'webdav', 'failed', /did not accept/],
+    ['AADSTS65001: The user or administrator has not consented to use the application', 1, 'onedrive', 'needs_reconnect', /sign in again/],
+    ['AADSTS50173: The provided grant has expired due to it being revoked', 1, 'onedrive', 'needs_reconnect', /sign in again/],
+    ['AADSTS50011: The redirect URI specified in the request does not match', 1, 'onedrive', 'sign_in_refused', /Microsoft refused the sign-in/],
+    ['AADSTS700016: Application with identifier was not found in the directory', 1, 'onedrive', 'sign_in_refused', /Microsoft refused the sign-in/],
+    ['expired_access_token: the access token is expired', 1, 'dropbox', 'needs_reconnect', /Dropbox needs you to sign in again/],
+    ['Error: HTTP error 401 (401 Unauthorized) returned body: {}', 1, 'drive', 'needs_reconnect', /sign in again/],
+    ['HTTP error 401 (401 Unauthorized)', 1, 'webdav', 'auth_failed', /refused the login/],
+    ['googleapi: Error 403: Rate Limit Exceeded, rateLimitExceeded', 1, 'drive', 'rate_limited', /Google is limiting the shared sign-in app. Use your own Google app ID for steady speed./],
+    ['googleapi: Error 403: Quota exceeded for quota metric "Queries" (quotaExceeded)', 1, 'drive', 'rate_limited', /own Google app ID/],
+    ['googleapi: Error 403: Rate Limit Exceeded (userRateLimitExceeded)', 1, 'onedrive', 'rate_limited', /OneDrive is limiting requests/],
+    ['googleapi: Error 403: The user\'s Drive storage quota has been exceeded, storageQuotaExceeded', 1, 'drive', 'quota', /no space left/],
+    ['error listing: directory not found', 3, 'drive', 'not_found', /not on Google Drive/],
+    ['object not found', 4, 'webdav', 'not_found', /not on WebDAV/],
+    ['dial tcp: lookup nas.example.invalid: no such host', 1, 'smb', 'network', /could not be reached/],
+    ['Get "https://www.googleapis.com/drive/v3/about": tls: failed to verify certificate: x509: certificate signed by unknown authority', 1, 'drive', 'tls', /certificate was not accepted/],
+    ['x509: certificate has expired or is not yet valid', 1, 'webdav', 'tls', /could not be trusted/],
+    ['something nobody has seen before', 1, 'drive', 'failed', /did not accept the request/],
+  ];
+  for (const [stderr, code, backend, reason, message] of cases) {
+    const result = classify(stderr, code, backend);
+    assert.equal(result.reason, reason, stderr);
+    assert.match(result.message, message);
+    assert.equal(result.needsReconnect, reason === 'needs_reconnect');
+    assert.ok(!result.message.includes(secret) && !result.message.includes('http'), 'no fragment of rclone output reaches the message');
+  }
+  // OAuth sign-in text never marks a share or WebDAV as needing a sign-in.
+  assert.equal(classify('invalid_grant', 1, 'webdav').needsReconnect, false);
+});
+
+test('Dockerfile pins one rclone release with a SHA-256 and the same version as the source pin', async () => {
+  const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+  assert.equal(dockerfile.match(/ARG RCLONE_VERSION=v([\d.]+)/)?.[1], RCLONE_VERSION);
+  assert.match(dockerfile, /ARG RCLONE_SHA256=[a-f0-9]{64}\b/);
+  assert.match(dockerfile, /sha256sum -c -/);
+  assert.match(dockerfile, /linux-amd64\.zip/);
+  assert.match(dockerfile, /COPY --from=rclone \/out\/ \/usr\/local\/bin\//);
+  assert.doesNotMatch(dockerfile, /rclone (?:selfupdate|version --check)/);
+});

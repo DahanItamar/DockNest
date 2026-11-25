@@ -2,13 +2,11 @@
    Mirrors docs/design/update-center/mockup.html: one button system (44 px, labels never wrap), one type scale. */
 :root{--dn-motion-fast:120ms;--dn-motion-base:200ms;--dn-motion-slow:320ms;--dn-ease-out:cubic-bezier(.2,0,0,1)}
 @keyframes dn-orbit{from{stroke-dashoffset:0}to{stroke-dashoffset:-100}}
-@keyframes dn-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
 .dn-spin{animation:dn-spin 1s linear infinite}
 /* Buttons: height and type come from the 2.3.0 foundation (40 px, 44 px on phones); labels never wrap. */
 :is(.uc-page,.progress-view,.uc-dialog,.toast-wrap,.about-report) :is(button,a.button):not(.icon,.switch,[role=tab],.text){box-sizing:border-box;padding:0 16px;gap:8px;white-space:nowrap;min-width:0}
 :is(.uc-page,.progress-view,.uc-dialog,.toast-wrap,.about-report) :is(button,a.button):not(.icon,.switch,[role=tab]) svg{width:18px;height:18px}
-.uc-dialog a.button{display:inline-flex;align-items:center;justify-content:center;height:var(--control-height);border:1px solid var(--border-subtle);border-radius:var(--radius);text-decoration:none}
-.uc-dialog a.button.primary{color:var(--primary-foreground);background:var(--button-primary);border-color:var(--button-primary)}.uc-dialog a.button.primary:hover{background:var(--button-primary-hover)}
 .uc-dialog .modal-foot>*{flex:0 1 auto}
 .link-ext{display:inline-flex;align-items:center;gap:4px;font-weight:500;text-underline-offset:3px}
 .code-block{display:flex;align-items:stretch;margin:10px 0;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);overflow:hidden}
@@ -26,9 +24,6 @@
 /* Update Center */
 
 .uc-page{max-width:880px;margin:0 auto}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-subtle);margin:0 0 24px;align-items:flex-end}
-.tabs [role=tab]{display:inline-flex;align-items:center;border:0;border-bottom:3px solid transparent;border-radius:0;background:transparent;min-height:44px;padding:8px 16px;font-weight:500;color:var(--text-secondary);white-space:nowrap}
-.tabs [role=tab][aria-selected=true]{color:var(--heading);border-bottom-color:var(--accent)}.tabs [role=tab]:hover{background:var(--surface-muted)}
 [role=tabpanel][hidden]{display:none}
 .uc-stack{display:grid;gap:var(--edge)}
 .uc-quiet{color:var(--text-secondary);margin:0}.uc-quiet a,.uc-hero a{font-weight:500}
@@ -38,7 +33,6 @@
 .uc-hero-text{display:flex;flex-direction:column;gap:8px;min-width:0}
 .uc-hero-text h2,.uc-hero-ok h2{margin:0}
 .uc-hero-row>button{flex:none;padding:0 24px}
-.uc-hero button[aria-disabled=true]{background:var(--surface-hover);border-color:var(--surface-hover);color:var(--text-muted);cursor:not-allowed}
 .uc-hero-ok{flex-direction:row;align-items:center;gap:16px}.uc-ok-icon{flex:none;color:var(--success)}
 .uc-hero-state{display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;padding:32px}
 .uc-hero-state .rel-title{margin:0 0 8px}.uc-hero-state p{margin:0 0 12px}
@@ -49,8 +43,6 @@
 .card-grid.uc-split{grid-template-columns:repeat(2,minmax(0,1fr))}
 .uc-card-head{min-height:var(--control-height);display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.uc-card-head .card-title{flex:1}
 .uc-footer{justify-content:space-between}.uc-footer .foot-status{margin:0;min-width:0;color:var(--text-secondary)}
-button[aria-disabled=true]:not(.link-btn){opacity:.55;cursor:not-allowed}
-.uc-hero button[aria-disabled=true]{opacity:1}
 .uc-setup{padding:24px}
 .uc-foot{margin:16px 0 0}
 .setup{margin:0}.setup .sg-title{font-size:var(--fs-section);font-weight:600;line-height:1.3;margin:0 0 4px}.setup-lead{font-size:var(--fs-body);color:var(--text-secondary);margin:0 0 16px;max-width:none}
@@ -70,7 +62,6 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .uc-stack>/* History table */
 .dlg-alert{margin:12px 0 0}
 /* Dialogs */
-.dialog-md{width:min(620px,calc(100vw - 32px))}.dialog-sm{width:min(540px,calc(100vw - 32px))}
 .uc-dialog .modal-head h2{line-height:1.3}.uc-dialog h3{margin:20px 0 8px;font-size:var(--fs-body);font-weight:600}.uc-dialog .modal-body>h3:first-child{margin-top:0}
 .uc-dialog .modal-body>p{max-width:none}
 .dlg-meta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.dlg-meta small{font-size:var(--fs-caption)}
@@ -79,15 +70,12 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .reauth-fields input[aria-invalid=true]{border-color:var(--error)}
 .report-text{font-weight:500;color:var(--heading)}.report-fields{margin:0}.report-fields div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--border-subtle)}.report-fields dt{color:var(--text-muted);font-size:var(--fs-body)}.report-fields dd{margin:0;overflow-wrap:anywhere}
 .about-report{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.toast-wrap{position:fixed;right:24px;bottom:24px;z-index:3000}
-.dn-toast{display:flex;align-items:center;gap:12px;max-width:420px;padding:12px 12px 12px 16px;border-radius:var(--radius);border:1px solid var(--border-subtle);background:var(--surface);box-shadow:0 8px 24px var(--shadow);font-size:var(--fs-body);color:var(--heading);animation:dn-toast-in var(--dn-motion-base) var(--dn-ease-out) both}
-.dn-toast>svg{color:var(--success);flex-shrink:0}.dn-toast-text{flex:1;min-width:0}.toast-wrap button.icon{width:44px;padding:0}
 /* Lock view */
 .progress-view{position:fixed;inset:0;z-index:2500;overflow:auto;background:var(--background);display:flex;flex-direction:column}
 .progress-top{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:88px;padding:16px 24px;background:var(--surface);flex-shrink:0}
 .progress-main{flex:1;display:flex;justify-content:center;padding:24px 20px 48px}
 .progress-card{width:100%;max-width:720px;align-self:flex-start;background:var(--surface);border-radius:var(--radius);padding:32px 40px}
-.progress-card .eyebrow{margin-bottom:12px}.progress-card h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;margin-bottom:8px}.progress-card h1:focus{outline:none}
+.progress-card .eyebrow{margin-bottom:12px}.progress-card h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;margin-bottom:8px}.progress-card h1:focus-visible{outline:none}
 .progress-card .lead{font-size:var(--fs-body);color:var(--text-secondary);margin-bottom:8px;max-width:none}.progress-card .lead.alert-line{color:var(--heading);font-weight:500}
 .progress-card h2{margin:24px 0 4px;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500}.progress-card h2+p{margin-top:4px}
 .live{margin:0 0 4px}.live b{display:block;font-size:var(--fs-section);font-weight:500;color:var(--heading);line-height:var(--lh-section)}.live span{display:block;font-size:var(--fs-body);color:var(--text-secondary);margin-top:2px}
@@ -112,13 +100,13 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .dn-stage.is-waiting .dn-stage-name{color:var(--text-muted)}
 .dn-stage.is-complete .dn-node{background:var(--button-primary);color:var(--primary-foreground)}
 .dn-stage.is-current .dn-node,.dn-stage.is-current .dn-stage-status{color:var(--accent)}
-.dn-stage.is-failed .dn-node,.dn-stage.is-failed .dn-stage-status{color:var(--error)}.dn-stage.is-failed .dn-node{box-shadow:inset 0 0 0 1.5px var(--error)}
-.dn-stage.is-rolled-back .dn-node,.dn-stage.is-rolled-back .dn-stage-status{color:var(--warning)}.dn-stage.is-rolled-back .dn-node{box-shadow:inset 0 0 0 1.5px var(--warning)}
+.dn-stage.is-failed .dn-node,.dn-stage.is-failed .dn-stage-status{color:var(--error)}.dn-stage.is-failed .dn-node{outline:1.5px solid var(--error);outline-offset:-1.5px}
+.dn-stage.is-rolled-back .dn-node,.dn-stage.is-rolled-back .dn-stage-status{color:var(--warning)}.dn-stage.is-rolled-back .dn-node{outline:1.5px solid var(--warning);outline-offset:-1.5px}
 /* Small screens: rows stack full width at 480 px and below. */
 @media(max-width:767px){.card-grid.uc-split{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:599px){
  .uc-hero{padding:24px 16px}.uc-hero-state{grid-template-columns:minmax(0,1fr);gap:12px}.uc-hero-row{flex-direction:column;align-items:stretch;gap:16px}.uc-hero-row>button{width:100%}.uc-setup{padding:20px 16px}
- .uc-page>.tabs{overflow-x:auto}.tabs [role=tab]{padding:8px 12px}
+ .uc-page>.tabs{overflow-x:auto}
  .progress-card{padding:24px 16px}.progress-top{padding:12px 16px}.progress-main{padding:16px 12px 32px}
  .dn-node{width:40px;height:40px}.dn-stage-link{top:19px}.dn-stage-status{font-size:var(--fs-caption)}
  .reauth-fields{grid-template-columns:1fr}
@@ -130,14 +118,14 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
  .progress-actions .why{width:100%}
  .uc-dialog .modal-foot{flex-direction:column-reverse;align-items:stretch}.uc-dialog .modal-foot>:is(button,a){width:100%;flex:none;justify-content:center}
  .about-report>:is(button,a){width:100%;justify-content:center}
- .dn-toast{flex-wrap:wrap}.dn-toast-text{flex:1 1 100%}.toast-wrap{left:16px;right:16px;bottom:16px}.toast-wrap button:not(.icon){flex:1}
+
 }
-@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc,.dn-toast{animation:none!important}.dn-node,details.more summary svg{transition:none}}
+@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc{animation:none!important}.dn-node,details.more summary svg{transition:none}}
 
 /* Recent updates disclosure (replaces the History tab) */
 .uc-recent{padding:0}
 .uc-recent-toggle{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;padding:0 16px;border:0;border-radius:var(--radius);background:transparent;color:var(--heading);font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;cursor:pointer}
-.uc-recent-toggle:hover{background:var(--surface-hover)}.uc-recent-toggle:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.uc-recent-toggle:hover{background:var(--surface-hover)}.uc-recent-toggle:focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
 .uc-recent-body{padding:16px 24px 24px;border-top:1px solid var(--border-subtle)}
 .uc-recent-list{list-style:none;margin:0;padding:0}
 .uc-recent-list li{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}

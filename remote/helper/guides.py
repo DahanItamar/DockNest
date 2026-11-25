@@ -19,6 +19,11 @@ Replacement requires a verified backup of the current target before stopping it,
 Delete plaintext staging securely according to your storage policy; filesystem deletion alone does not guarantee erasure on every disk.
 """
 
+def hand_steps_guide(files):
+    """Restore-guide steps for configuration files outside the folders a move may create: nothing writes them back."""
+    steps=''.join('- copy %s (config-%d.tar) from the backup to %s\n'%(posixpath.basename(path),index,path) for index,path in files)
+    return '\n# Put back by hand\nThese configuration files live outside the app folders, where neither a move nor a restore writes. After restoring, put each one back yourself:\n'+steps
+
 INCREMENTAL_GUIDE="""
 # Incremental backups (format v2)
 manifest.backupKind says whether this package is a full backup or an increment. manifest.chain names the chain, this
@@ -38,4 +43,31 @@ This also applies deletions and renames. Where an earlier archive restored a sym
 at that path, remove the symlink before extracting that later archive (tar would follow it). Run docker load -i
 images.tar for every package of the chain, in order. The snapshot-*.snar files are GNU tar snapshot files; a restore
 does not need them.
+"""
+
+RUN_DEFINITION_GUIDE="""
+# Run definition (containers started without Docker Compose)
+run-definition/compose.yaml recreates the containers the way docker inspect showed them, from the snapshot images in
+images.tar; the label docknest.original-image names the image each one started from. Each <container>.env file next to
+it holds that container's environment and contains secrets. Lines at the top of compose.yaml name any setting it cannot
+recreate. On a new server: docker load -i images.tar, put each mount back where compose.yaml mounts it, then run
+  docker compose -f run-definition/compose.yaml up -d
+"""
+
+DUMP_GUIDE="""
+# Database dumps
+Some databases in this package took an online logical dump instead of a stopped file copy: the services in
+manifest.backupPlan.services with a "dump" entry. For each one, database-I.tar (I is the container's position in
+manifest.containers) holds the dump, listing.json and config/ (settings files from its data folder). Its data folder
+mount archive holds only the empty folder. To restore it by hand, put the mounts back as usual, start only the database
+container and wait until its log says "init process complete" (PostgreSQL) or "init process done" (MySQL, MariaDB).
+Copy each file from config/ into the data folder (listing.json dataDirectory), keeping the folder's owner, and restart
+the container. Then load the dump through the container's local socket, before any app container starts:
+  PostgreSQL: psql -X -U <user> -d postgres < globals.sql (an error "role ... already exists" is expected), then for
+    each name in listing.json databases, in order: pg_restore --exit-on-error --single-transaction --clean --if-exists
+    -U <user> -d <name> < database-N.pgdump when the database exists, else pg_restore --exit-on-error --create -U <user>
+    -d postgres < database-N.pgdump
+  MySQL or MariaDB: mysql (or mariadb) --user=root < all-databases.sql; it also restores the accounts
+Run each command inside the container with docker exec -i. DockNest's own restore does all of this in a container with
+no network before the app starts, then compares the configured data checks with the values recorded at backup.
 """

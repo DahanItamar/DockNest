@@ -25,7 +25,7 @@
 .sc-foot{display:flex;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border-subtle)}
 .sc-foot button{min-width:120px;white-space:nowrap}
 .sc-kept summary{cursor:pointer;font-weight:500;color:var(--heading);min-height:40px;display:flex;align-items:center}
-.sc-kept summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--radius)}
+.sc-kept summary:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset);border-radius:var(--radius)}
 .sc-kept p{margin:0 0 8px}
 dialog.sc-dialog{width:min(520px,calc(100vw - 2 * var(--edge)));scrollbar-width:none}
 dialog.sc-dialog::-webkit-scrollbar{display:none}

@@ -17,10 +17,11 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
 
   assert.equal(await page.locator('input').count(), 1, 'Step one has only the password input');assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).count(),1);
-  assert.equal(await page.locator('.auth-card .brand-lockup,.auth-header .brand-lockup').count(),0,'Login uses the monochrome mask logo, not the app lockup');
-  assert.equal(await page.locator('.lg-logo[role="img"]').count(),2,'Panel logo and phone logo');
+  assert.equal(await page.locator('.auth-page .brand-image').evaluateAll(images=>images.length>0&&images.every(image=>image.alt==='DockNest'&&/\/brand\/logo-teal-(light|dark)-600-/.test(image.getAttribute('src')))),true,'Login shows the full-colour accent logo with an accessible name');
+  assert.equal(await page.locator('.auth-page .brand-lockup small').count(),0,'The app-header tagline is not shown on the sign-in screens');
+  assert.equal(await page.locator('.brand-image').count(),2,'Panel logo and phone logo');
   assert.equal(await page.locator('.alert,.alert-panel').count(),0,'No alert box on the sign-in page');
-  assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
+  assert.equal(await page.title(),'DockNest — Backup & Restore for Self-Hosted Apps');
   const assetLinks=await page.locator('link[rel="icon"],link[rel="alternate icon"],link[rel="apple-touch-icon"],link[rel="manifest"]').evaluateAll(links=>links.map(x=>x.href));
   const appManifest=await(await page.request.get(await page.locator('link[rel="manifest"]').getAttribute('href').then(href=>new URL(href,baseUrl).href))).json();
   for(const asset of [...assetLinks,...appManifest.icons.map(x=>new URL(x.src,baseUrl).href),baseUrl+'/brand/logo.png',baseUrl+'/brand/mark.png']){
@@ -105,8 +106,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     await dialog.getByRole('heading',{name:'Fixture Ubuntu is connected'}).waitFor();
     if(mode==='new'){
       await page.route('**/api/servers/fixture-server/discover',route=>route.fulfill({json:{containers:[{name:'first-site',image:'app:latest',state:{status:'running'}}]}}));
-      await dialog.getByRole('button',{name:'Add a site',exact:true}).click();
-      await dialog.getByRole('button',{name:'Select site first-site',exact:true}).click();
+      await dialog.getByRole('button',{name:'Add an app',exact:true}).click();
+      await dialog.getByRole('button',{name:'Select app first-site',exact:true}).click();
       assert.equal(await dialog.getByRole('button',{name:'Continue',exact:true}).isEnabled(),true,'A standalone site can be selected without technical controls');
       assert.equal(await dialog.getByLabel('Source server').inputValue(),'fixture-server','Successful connection hands off the chosen server');
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -124,7 +125,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
   await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
-  await page.getByRole('article',{name:'Production',exact:true}).getByRole('button',{name:'Edit details',exact:true}).click();
+  await page.getByRole('article',{name:'Production',exact:true}).getByRole('button',{name:/^Edit details/}).click();
   const detailsDialog=page.getByRole('dialog');
   await detailsDialog.getByLabel('Server name',{exact:true}).fill('DemoBlog_srv');
   await detailsDialog.getByLabel('Server note (optional)',{exact:true}).fill('DemoBlog production');
@@ -132,7 +133,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await detailsDialog.waitFor({state:'hidden'});
   await page.getByRole('article',{name:'DemoBlog_srv',exact:true}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{webHints:{healthUrls:['http://127.0.0.1:8080/'],domains:[]},backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{webHints:{healthUrls:['http://127.0.0.1:8080/'],domains:[]},backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop',manager:'dockge'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -148,16 +149,19 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
-  await page.getByRole('navigation').getByRole('button',{name:'Sites & schedules'}).click();
-  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules'}).click();
+  await page.getByRole('button',{name:'Add app',exact:true}).click();
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  // A stack a manager runs names it on its card (docs/site-setup.md); a plain container does not.
+  await siteDialog.getByRole('region',{name:'shop',exact:true}).getByText('Managed by Dockge',{exact:true}).waitFor();
+  assert.equal(await siteDialog.getByRole('region',{name:'blog',exact:true}).getByText(/Managed by/).count(),0);
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isVisible(),false,'Service controls stay collapsed during site selection');
-  await siteDialog.getByRole('button',{name:'Select site blog',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app blog',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true,includeHidden:true}).isChecked(),false,'Choosing another site replaces the prior project');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true);
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
@@ -169,7 +173,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.screenshot({path:path.join(screenshotDir,'site-selection-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  await siteDialog.getByText(/^Managed by Dockge\. DockNest reads this stack's Compose file/).waitFor();
   assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
   assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
   await page.route('**/api/servers/host-one/project-files?**',route=>{
@@ -184,13 +189,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByLabel('Domains (comma separated)').fill('https://shop.example.org/catalog/');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
-  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop');
+  await siteDialog.getByLabel('App name',{exact:true}).fill('My shop');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
   await siteDialog.getByRole('checkbox',{name:/normal stop/}).check();
   await siteDialog.getByRole('checkbox',{name:/No containers or processes/}).check();
   await siteDialog.getByRole('button',{name:'Back',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   assert.equal(await siteDialog.getByLabel('Domains (comma separated)').inputValue(),'shop.example.org','Advanced settings survive navigation');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
@@ -198,10 +203,10 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   let maintenanceSetups=0;
   await page.route('**/api/sites/fixture-site/maintenance/setup',route=>{assert.equal(route.request().method(),'POST');maintenanceSetups++;return route.fulfill({json:{configured:true,files:['/etc/nginx/sites-enabled/shop']}});});
   assert.equal(await siteDialog.getByRole('checkbox',{name:/Show a maintenance page during backups/}).isChecked(),true,'New Docker sites set up the maintenance page by default');
-  await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Add app',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
   assert.equal(maintenanceSetups,1,'Adding the site sets up its maintenance page once');
-  await page.getByText('Site added with its maintenance page, tested on your domain. Set its schedule when ready.').waitFor();
+  await page.getByText('App added with its maintenance page, tested on your domain. Set its schedule when ready.').waitFor();
   await page.route('**/api/sites/fixture-site',route=>{
     if(route.request().method()==='DELETE'){fixtureSites=[];fixturePolicies=[];return route.fulfill({json:{id:'fixture-site',removed:true,backupsPreserved:true}});}
     assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
@@ -210,21 +215,23 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.deepEqual(body.config.temporaryMemoryFolders,[{container:'shop',destination:'/tmp'}]);
     fixtureSites=[{id:'fixture-site',...body}];return route.fulfill({json:fixtureSites[0]});
   });
-  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
-  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop edited');
+  await page.getByRole('button',{name:/^Edit configuration/}).click();
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
+  await siteDialog.getByLabel('App name',{exact:true}).fill('My shop edited');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
   await siteDialog.getByRole('button',{name:'Save configuration',exact:true}).click();await siteDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  // The saved app now owns shop and shop-db, so the wizard hides them; the next wizard checks run without it.
+  const savedSites=fixtureSites;fixtureSites=[];await page.getByRole('button',{name:'Refresh dashboard'}).click();
+  await page.getByRole('button',{name:'Add app',exact:true}).click();
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true,'Compose project selects its database');
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
-  await siteDialog.getByText('My site needs a custom selection',{exact:true}).click();
-  await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
+  await siteDialog.getByText('My app needs a custom selection',{exact:true}).click();
+  await siteDialog.getByLabel('Docker container (app)').selectOption('shop');
   await siteDialog.getByLabel('Source server').selectOption('host-two');
   await siteDialog.getByRole('alert').getByText('The server is unavailable. Retry the connection.',{exact:true}).waitFor();
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'A failed server switch cannot reuse a previous selection');
@@ -232,12 +239,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByText(/No Docker containers found/).waitFor();
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'Empty discovery cannot create a site');
   await siteDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  fixtureSites=savedSites;await page.getByRole('button',{name:'Refresh dashboard'}).click();
   let expectedSchedule='45 23 * * *';
   await page.route('**/api/sites/fixture-site/policy',route=>{
     const body=route.request().postDataJSON();assert.equal(body.schedule,expectedSchedule);assert.equal(body.timezone,'Asia/Jerusalem');
     fixturePolicies=[{siteId:'fixture-site',...body}];return route.fulfill({json:fixturePolicies[0]});
   });
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   const scheduleDialog=page.getByRole('dialog');
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'daily');
   await scheduleDialog.getByLabel('Hour (00–23)',{exact:true}).selectOption('23');
@@ -252,7 +260,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.setViewportSize({width:1440,height:960});
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();
   await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   assert.equal(await scheduleDialog.getByLabel('Hour (00–23)',{exact:true}).inputValue(),'23','Saved 24-hour time survives reopening');
   expectedSchedule='15 9 * * 5';
   await scheduleDialog.getByLabel('Back up',{exact:true}).selectOption('weekly');
@@ -261,36 +269,36 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await scheduleDialog.getByLabel('Minute (00–59)',{exact:true}).selectOption('15');
   await scheduleDialog.getByText(/Every Friday at 09:15/).waitFor();
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   expectedSchedule='0 */6 * * *';
   await scheduleDialog.getByLabel('Back up',{exact:true}).selectOption('custom');
   await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).fill(expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'custom','Unrecognized schedules remain custom rather than silently changing');
   assert.equal(await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).inputValue(),expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await page.route('**/api/sites/fixture-site/readiness',route=>route.fulfill({json:{ready:false,readOnly:true,checks:[{name:'Containers and configuration files',ok:true,message:'Ready'},{name:'Maintenance proxy and website',ok:false,message:'Deploy the maintenance page and integrate it with the source proxy.'}]}}));
-  await page.getByRole('button',{name:'Check readiness',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Check readiness'}).click();
   await page.getByRole('dialog').getByRole('heading',{name:'Setup needs attention',exact:true}).waitFor();
   await page.getByRole('dialog').getByText('Deploy the maintenance page and integrate it with the source proxy.',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();
-  await page.getByRole('button',{name:'Remove site',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Remove app'}).click();
   const removeDialog=page.getByRole('dialog');
   await removeDialog.getByText(/Existing backup files and history will be kept/).waitFor();
   await removeDialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  await page.getByRole('button',{name:'Remove site',exact:true}).click();
-  await removeDialog.getByRole('button',{name:'Remove site',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
-  await page.getByRole('heading',{name:'Choose the sites to protect',exact:true}).waitFor();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Remove app'}).click();
+  await removeDialog.getByRole('button',{name:'Remove app',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
+  await page.getByRole('heading',{name:'Choose the apps to protect',exact:true}).waitFor();
   let storageFixture=[];
   await page.route('**/api/storage-report',route=>route.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}}));
   await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
   await page.route('**/api/storage-targets/connect',route=>{
     const body=route.request().postDataJSON();
-    assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,1e12);
+    assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,undefined);
     assert.equal(body.host,'u000000.your-storagebox.de');assert.equal(body.username,'u000000');
     assert.ok(!body.privateKey);
-    storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:body.capacityBytes,hasCredential:true}];
+    storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:1e12,hasCredential:true}];
     return route.fulfill({status:201,json:storageFixture[0]});
   });
   await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
@@ -309,7 +317,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByRole('heading',{name:'Hetzner Storage Box',exact:true}).waitFor();await page.locator('.storage-card .status-success',{hasText:'Used for new backups'}).waitFor();
   assert.equal(await page.getByLabel('Password',{exact:true}).count(),0,'Successful connection discards the password input');
   await page.route('**/api/storage-targets/storage-fixture/tree',route=>route.fulfill({json:{root:'/home/docknest',managedRoot:'/home/docknest/BACKUP',limited:false,recovery:{folder:'docknest-recovery',files:[{id:'manager-fixture',createdAt:'2026-10-03T12:13:14Z',size:1024,filename:'docknest_fixture.dkit',relativePath:'BACKUP/docknest-recovery/docknest_fixture.dkit',downloadable:true}]},servers:[{id:'host-one',name:'Production',sites:[{id:'fixture-site',name:'Shop',days:[{date:'2026-10-01',backups:[{id:'fixture-backup',capturedAt:'2026-10-01T20:30:00Z',size:1024*1024,pinned:false,verified:true,filename:'backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',relativePath:'BACKUP/production--host-one/shop--fixture-site/backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc'}]}]}]}]}}));
-  await page.getByRole('button',{name:'Browse backup folders'}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Browse backup folders'}).click();
   await page.getByText('Server: Production',{exact:true}).waitFor();
   await page.getByText('backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',{exact:true}).waitFor();
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit'}).getAttribute('href'),'/api/self-backup/download');
@@ -320,7 +328,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
   await page.screenshot({path:path.join(screenshotDir,'storage-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
-  for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
+  for (const name of ['Servers', 'Apps & Schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
   }

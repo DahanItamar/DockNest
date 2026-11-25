@@ -4,8 +4,9 @@
 // byte from the main copy: no re-encryption, the same SHA-256, the same master key.
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
+import { randomUUID } from 'node:crypto';
 import { db,audit,transaction } from './db.js';
-import { targetOptions,adapters,openRead,openWrite,makeDirectory,syncFile,renameFile,storageCapacity } from './storage.js';
+import { targetOptions,adapters,openRead,openWrite,makeDirectory,syncFile,renameFile,removeFile,storageCapacity } from './storage.js';
 import { fileExists,completeCopy,failCopy,yieldCopy,authenticateCopyFile,removeCopyFiles,deleteCopyFiles,settleAfterCopyRemoval,markCopyDeleted,deletionBlocked,readLeaseHeld,recoverInterruptedCopies } from './artifact-journal.js';
 import { claimableJobExists } from './job-claim.js';
 import { siteCopyTargets,effectiveRetention,sameLocation,targetIdOfPath,targetSummary } from './site-storage.js';
@@ -28,9 +29,11 @@ async function checkCopyCapacity(options,size){
  if(capacity.available===null||capacity.available===undefined)throw new CopyFailure('space');
  if(capacity.available<size+GiB)throw new CopyFailure('space');
 }
+// A leftover .partial is never a package: removed when present, and failing to remove it changes nothing.
+const removeTemporary=file=>removeFile(file).catch(()=>{});
 // One copy step. `verify(file)` is the full authentication (engine.verifyEncrypted): GCM tag and SHA-256.
 export async function executeCopy(copy,verify){
- const temporary=copy.path+'.partial';
+ let temporary=copy.path+'.partial';
  try{
   if(!targetSummary(copy.target_id))throw new CopyFailure('destination_missing');
   if(sameLocation(copy.target_id,targetIdOfPath(copy.source)))throw new CopyFailure('same_destination');
@@ -43,6 +46,8 @@ export async function executeCopy(copy,verify){
   }
   await checkCopyCapacity(options,copy.size);
   if(await fileExists(temporary))await removeCopyFiles(copy,{partialOnly:true});
+  // An append-only destination keeps an earlier attempt's .partial (a listed leftover): this attempt writes beside it.
+  if(await fileExists(temporary))temporary=copy.path+'.'+randomUUID().slice(0,8)+'.partial';
   await makeDirectory(copy.path.slice(0,copy.path.lastIndexOf('/')));
   let input;
   try{input=await openRead(copy.source);}catch{throw new CopyFailure('source');}
@@ -52,13 +57,13 @@ export async function executeCopy(copy,verify){
   try{output=await openWrite(temporary);await pipeline(input,watch,output);}
   catch(error){input.destroy();output?.destroy();if(error instanceof CopyFailure||error instanceof CopyYield)throw error;throw new CopyFailure('unreachable');}
   await syncFile(temporary);
-  if(!await authenticateCopyFile(temporary,copy,verify)){await removeCopyFiles(copy,{partialOnly:true});throw new CopyFailure('checksum');}
+  if(!await authenticateCopyFile(temporary,copy,verify)){await removeTemporary(temporary);throw new CopyFailure('checksum');}
   await renameFile(temporary,copy.path);await syncFile(copy.path);
   completeCopy(copy);yields.delete(yieldKey(copy));
   await retainCopies(copy.site_id).catch(()=>audit('worker','retention.failed',copy.site_id,{copies:true}));
   return {status:'verified'};
  }catch(error){
-  await removeCopyFiles(copy,{partialOnly:true}).catch(()=>{});
+  await removeTemporary(temporary);
   if(error instanceof CopyYield){yields.set(yieldKey(copy),(yields.get(yieldKey(copy))??0)+1);yieldCopy(copy,Date.now()+copyHooks.yieldDelayMs);return {status:'yielded'};}
   yields.delete(yieldKey(copy));
   const plan=failCopy(copy,error instanceof CopyFailure?error.code:'unreachable');
@@ -115,7 +120,7 @@ export async function maintainCopies(at=Date.now(),verify=null){
 }
 
 // ---- Destinations -----------------------------------------------------------------------------------------------------
-const prefixOf=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3'].includes(summary.mode)?summary.mode+':'+targetId+':':null;};
+const prefixOf=targetId=>{const summary=targetSummary(targetId);return summary&&['sftp','s3','rclone','folder'].includes(summary.mode)?summary.mode+':'+targetId+':':null;};
 // What a destination holds and who uses it: the 409 body of DELETE /api/storage-targets/:id and GET .../usage.
 export function destinationUsage(targetId){
  const copies=db.prepare("SELECT COUNT(*) AS n,COUNT(DISTINCT c.backup_id) AS backups,COALESCE(SUM(b.size),0) AS bytes FROM backup_copies c LEFT JOIN backups b ON b.id=c.backup_id WHERE c.target_id=? AND c.status<>'deleted'").get(targetId);
@@ -137,7 +142,11 @@ export const destinationInUse=usage=>Boolean(usage.copies||usage.mainForSites.le
 // "Delete these copies": every copy held on the destination is queued for deletion (the worker removes the files) and
 // the destination leaves every site's copy list. Pinned backups' copies need includePinned; backups that exist only
 // here (their main package aged out) need includeLastPackages, because deleting these copies deletes them.
+// An append-only destination (or one that refused a delete since its last test) is refused at once: queuing deletions it
+// will never perform would only hide copies that still exist.
 export function requestDestinationCopyDeletion(targetId,{includePinned=false,includeLastPackages=false}={},actor){
+ let keeps=false;try{keeps=Boolean(targetOptions(targetId).keepsFiles);}catch{/* A removed destination has nothing to keep. */}
+ if(keeps)throw Object.assign(new Error('This destination is append-only, so DockNest cannot delete the copies it holds. Expire them on the storage server, then test the destination again.'),{status:409,code:'kept_by_storage'});
  return transaction(()=>{
   const last=onlyPackageBackups(targetId);
   if(last&&!includeLastPackages)throw Object.assign(new Error(`${last} ${last===1?'backup exists':'backups exist'} only on this destination. Deleting these copies deletes ${last===1?'it':'them'}. Confirm to continue.`),{status:409,code:'last_packages',lastPackages:last});

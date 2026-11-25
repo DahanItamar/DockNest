@@ -5,7 +5,13 @@ export const TIME={min:10,max:120,def:30,presets:[[15,'15 min'],[30,'30 min'],[6
 export const MEMORY={min:256,max:16384,def:1024,presets:[[512,'512 MB'],[1024,'1 GB'],[2048,'2 GB'],[4096,'4 GB'],[8192,'8 GB']],unit:'MB'};
 export const CPU={min:0.5,def:1,presets:[[0.5,'Half a core'],[1,'1 core'],[2,'2 cores'],[4,'4 cores']],unit:'cores'};
 
-export const DEFAULT_SETTINGS={enabled:false,cadence:'weekly',serverId:null,allowLiveServer:false,allowInternet:false,timeLimitMinutes:TIME.def,memoryMb:MEMORY.def,cpus:CPU.def,probe:null,nextDueAt:null,skipReason:null};
+export const DEFAULT_SETTINGS={enabled:false,cadence:'weekly',serverId:null,allowLiveServer:false,allowInternet:false,timeLimitMinutes:TIME.def,memoryMb:MEMORY.def,cpus:CPU.def,probe:null,sourceTargetId:null,nextDueAt:null,skipReason:null};
+
+// "Tested from" in the test details: the main storage or the named copy. Empty for older tests that did not record it.
+export function sourceText(source){
+ if(!source)return '';
+ return source.role==='copy'?'Copy on '+(source.name||'another storage'):'Main storage';
+}
 
 // A limit is edited as {pick:'30'|'custom', custom:''}. A saved value that is not a preset opens as Custom.
 export function limitFrom(spec,value){
@@ -35,20 +41,8 @@ export function whyNoRun({serverId,liveServer,allowLive}){
  return '';
 }
 
-// Ages for the overview: "just now", "5 minutes ago", "yesterday", "2 days ago", "1 week ago".
-export function age(iso,now=Date.now()){
- const t=Date.parse(iso);if(!Number.isFinite(t))return '';
- const s=Math.max(0,(now-t)/1000),m=Math.floor(s/60),h=Math.floor(m/60),d=Math.floor(h/24);
- const n=(v,w)=>v+' '+w+(v===1?'':'s')+' ago';
- if(m<1)return 'just now';
- if(m<60)return n(m,'minute');
- if(h<24)return n(h,'hour');
- if(d===1)return 'yesterday';
- if(d<7)return n(d,'day');
- if(d<30)return n(Math.floor(d/7),'week');
- if(d<365)return n(Math.floor(d/30),'month');
- return n(Math.floor(d/365),'year');
-}
+// Ages come from the one shared formatter (web/age.js).
+export {age} from '../age.js';
 // "Daily at 02:00": the overview shows schedules in this short style.
 export const shortSchedule=text=>String(text||'').replace(/^Every day at /,'Daily at ');
 

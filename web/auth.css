@@ -25,28 +25,33 @@
 .lg-left .auth-header{background:transparent}
 .lg-formside{flex:1;padding:var(--edge) var(--edge) 48px}
 .lg-col{width:100%;max-width:384px}
-.lg-brandpanel{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:40px;background:var(--surface-muted);border-right:1px solid var(--border-subtle)}
-.lg-bp-top{min-height:56px}
+.lg-brandpanel{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:40px;background:var(--dn-brand-2);border-right:1px solid var(--dn-brand-4)}
+.lg-bp-top{min-height:56px;display:flex;flex-direction:column;align-items:flex-start}
 /* paths: calm, compositor-only drift, faded out behind the logo and the text */
-.lg-paths{position:absolute;inset:0;z-index:-1;width:100%;height:100%;color:var(--accent);-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 112px,#000 280px,#000 calc(100% - 340px),transparent calc(100% - 210px));mask-image:linear-gradient(to bottom,transparent 0,transparent 112px,#000 280px,#000 calc(100% - 340px),transparent calc(100% - 210px))}
+.lg-paths{position:absolute;inset:0;z-index:-1;width:100%;height:100%;color:var(--dn-brand-8);-webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 220px,var(--dn-black) 380px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px));mask-image:linear-gradient(to bottom,transparent 0,transparent 220px,var(--dn-black) 380px,var(--dn-black) calc(100% - 340px),transparent calc(100% - 210px))}
 .lg-path{fill:none;stroke:currentColor;stroke-linecap:round;stroke-dasharray:100;animation:none}
-.lg-pg{transform-origin:50% 50%;will-change:transform;animation:lg-sway 52s ease-in-out infinite alternate}
-.lg-pg2{animation-duration:60s;animation-delay:-20s}
-@keyframes lg-sway{from{transform:translate3d(-28px,-14px,0) rotate(-.6deg)}to{transform:translate3d(28px,14px,0) rotate(.6deg)}}
-.lg-paused .lg-pg{animation-play-state:paused}
-@media(prefers-reduced-motion:reduce){.lg-pg{animation:none}}
+.lg-pg{transform-origin:50% 50%}.lg-pg1{color:var(--dn-brand-7)}.lg-pg2{color:var(--dn-brand-9)}
+
+
+
+
 /* product line */
-.lg-bp-line{margin:0 0 8px;max-width:480px;font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading)}
+.lg-bp-line{margin:20px 0 8px;max-width:480px;font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--dn-brand-text)}
 .lg-s{display:block}
-.lg-t2 .lg-rise{animation:dn-enter var(--dur-slow) var(--ease) both}
-.lg-t2 .lg-rise2{animation-delay:120ms}
-@media(prefers-reduced-motion:reduce){.lg-t2 .lg-rise{animation:none}}
-.lg-bp-cap{margin:0;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-secondary)}
+
+
+
+.lg-bp-cap{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--dn-brand-text-soft)}
+/* rotating highlights: fixed height (no layout shift), one line visible at a time, 4 s each, 24 s for the six lines */
+.lg-rotator{position:relative;max-width:480px;height:calc(var(--lh-section)*2)}
+.lg-rot-line{position:absolute;top:0;left:0;right:0;margin:0;opacity:0;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--dn-brand-text-soft);animation:lg-rot 24s linear infinite;animation-delay:calc(var(--i)*4s)}
+@keyframes lg-rot{0%{opacity:0}2.5%{opacity:1}14.17%{opacity:1}16.67%{opacity:0}100%{opacity:0}}
+.lg-brandpanel:hover .lg-rot-line,.auth-page:has(:focus-visible) .lg-rot-line{animation-play-state:paused}
+@media(prefers-reduced-motion:reduce){.lg-rot-line{animation:none}.lg-rot-line:first-child{opacity:1}}
 /* logos */
 @media(max-width:1023px){.lg-brandpanel{display:none}.lg-split{grid-template-columns:1fr;min-height:100dvh}}
 @media(max-width:480px){.lg-formside{padding:16px 16px 32px}.lg-head{padding:16px}}
-.lg-logo{display:block;max-width:100%;aspect-ratio:2015/395;background:currentColor;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-position:left center;mask-position:left center}
-.lg-logo{color:var(--heading);-webkit-mask-image:url(/brand/logo.png);mask-image:url(/brand/logo.png)}
+.lg-bp-top .brand-image,.lg-head-brand .brand-image{width:176px;height:auto}.lg-bp-top .brand-lockup,.lg-head-brand .brand-lockup{align-items:flex-start;gap:0}.lg-head-brand{display:none}
 
 
 /* Login-only monochrome tokens. Scoped to the auth pages, nothing global. */
@@ -56,9 +61,9 @@
 .auth-page a{text-decoration:underline;text-underline-offset:3px}
 
 /* inline error: no box, semantic red text, one line above the button */
-.lg-err{display:flex;align-items:flex-start;gap:8px;margin:0 0 16px;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--alert-error-text);animation:dn-enter var(--dur-slow) var(--ease) both}
+.lg-err{display:flex;align-items:flex-start;gap:8px;margin:0 0 16px;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--alert-error-text)}
 .lg-err svg{flex:none;margin-top:2px}
-@media(prefers-reduced-motion:reduce){.lg-err{animation:none}}
+
 
 /* The shared .auth-card rules are for the card layout; the split screen uses the bare column. */
 .auth-page .auth-card.lg-col{text-align:left;max-width:384px;padding:0;background:none;border:0;border-radius:0}
@@ -93,12 +98,12 @@
 .otp-dash{flex:none;width:var(--spacing);height:1px;background:var(--text-muted)}
 .otp-box{position:relative;display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:calc(var(--spacing)*6.5);border:1px solid var(--border-subtle);border-radius:var(--radius-input);background:var(--surface);color:var(--heading);font-size:var(--fs-card);line-height:var(--lh-card);font-weight:500;font-variant-numeric:tabular-nums;transition:border-color var(--dur-fast) var(--ease)}
 .otp-box.otp-filled{border-color:var(--text-secondary)}
-.otp-box.otp-active{border-color:var(--focus-ring);outline:2px solid var(--focus-ring);outline-offset:2px}
+.otp-box.otp-active{border-color:var(--focus-ring);outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 .otp-invalid .otp-box,.otp-invalid .otp-box.otp-filled{border-color:var(--error)}
-.otp-digit{animation:otp-in var(--dur-base) var(--ease) both}
+
 /* 1.1s is the text-caret blink rate; no motion token is that slow */
-.otp-caret{width:1px;height:1.1em;background:var(--heading);animation:otp-blink 1.1s steps(1) infinite}
-.otp-invalid .otp-boxes{animation:otp-shake var(--dur-slow) var(--ease)}
+.otp-caret{width:1px;height:1.1em;background:var(--heading)}
+
 .otp-input{position:absolute;inset:0;width:100%;height:100%;min-height:0;padding:0;border:0;background:transparent;color:transparent;caret-color:transparent;opacity:.01;cursor:text;font-size:var(--fs-body)}
 .otp-input:focus-visible{outline:none}
 /* Two joined groups of three */
@@ -108,15 +113,23 @@
 .otp-box.otp-active{outline-offset:-2px;border-radius:var(--radius-input)}
 .otp-invalid .otp-group{border-color:var(--error)}
 .otp-invalid .otp-box+.otp-box{border-left-color:var(--alert-error-border)}
-@keyframes otp-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes otp-blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
-@keyframes otp-shake{20%{transform:translateX(-4px)}40%{transform:translateX(4px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}}
-@media(prefers-reduced-motion:reduce){.otp-digit,.otp-invalid .otp-boxes,.otp-caret{animation:none}.otp-box,.auth-page .primary{transition:none}}
+
+
+
+@media(prefers-reduced-motion:reduce){.otp-box,.auth-page .primary{transition:none}}
 
 /* Header row: wordmark (phone only) left, theme toggle right, same row and side padding as the form. */
 .lg-head{align-items:center}
-.lg-head-logo{display:none;height:calc(var(--spacing)*3);width:auto;aspect-ratio:2015/395;margin:0}
 .auth-page .auth-card.lg-col>:first-child{margin-top:auto}
-@media(min-width:1024px){.lg-left .lg-head{padding:40px 40px 0}.lg-bp-top{display:flex;align-items:center;height:var(--control-height);min-height:0}}
-@media(max-width:1023px){.lg-head{padding:var(--spacing) var(--edge)}.lg-head>.lg-head-logo{display:block}}
+@media(min-width:1024px){.lg-left .lg-head{padding:40px 40px 0}}
+@media(max-width:1023px){.lg-head{padding:var(--spacing) var(--edge)}.lg-head>.lg-head-brand{display:block}.lg-head-brand .brand-image{width:150px}}
 .lg-head .theme-toggle{margin-left:auto}
+
+/* Typing animation scope: no focus border on password and code inputs. Caret and the active-box tint show position. */
+.auth-page .pw-in:focus-visible:not([aria-invalid=true]){border-color:var(--dn-border-strong)}
+.otp-box.otp-active{border-color:transparent;outline:none;background:var(--surface-hover)}
+.otp-caret{animation:otp-blink 1.1s steps(1) infinite}
+@keyframes otp-blink{50%{opacity:0}}
+.otp-digit{display:inline-block;animation:otp-in 150ms cubic-bezier(.2,.7,.3,1) both}
+@keyframes otp-in{from{opacity:0;transform:translateY(5px) scale(.8)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.otp-caret{animation:none}.otp-digit{animation:none}}

@@ -2,11 +2,54 @@
 
 All notable changes to DockNest are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and DockNest uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/upgrading.md](docs/upgrading.md) describes what stays stable within a major version and the deprecation policy. Detailed notes for each release live in [docs/releases](docs/releases).
 
-## [Unreleased]
+## [3.0.0] - Unreleased
+
+Upgrading from 2.16.x: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300). Backups of Podman and rootless apps use backup format 3, which 2.16 cannot restore.
+
+### New
+
+- Recovery time: how long each app took to come back in its newest passed restore test, on the dashboard, the Map and Restore tests. Existing tests already count.
+- Client reports: a Clients page; group apps per client and make a monthly PDF of backups, restore tests, recovery time, certificate, hardening grade and domain checks, downloaded or emailed to up to 3 people. Never shows server addresses, logins or paths. See [client reports](docs/client-reports.md).
+- Cloud drives as backup storage: Google Drive, OneDrive, Dropbox, WebDAV, SMB shares and a mounted local folder, with Reconnect and an alert when a sign-in expires. See [cloud drives](docs/cloud-drives.md).
+- NAS servers: TrueNAS SCALE, as root or a non-root SSH user with passwordless sudo, with a sealed helper container when the NAS has no Python. Unraid and Synology are early access under Settings (off by default); until then they connect as normal Linux servers with Docker. See [NAS servers](docs/nas-servers.md).
+- Podman and rootless Docker: servers list their engines, Discover groups apps by engine, and such apps can be backed up, restored and restore-tested in the same kind of engine. Not yet: systemd-managed (quadlet) apps, native databases, several containers in one restore, incremental backups and moves between engines.
+- Notification center: a bell and a Notifications page with folders, filters, Archive and toasts for new problems.
+- New look: slate neutrals and a teal accent, with an accent colour choice (Teal, Blue, Indigo, Orange, Pink) under Settings > Appearance. Apps (was Sites) and Self Backup are the new names; nothing to change.
+- Recovery Guide: numbered steps and exact commands to bring every app back on a new server, as a PDF (Hebrew included), with expected recovery time per app. A login-free copy is saved next to the recovery kit after every Self Backup.
+- Recovery kit: checked after every Self Backup and on demand (alert on failure); optional split so K of N trusted people can open it together.
+- Keys safe: finds app encryption keys (Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud, Vaultwarden and others) and checks they are inside the last backup. Key values never leave the server.
+- Backup coverage and linked apps: every container and volume on a server and whether an app backs it up, plus which apps depend on each other.
+- Domain checks: follow each domain through DNS, proxy (nginx, Nginx Proxy Manager, Caddy, Traefik), app and certificate; shown on the Map. Domains move with their app.
+- Restore check also lists cron jobs, timers, networks, volumes, secrets and certificates a restore on a new server would miss. See [restore check](docs/restore-check.md).
+- Redis, Valkey and MongoDB (6.0 to 8.0) apps are detected and backed up; online dumps for PostgreSQL, MySQL, MariaDB, Redis and Valkey (opt-in).
+- Portainer and Dockge stacks are found when adding an app; apps started with plain `docker run` get a Compose preview and a readable Compose file inside the backup.
+- Alerts: "Backup missed", "Configuration changed", "Client report failed" and a cloud-drive Reconnect alert.
+- Append-only SFTP storage is detected, and SFTP capacity fills in automatically.
+- Restore tests can read the backup copy on your second storage.
+
+### Improved
+
+- One main button per screen, quiet text links for secondary actions, one actions menu per list row, consistent dialogs, tabs and fields.
+- The Map: curved lines, a domain tree, drag anywhere with positions remembered, Fit to screen keeps names readable, new details panels, a Keys padlock, and the storage an app really uses.
+- Adding an app hides containers that are already backed up and refuses duplicates.
+- A move no longer stops over configuration files outside the app folders; it names them to put back by hand. It also checks for owner and permission problems on the new server and lists domains that need new DNS.
+- A backup stopped by a changing folder names that folder.
+- Moving a `docker run` app keeps its hostname, limits, DNS, log settings and other options.
+- Google Drive makes fewer calls, and a slow test shows "Still checking" instead of failing the page.
 
 ### Fixed
 
-- A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- Cloud drives: sign-in links appear, OneDrive lists its drives, the Microsoft and Dropbox `localhost:53682` address and personal Microsoft accounts are accepted, the account name shows (masked), and certificate problems are reported as such.
+- Reconnecting Google Drive with a different Google app asks first; a backup Google no longer shows is reported as not visible, not damaged.
+- A server where Docker is installed but stopped no longer fails a scan; Podman users without a runtime folder get a plain fix.
+- The Recovery Guide shows the whole install command and is denser; the Map no longer leaves stale messages; the move preview has no empty gap.
+- A static site that nginx serves from a folder shows an "Add as app" link instead of a failed proxy.
+
+### Security
+
+- A new system password must be 12 to 128 characters (existing passwords keep working). After 20 failed sign-ins from anyone within 15 minutes, sign-in pauses briefly.
+- NAS connections no longer need root SSH; the helper runtime image is pinned, checksum-verified and run with no network. Cloud-drive tools are checksum-pinned.
+- Google Drive sign-in asks only for access to files DockNest creates.
 
 ## [2.16.4] - 2026-11-14
 
@@ -360,7 +403,7 @@ See [docs/releases/2026-10-24-v2.7.0.md](docs/releases/2026-10-24-v2.7.0.md).
 - Map: the map takes exactly the height left on the screen, so the whole map and the hint below it are visible without scrolling on any screen size.
 - Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
 - Update button: a run that stopped before changing anything (for example a failed signature check, low disk space, or jobs still running) no longer uses up one of the 6 updates allowed per day. Before, a few such stops could block the button for the rest of the day. A separate limit of 24 attempts per day still applies. Takes effect after `sudo scripts/install-updater.sh --repair` on the host.
-- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "phaseX needs nginx. Install it, then try again." instead of a longer technical one.
+- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "web-box needs nginx. Install it, then try again." instead of a longer technical one.
 
 ### Changed
 
@@ -574,7 +617,7 @@ Pre-release of 2.1.0, tagged `v2.1.0-rc.1`. The GitHub release for it has been r
 
 See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
 
-[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.1.0...HEAD
+[3.0.0]: https://github.com/DahanItamar/DockNest/compare/v2.16.4...HEAD
 [2.1.0]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0
 [2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0

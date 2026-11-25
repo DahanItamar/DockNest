@@ -94,7 +94,7 @@ test('upgrade safety: a site without settings is off, and its card is empty', as
   const { siteId } = fixture('fresh');
   const card = await json(await operator('GET', `/sites/${siteId}/restore-tests`));
   assert.equal(card.status, 200);
-  assert.deepEqual(card.body, { settings: { enabled: false, cadence: 'weekly', serverId: null, allowLiveServer: false, allowInternet: false, timeLimitMinutes: 30, memoryMb: 1024, cpus: 1, probe: null, nextDueAt: null, skipReason: null }, last: null, active: null, items: [], next: null });
+  assert.deepEqual(card.body, { settings: { enabled: false, cadence: 'weekly', serverId: null, allowLiveServer: false, allowInternet: false, timeLimitMinutes: 30, memoryMb: 1024, cpus: 1, probe: null, sourceTargetId: null, nextDueAt: null, skipReason: null }, copyTargets: [], last: null, active: null, items: [], next: null });
   assert.equal(scheduler.tickRestoreTestSchedule(), 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM restore_tests WHERE site_id=?').get(siteId).n, 0);
   assert.equal((await operator('GET', `/sites/${randomUUID()}/restore-tests`)).status, 404);
@@ -108,7 +108,7 @@ test('settings are administrator only; changes need CSRF and are audited without
   assert.equal((await noCsrf('PUT', `/sites/${siteId}/restore-tests/settings`, good(testServer))).status, 403);
   const saved = await put(admin, siteId, good(testServer, { timeLimitMinutes: 45, memoryMb: 1536, cpus: 1.25, probe: { path: '/health' } }));
   assert.equal(saved.status, 200);
-  assert.deepEqual({ ...saved.body, nextDueAt: !!saved.body.nextDueAt }, { enabled: true, cadence: 'weekly', serverId: testServer, allowLiveServer: false, allowInternet: false, timeLimitMinutes: 45, memoryMb: 1536, cpus: 1.25, probe: { service: null, port: null, path: '/health' }, nextDueAt: true, skipReason: null });
+  assert.deepEqual({ ...saved.body, nextDueAt: !!saved.body.nextDueAt }, { enabled: true, cadence: 'weekly', serverId: testServer, allowLiveServer: false, allowInternet: false, timeLimitMinutes: 45, memoryMb: 1536, cpus: 1.25, probe: { service: null, port: null, path: '/health' }, sourceTargetId: null, nextDueAt: true, skipReason: null });
   assert.deepEqual((await json(await admin('GET', `/sites/${siteId}/restore-tests/settings`))).body.memoryMb, 1536);
   const row = db.prepare("SELECT detail FROM audit_events WHERE action='restore_test.settings' AND target=? ORDER BY created_at DESC LIMIT 1").get(siteId);
   const detail = JSON.parse(row.detail);
@@ -194,7 +194,7 @@ test('Run test allows 6 manual tests per site in 24 hours, then 429 with the pla
   }
   const refused = await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}));
   assert.equal(refused.status, 429);
-  assert.deepEqual(refused.body, { error: 'You can run 6 tests a day for each site.', code: 'TOO_MANY_TESTS' });
+  assert.deepEqual(refused.body, { error: 'You can run 6 tests a day for each app.', code: 'TOO_MANY_TESTS' });
   now += 86_400_000;
   assert.equal((await operator('POST', `/sites/${siteId}/restore-tests`, {})).status, 202, 'the window moves on');
 });
@@ -208,7 +208,8 @@ test('detail matches the contract; cancel, clean-up retry and acknowledge follow
   answers = {};
   assert.equal(row.result, 'failed'); assert.equal(row.cleanup, 'failed');
   const detail = (await json(await operator('GET', '/restore-tests/' + testId))).body;
-  assert.deepEqual(Object.keys(detail).sort(), ['backupCapturedAt', 'backupId', 'cancelRequested', 'checks', 'cleanup', 'createdAt', 'deadlineAt', 'failedStep', 'finishedAt', 'id', 'limits', 'reason', 'restoreSeconds', 'result', 'serverId', 'serverName', 'siteId', 'startedAt', 'state', 'steps', 'totalSeconds', 'trigger']);
+  assert.deepEqual(Object.keys(detail).sort(), ['backupCapturedAt', 'backupId', 'cancelRequested', 'checks', 'cleanup', 'createdAt', 'deadlineAt', 'failedStep', 'finishedAt', 'id', 'limits', 'reason', 'restoreSeconds', 'result', 'serverId', 'serverName', 'siteId', 'source', 'startedAt', 'state', 'steps', 'totalSeconds', 'trigger']);
+  assert.equal(detail.source, null, 'a test of the main package whose upload named no source');
   assert.equal(detail.state, 'needs_cleanup'); assert.equal(detail.failedStep, 'start_containers'); assert.equal(detail.backupId, backupId);
   assert.equal(detail.reason, 'web stopped after it started (exit code 1).');
   assert.deepEqual(detail.limits, { memoryMb: 1024, cpus: 1, timeLimitMinutes: 30, internet: false });
@@ -218,7 +219,7 @@ test('detail matches the contract; cancel, clean-up retry and acknowledge follow
   assert.equal((await json(await operator('POST', `/restore-tests/${testId}/cancel`, {}))).body.code, 'NOT_ACTIVE');
   const card = (await json(await operator('GET', `/sites/${siteId}/restore-tests`))).body;
   assert.equal(card.active, null);
-  assert.deepEqual({ ...card.last, finishedAt: !!card.last.finishedAt }, { id: testId, result: 'failed', finishedAt: true, restoreSeconds: null, internet: false, failedStep: 'start_containers', reason: detail.reason, serverName: 'detail-test' });
+  assert.deepEqual({ ...card.last, finishedAt: !!card.last.finishedAt }, { id: testId, result: 'failed', finishedAt: true, restoreSeconds: null, recovery: null, internet: false, failedStep: 'start_containers', reason: detail.reason, serverName: 'detail-test', source: null });
   assert.equal((await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}))).body.code, 'TEST_ACTIVE', 'a failed clean-up still holds the site’s one unfinished test');
   // Acknowledge through the job's recovery route: administrators only, with the site name, and only when nothing is left.
   const jobId = rt.loadTest(testId).job_id;
@@ -434,3 +435,58 @@ test('review fixes: a due test waiting on a failed clean-up says why and keeps i
 });
 
 test.after(() => listener.close());
+
+test('testing a copy: settings accept only the app copy destinations, old clients keep the choice, runs and skips name the copy', async () => {
+  const { siteId, testServer, backupId } = fixture('offsite-api');
+  const destination = label => { const targetId = randomUUID(); db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId, label, '192.0.2.30', 22, 'docknest', 'a'.repeat(64), 'password', 'sealed-fixture', '/home/docknest', 1e12, 'connected', at(), at()); return targetId; };
+  const copyTarget = destination('Offsite SFTP'), other = destination('Unrelated SFTP');
+  const refused = await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: copyTarget }));
+  assert.equal(refused.status, 400); assert.equal(refused.body.code, 'INVALID'); assert.equal(refused.body.field, 'sourceTargetId');
+  db.prepare('INSERT INTO site_storage_copies(site_id,target_id,retention,created_at) VALUES(?,?,NULL,?)').run(siteId, copyTarget, at());
+  assert.equal((await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: other }))).status, 400, 'a destination the app does not copy to');
+  const card = await json(await operator('GET', `/sites/${siteId}/restore-tests`));
+  assert.deepEqual(card.body.copyTargets.map(item => [item.targetId, item.name]), [[copyTarget, 'Offsite SFTP']]);
+  const saved = await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: copyTarget }));
+  assert.equal(saved.status, 200); assert.equal(saved.body.sourceTargetId, copyTarget);
+  assert.ok(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='restore_test.settings' AND target=? ORDER BY created_at DESC LIMIT 1").get(siteId).detail).changed.includes('sourceTargetId'));
+  assert.equal((await put(admin, siteId, good(testServer, { enabled: false }))).body.sourceTargetId, copyTarget, 'a client that does not know the field keeps the choice');
+  // Run test now uses the saved copy; before Copy backup records it, the detail names the copy asked for.
+  db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,verified_at,created_at,updated_at) VALUES(?,?,?,'verified',?,?,?)").run(backupId, copyTarget, `sftp:${copyTarget}:/home/docknest/${backupId}.enc`, at(), at(), at());
+  const started = await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}));
+  assert.equal(started.status, 202);
+  assert.equal(rt.loadTest(started.body.id).limits.sourceTargetId, copyTarget);
+  assert.deepEqual((await json(await operator('GET', `/restore-tests/${started.body.id}`))).body.source, { role: 'copy', name: 'Offsite SFTP', chosen: true });
+  assert.equal((await drive(started.body.id)).result, 'passed');
+  // The app stops copying there: the saved choice stays valid and listed until the owner changes it.
+  db.prepare('DELETE FROM site_storage_copies WHERE site_id=?').run(siteId);
+  assert.equal((await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: copyTarget }))).status, 200);
+  assert.deepEqual((await json(await operator('GET', `/sites/${siteId}/restore-tests`))).body.copyTargets.map(item => item.targetId), [copyTarget]);
+  // A due scheduled test with no verified copy there is skipped with a plain reason, never run on the main package.
+  db.prepare("UPDATE backup_copies SET status='failed' WHERE backup_id=?").run(backupId);
+  db.prepare('UPDATE restore_test_settings SET enabled=0').run();
+  const due = (await put(admin, siteId, good(testServer, { cadence: 'daily', sourceTargetId: copyTarget }))).body;
+  now = Date.parse(due.nextDueAt) + 1000;
+  assert.equal(scheduler.tickRestoreTestSchedule(), 0);
+  assert.equal(settingsModule.settingsRow(siteId).skip_reason, 'Not tested: no verified copy on Offsite SFTP yet.');
+  assert.equal(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='restore_test.skipped' AND target=? ORDER BY created_at DESC LIMIT 1").get(siteId).detail).reason, 'no_verified_copy');
+  assert.equal((await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: null }))).body.sourceTargetId, null, 'back to the main storage');
+});
+
+test('testing a copy: after its destination is removed, saving clears the choice instead of failing', async () => {
+  const { siteId, testServer } = fixture('offsite-removed');
+  const targetId = randomUUID();
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId, 'Gone SFTP', '192.0.2.31', 22, 'docknest', 'a'.repeat(64), 'password', 'sealed-fixture', '/home/docknest', 1e12, 'connected', at(), at());
+  db.prepare('INSERT INTO site_storage_copies(site_id,target_id,retention,created_at) VALUES(?,?,NULL,?)').run(siteId, targetId, at());
+  assert.equal((await put(admin, siteId, good(testServer, { sourceTargetId: targetId }))).body.sourceTargetId, targetId);
+  db.prepare('DELETE FROM site_storage_copies WHERE target_id=?').run(targetId);
+  db.prepare('DELETE FROM storage_targets WHERE id=?').run(targetId);
+  // Asking for it again while tests stay on is refused: tests never switch to the main storage on their own.
+  const refused = await put(admin, siteId, good(testServer, { sourceTargetId: targetId }));
+  assert.equal(refused.status, 400); assert.equal(refused.body.field, 'sourceTargetId');
+  // Turning tests off with the stale value, or a client that leaves the field out, saves main storage.
+  const off = await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: targetId }));
+  assert.equal(off.status, 200); assert.equal(off.body.sourceTargetId, null);
+  db.prepare('UPDATE restore_test_settings SET source_target_id=? WHERE site_id=?').run(targetId, siteId);
+  const omitted = await put(admin, siteId, good(testServer));
+  assert.equal(omitted.status, 200); assert.equal(omitted.body.sourceTargetId, null);
+});

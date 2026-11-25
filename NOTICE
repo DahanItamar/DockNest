@@ -15,3 +15,22 @@ not be hidden, obscured or replaced by other text.
 
 This term does not restrict any other change you make under the AGPL-3.0.
 Bundled fonts and dependencies keep their own licenses.
+
+Third-party data
+----------------
+
+src/emergency/wordlist.js holds the SLIP-0039 word list, Copyright SatoshiLabs,
+licensed under CC BY-SA 4.0 (https://github.com/satoshilabs/slips).
+tests/fixtures/slip39-vectors.json holds the SLIP-0039 test vectors from
+python-shamir-mnemonic, Copyright 2019 SatoshiLabs, MIT License
+(https://github.com/trezor/python-shamir-mnemonic).
+
+Bundled fonts
+-------------
+
+assets/fonts/ holds the fonts the Recovery Guide PDF embeds, unchanged static
+TrueType files from Google Fonts, each under the SIL Open Font License 1.1
+(the licence text is next to each font):
+Roboto Regular and Bold (Copyright 2011 The Roboto Project Authors),
+Roboto Mono Regular (Copyright 2015 The Roboto Mono Project Authors) and
+Noto Sans Hebrew Regular (Copyright 2022 The Noto Project Authors).

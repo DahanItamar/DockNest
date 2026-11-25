@@ -1,6 +1,7 @@
 import { generateKeyPair } from 'node:crypto';
 import { promisify } from 'node:util';
 import ssh2 from 'ssh2';
+import { unraidInstallCommand } from './nas/guidance.js';
 const { utils } = ssh2;
 
 export const serverReportCommand = `python3 - <<'PY'
@@ -27,5 +28,5 @@ chmod 700 "$HOME/.ssh"
 chmod 600 "$HOME/.ssh/authorized_keys"
 grep -qxF '${publicKey}' "$HOME/.ssh/authorized_keys" || printf '%s\n' '${publicKey}' >> "$HOME/.ssh/authorized_keys"
 ${serverReportCommand}`;
- return {privateKey,publicKey,installCommand};
+ return {privateKey,publicKey,installCommand,unraidInstallCommand:unraidInstallCommand(publicKey)};
 }

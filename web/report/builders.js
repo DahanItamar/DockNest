@@ -77,16 +77,18 @@ export const JOB_ENDINGS = ['worker-interrupted', 'helper-stopped'];
 export const SITE_KINDS = ['docker', 'static'];
 export const STORAGE_TYPES = ['local', 'sftp', 's3'];
 export const CONTAINER_BUCKETS = ['1', '2-5', '6-10', '>10'];
+// A non-identifying system tag: only the two early-access systems have one, so their reports can be spotted.
+export const NAS_TAGS = ['synology', 'unraid'];
 export const HELPER_OUTCOMES = ['timeout', 'failure', 'exit'];
 export const containerBucket = n => (Number.isInteger(n) && n >= 1 ? (n === 1 ? '1' : n <= 5 ? '2-5' : n <= 10 ? '6-10' : '>10') : null);
 const JOB_NAME = { backup: 'Backup', restore: 'Restore', scrub: 'Integrity check' };
-export function buildJobReport({ version, installMode, env, includeEnvironment = true, jobType, outcome, phase, ended, siteKind, storage, containers, helperOutcome, message, explanation, excerpt } = {}) {
+export function buildJobReport({ version, installMode, env, includeEnvironment = true, jobType, outcome, phase, ended, siteKind, storage, containers, helperOutcome, nas, message, explanation, excerpt } = {}) {
   const type = pick(JOB_TYPES, jobType), out = pick(JOB_OUTCOMES, outcome) || 'failed', ph = pick(JOB_PHASES, phase);
   const title = (type ? JOB_NAME[type] : 'Job') + (out === 'recovery-required' ? ' needs recovery review' : ' failed') + (ph ? ': ' + ph + ' step' : '');
-  const fields = { job_type: type, outcome: out, phase: ph, ended: out === 'recovery-required' ? pick(JOB_ENDINGS, ended) : null, site_kind: pick(SITE_KINDS, siteKind), storage: pick(STORAGE_TYPES, storage), containers: Number.isInteger(containers) ? containerBucket(containers) : pick(CONTAINER_BUCKETS, containers), helper_outcome: pick(HELPER_OUTCOMES, helperOutcome) };
+  const fields = { nas: pick(NAS_TAGS, nas), job_type: type, outcome: out, phase: ph, ended: out === 'recovery-required' ? pick(JOB_ENDINGS, ended) : null, site_kind: pick(SITE_KINDS, siteKind), storage: pick(STORAGE_TYPES, storage), containers: Number.isInteger(containers) ? containerBucket(containers) : pick(CONTAINER_BUCKETS, containers), helper_outcome: pick(HELPER_OUTCOMES, helperOutcome) };
   return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'job-failure.yml', title, version, installMode, env, includeEnvironment, fields: { ...fields, what_happened: what },
-    allow: { job_type: JOB_TYPES, outcome: JOB_OUTCOMES, phase: JOB_PHASES, ended: JOB_ENDINGS, site_kind: SITE_KINDS, storage: STORAGE_TYPES, containers: CONTAINER_BUCKETS, helper_outcome: HELPER_OUTCOMES },
-    labels: { job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'Site kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } }));
+    allow: { nas: NAS_TAGS, job_type: JOB_TYPES, outcome: JOB_OUTCOMES, phase: JOB_PHASES, ended: JOB_ENDINGS, site_kind: SITE_KINDS, storage: STORAGE_TYPES, containers: CONTAINER_BUCKETS, helper_outcome: HELPER_OUTCOMES },
+    labels: { nas: 'System', job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'App kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } }));
 }
 
 // Storage target test failures (storage-failure.yml). Never the endpoint, bucket, host or port.
@@ -101,18 +103,18 @@ export function buildStorageReport({ version, installMode, env, includeEnvironme
 // Server connection tests (server-connection.yml). Never the address.
 export const SERVER_CHECKS = ['ssh', 'host-key', 'python', 'docker'];
 export const SERVER_CLASSES = ['host-key-mismatch', 'auth-failed', 'dns', 'refused', 'timeout', 'not-found', 'helper-error', 'other'];
-export function buildServerReport({ version, installMode, env, includeEnvironment = true, check, errorClass, message, explanation, excerpt } = {}) {
+export function buildServerReport({ version, installMode, env, includeEnvironment = true, nas, check, errorClass, message, explanation, excerpt } = {}) {
   const c = pick(SERVER_CHECKS, check), cls = pick(SERVER_CLASSES, errorClass) || (c ? 'other' : null);
   return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'server-connection.yml', title: 'Server connection test failed' + (c ? ': ' + c : '') + (cls ? ' (' + cls + ')' : ''), version, installMode, env, includeEnvironment,
-    fields: { check: c, error_class: cls, what_happened: what }, allow: { check: SERVER_CHECKS, error_class: SERVER_CLASSES }, labels: { check: 'Failed check', error_class: 'Error class' } }));
+    fields: { nas: pick(NAS_TAGS, nas), check: c, error_class: cls, what_happened: what }, allow: { nas: NAS_TAGS, check: SERVER_CHECKS, error_class: SERVER_CLASSES }, labels: { nas: 'System', check: 'Failed check', error_class: 'Error class' } }));
 }
 
-// DockNest self-backup failures (self-backup-failure.yml). The phase is not recorded yet (engine work); how it ended is.
+// Self Backup failures (self-backup-failure.yml). The phase is not recorded yet (engine work); how it ended is.
 export const SELF_BACKUP_DESTINATIONS = ['sftp', 's3', 'local'];
 export const SELF_BACKUP_ENDINGS = ['failed', 'worker-interrupted', 'deployment-hold'];
 export function buildSelfBackupReport({ version, installMode, env, includeEnvironment = true, destination, ended, message, explanation, excerpt } = {}) {
   const d = pick(SELF_BACKUP_DESTINATIONS, destination), e = pick(SELF_BACKUP_ENDINGS, ended) || 'failed';
-  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'self-backup-failure.yml', title: 'DockNest backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'self-backup-failure.yml', title: 'Self Backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
     fields: { destination: d, ended: e, what_happened: what }, allow: { destination: SELF_BACKUP_DESTINATIONS, ended: SELF_BACKUP_ENDINGS }, labels: { destination: 'Destination', ended: 'How it ended' } }));
 }
 
@@ -191,9 +193,9 @@ export { excerptFrom };
 const ENV_IDS = Object.keys(ENV_FIELDS);
 export const TEMPLATE_FIELDS = Object.freeze({
   'bug-report.yml': ['version', 'install_mode'],
-  'job-failure.yml': ['version', 'install_mode', 'job_type', 'outcome', 'phase', 'ended', 'site_kind', 'storage', 'containers', 'helper_outcome', 'what_happened', ...ENV_IDS],
+  'job-failure.yml': ['version', 'install_mode', 'nas', 'job_type', 'outcome', 'phase', 'ended', 'site_kind', 'storage', 'containers', 'helper_outcome', 'what_happened', ...ENV_IDS],
   'storage-failure.yml': ['version', 'install_mode', 'protocol', 'error_class', 'what_happened', ...ENV_IDS],
-  'server-connection.yml': ['version', 'install_mode', 'check', 'error_class', 'what_happened', ...ENV_IDS],
+  'server-connection.yml': ['version', 'install_mode', 'nas', 'check', 'error_class', 'what_happened', ...ENV_IDS],
   'self-backup-failure.yml': ['version', 'install_mode', 'destination', 'ended', 'what_happened', ...ENV_IDS],
   'app-error.yml': ['version', 'install_mode', 'route', 'area', 'error_name', ...ENV_IDS],
   'update-failure.yml': ['version', 'install_mode', 'from_version', 'to_version', 'outcome', 'result', 'stage', 'phase', 'timeline', 'updater_version', 'reason', 'migration_ran', 'schema', 'excerpt', ...ENV_IDS],

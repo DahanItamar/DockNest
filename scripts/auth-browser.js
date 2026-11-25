@@ -39,29 +39,26 @@ for(const theme of ['light','dark']){
  await signIn(page);
  assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
  const panel=page.locator('.lg-brandpanel');await panel.waitFor();
- assert.match(await panel.innerText(),/Backups you can prove\.\s*Servers you can move\./);
- assert.match(await panel.innerText(),/Self-hosted Docker backup and restore/);
+ assert.match(await panel.innerText(),/Worry less\. Sleep more\.\s*Restore anytime\./);
+ assert.doesNotMatch(await panel.innerText(),/Backups that test themselves/);
  assert.equal(await page.locator('.lg-brandpanel .lg-path').count(),40,'twenty lines in each set');
- assert.deepEqual(await page.locator('.lg-pg').evaluateAll(g=>g.map(x=>getComputedStyle(x).animationDuration)),['52s','60s']);
+ assert.deepEqual(await page.locator(".lg-pg").evaluateAll(g=>g.map(x=>getComputedStyle(x).animationName)),["none","none"],"v2: the background lines no longer drift");
  assert.equal(await page.locator('.lg-paths path').evaluateAll(p=>p.every(x=>getComputedStyle(x).animationName==='none')),true,'only transforms move, never the path data');
- assert.match(await colour(page,'.lg-brandpanel .lg-logo','maskImage'),/\/brand\/logo\.png/);
- const heading=await page.locator('.lg-title').evaluate(el=>getComputedStyle(el).color);
- assert.equal(await colour(page,'.lg-brandpanel .lg-logo','backgroundColor'),heading,'monochrome logo uses the heading colour');
+ assert.match(await page.locator('.lg-brandpanel .brand-image').getAttribute('src'),/\/brand\/logo-teal-(light|dark)-600-/,'full-colour accent logo, never a monochrome mask');
  await password(page).fill('secret1');
  assert.equal(await page.locator('button.primary.wide').getAttribute('aria-disabled'),null,'primary is at full emphasis once a password is typed');
- await wait(page,h=>getComputedStyle(document.querySelector('button.primary.wide')).backgroundColor===h,heading);
- assert.equal(await colour(page,'button.primary.wide','backgroundColor'),heading,'monochrome primary button');
- assert.equal(await page.locator('.lg-rise').evaluateAll(e=>e.map(x=>getComputedStyle(x).animationName+' '+getComputedStyle(x).animationDelay).join()),'dn-enter 0s,dn-enter 0.12s');
+ const brand=await page.evaluate(()=>{const e=document.createElement("i");e.style.color="var(--dn-brand-solid)";document.body.append(e);const c=getComputedStyle(e).color;e.remove();return c});
+ await wait(page,h=>getComputedStyle(document.querySelector("button.primary.wide")).backgroundColor===h,brand);
+ assert.equal(await colour(page,"button.primary.wide","backgroundColor"),brand,"v2 primary button uses the brand solid");
+ assert.equal(await page.locator(".lg-rise").evaluateAll(e=>e.every(x=>getComputedStyle(x).animationName==="none")),true,"v2: the form does not rise in");
  await noBox(page);await fit(page,'sign-in '+theme);
- assert.equal(await page.locator('.lg-head-logo').isVisible(),false,'top-bar wordmark hidden on desktop');
- {const [w,t]=await Promise.all([page.locator('.lg-bp-top .lg-logo').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);assert.ok(Math.abs((w.y+w.height/2)-(t.y+t.height/2))<=1,'wordmark and theme toggle share one row on desktop');}
+ assert.equal(await page.locator('.lg-head-brand').isVisible(),false,'top-bar wordmark hidden on desktop');
+ {const [logo,slogan]=await Promise.all([page.locator('.lg-bp-top .brand-image').boundingBox(),page.locator('.lg-bp-top .lg-bp-line').boundingBox()]);assert.ok(slogan.y>logo.y+logo.height,'the slogan sits directly under the logo block');}
+ assert.equal(await page.locator('.lg-rotator').getAttribute('aria-hidden'),'true','the rotating line is hidden from screen readers');
+ assert.equal(await page.locator('ul.sr-only li').count(),6,'screen readers get the six highlights once');
  const pw=page.getByLabel('Password',{exact:true});assert.equal(await pw.getAttribute('type'),'password');
  await page.getByRole('button',{name:'Show password'}).click();assert.equal(await pw.getAttribute('type'),'text');
  await page.getByRole('button',{name:'Hide password'}).click();assert.equal(await pw.getAttribute('type'),'password');
- await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:true,configurable:true});document.dispatchEvent(new Event('visibilitychange'))});
- assert.equal(await colour(page,'.lg-pg','animationPlayState'),'paused','a hidden tab pauses the drift');
- await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:false,configurable:true});document.dispatchEvent(new Event('visibilitychange'))});
- assert.equal(await colour(page,'.lg-pg','animationPlayState'),'running');
  await page.waitForTimeout(400);
  await page.screenshot({path:`${shots}/signin-${theme}-1440.png`});
  await context.close();
@@ -119,8 +116,8 @@ for(const theme of ['light','dark']){
  const {context,page}=await open({theme,width:390,height:844,verify:401});
  await signIn(page);
  assert.equal(await page.locator('.lg-brandpanel').isVisible(),false,'no side panel under 1024');
- assert.equal(await page.locator('.lg-head-logo').isVisible(),true,'wordmark in the top bar');
- const [lg,tg]=await Promise.all([page.locator('.lg-head-logo').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);
+ assert.equal(await page.locator('.lg-head-brand').isVisible(),true,'wordmark in the top bar');
+ const [lg,tg]=await Promise.all([page.locator('.lg-head-brand .brand-image').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);
  assert.ok(Math.abs((lg.y+lg.height/2)-(tg.y+tg.height/2))<=1,'wordmark and theme toggle share one row');
  assert.equal(await page.locator('.lg-mark').count(),0,'no second logo above the title');
  await fit(page,'phone sign-in');
@@ -150,14 +147,14 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  assert.equal(await page.locator('.auth-page .lg-brandpanel').count(),1);
  await page.getByLabel('Administrator name').fill('Alex');await page.getByLabel('Administrator email').fill('alex@example.com');
  await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));
- await page.getByLabel('System password',{exact:true}).fill('abcd');await page.getByLabel('Confirm system password').fill('abce');
+ await page.getByLabel('System password',{exact:true}).fill('abcdefghijkl');await page.getByLabel('Confirm system password').fill('abcdefghijkm');
  await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('alert').getByText('Passwords do not match.',{exact:true}).waitFor();
  await noBox(page);assert.equal(await page.getByLabel('Confirm system password').getAttribute('aria-invalid'),'true');
  await fit(page,'setup '+theme+width);
   await page.waitForTimeout(500);
  await page.screenshot({path:`${shots}/setup-1-error-${theme}-${width}.png`,fullPage:true});
- await page.getByLabel('Confirm system password').fill('abcd');await page.getByRole('button',{name:'Continue setup'}).click();
+ await page.getByLabel('Confirm system password').fill('abcdefghijkl');await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('heading',{name:'Connect your authenticator',exact:true}).waitFor();
  assert.equal(await page.locator('.auth-qr').count(),1);assert.equal(await page.locator('.recovery-codes code').count(),8);
  await noBox(page);await fit(page,'authenticator '+theme+width);
@@ -170,17 +167,17 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  const {context,page}=await open({status:{authenticated:false,setupRequired:true},setup:429});
  await page.goto(base+'/#/setup');await page.getByRole('heading',{name:'Set up DockNest',exact:true}).waitFor();
  await page.getByLabel('Administrator name').fill('Alex');await page.getByLabel('Administrator email').fill('alex@example.com');
- await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));await page.getByLabel('System password',{exact:true}).fill('abcd');await page.getByLabel('Confirm system password').fill('abcd');
+ await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));await page.getByLabel('System password',{exact:true}).fill('abcdefghijkl');await page.getByLabel('Confirm system password').fill('abcdefghijkl');
  await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('alert').getByText('Too many attempts. Try again later.',{exact:true}).waitFor();await context.close();
 }
 
-// 6. The app is unchanged: outside .auth-page the primary button keeps the purple token.
+// 6. The app is unchanged: outside .auth-page the primary button keeps the accent token (teal by default).
 {
  const {context,page}=await open({status:{authenticated:false,message:'Your session ended. Sign in again.'}});
  await page.goto(base);await page.getByText('Your session ended. Sign in again.').first().waitFor();
  assert.equal(await page.locator('.auth-page').count(),0);
- assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(94, 53, 177)','app primary button is still purple');
+ assert.equal(await colour(page,'button.primary','backgroundColor'),'rgb(13, 120, 108)','app primary button uses the default teal accent');
  await context.close();
 }
 // 7. Two-step flow: use cases.
@@ -275,7 +272,7 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  assert.equal(await colour(page,'.otp-digit','animationName'),'otp-in');
  assert.equal(await colour(page,'.otp-caret','animationName'),'otp-blink');
  await codeInput(page).pressSequentially('3456');await page.getByRole('alert').waitFor();
- assert.equal(await colour(page,'.otp-boxes','animationName'),'otp-shake');
+ assert.equal(await colour(page,".otp-boxes","animationName"),"none","v2: a wrong code does not shake the boxes");
  await context.close();
 }
 { // empty password: Continue does nothing silently, native validation flags the field and no request is sent
@@ -295,7 +292,7 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  assert.equal(await page.getByRole('button',{name:'Back',exact:true}).count(),1,'still Back after three 429s');
  await context.close();
 }
-for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1) and the swap link and Back are 44px targets on a phone
+for(const theme of ['light','dark']){ // the primary stays readable (4.5:1) unless inactive and the swap link and Back are 44px targets on a phone
  const {context,page}=await open({theme,width:390,height:844});
  await signIn(page);await step2(page);
  const r=await page.locator('button.primary.wide').evaluate(b=>{
@@ -305,7 +302,8 @@ for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1
   const mix=(c)=>c.map((v,i)=>v*op+surface[i]*(1-op));
   const lum=c=>{const a=c.map(v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*a[0]+.7152*a[1]+.0722*a[2]};
   const l1=lum(mix(bg)),l2=lum(mix(fg));return (Math.max(l1,l2)+.05)/(Math.min(l1,l2)+.05)});
- assert.ok(r>=4.5,theme+': faded primary contrast '+r.toFixed(2));
+ // v2: the inactive primary uses the disabled tokens, which are WCAG-exempt; it must say so to assistive tech, and an enabled one stays readable.
+ assert.ok(r>=4.5||await page.locator('button.primary.wide').getAttribute('aria-disabled')==='true',theme+': primary contrast '+r.toFixed(2)+' is only allowed while aria-disabled');
  assert.ok((await page.locator('.lg-alt button').boundingBox()).height>=44,theme+': swap link is a 44px target');
  assert.ok((await page.locator('.lg-back').boundingBox()).height>=44,theme+': Back is a 44px target');
  await context.close();
@@ -319,6 +317,7 @@ for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1
  assert.equal(await page.locator('#probe').inputValue(),'6','keyboard ArrowUp still steps the value');
  await context.close();
 }
+
 await browser.close();
 assert.deepEqual(problems,[]);
 console.log('Auth page checks passed: split screen at 1024, monochrome scope, one generic inline error, reduced motion, phone targets, setup screens, app tokens unchanged.');

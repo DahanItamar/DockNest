@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {X} from './icons.jsx';
+import {AlertPanel} from './system.jsx';
 import './zip-export.css';
 
 // "Download ZIP": DockNest first checks the whole backup (nothing is stored on the server), then streams the ZIP.
@@ -56,7 +57,7 @@ export function ZipDialog({backupId,onClose}){
  return <dialog ref={ref} className="zip-dialog" aria-labelledby="zip-title" onCancel={e=>{e.preventDefault();onClose();}} onClick={e=>{if(e.target===ref.current)onClose();}}>
   <div className="modal-head"><h2 id="zip-title">{title}</h2><button type="button" className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>
   <div className="modal-body zip-body">
-   {error&&<div className="alert" role="alert">{error}</div>}
+   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
    {(starting||status==='preparing')&&!error&&<>
     <div className="zip-step"><b>Checking the backup</b><span>{starting&&!state?'Starting':percent+'%'}</span></div>
     <progress max="100" value={percent} aria-label="Checking the backup"/>
@@ -72,7 +73,7 @@ export function ZipDialog({backupId,onClose}){
    {status==='cancelled'&&<p>This ZIP was cancelled from another window. Prepare it again to download.</p>}
   </div>
   <div className="modal-foot zip-foot">
-   <button type="button" onClick={cancel}>Cancel</button>
+   <button type="button" className="link-action" onClick={cancel}>Cancel</button>
    {retry?<button type="button" className="primary" onClick={()=>{setState(null);begin();}}>Try again</button>
    :<button type="button" className="primary" disabled={status!=='ready'} onClick={download}>Download ZIP</button>}
   </div>

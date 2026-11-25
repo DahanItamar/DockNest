@@ -7,19 +7,23 @@ import { claimJob, executeJob, tickScheduler,verifyEncrypted,finishReconciledBac
 import { reconcileArtifacts,claimCopy,recoverInterruptedCopies } from './artifact-journal.js';
 import { executeCopy,maintainCopies } from './backup-copies.js';
 import { tickSelfBackup,claimSelfBackup,executeSelfBackup,recoverInterruptedSelfBackups,pruneSelfBackups } from './self-backup.js';
+import { claimKitCheck,executeKitCheck,queueKitCheckAfterBackup,requeueInterruptedKitChecks } from './kit-check.js';
 import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-lease.js';
 import { runWorkerLoop } from './worker-loop.js';
 import { tickUpdateCheck } from './updates/check.js';
 import { tickMoves } from './moves/engine.js';
 import { tickRestoreTests, recoverInterruptedRestoreTests } from './restore-tests/engine.js';
 import { tickRestoreTestSchedule } from './restore-tests/scheduler.js';
+import { tickClientReports } from './reports/send.js';
 import { tickSiteEdits, recoverInterruptedSiteEdits } from './site-edits/engine.js';
 import { claimInstall, executeInstall, failInterruptedInstalls } from './installs.js';
 import { tickAlerts, tickReachability } from './alerts/detect.js';
+import { purge as purgeNotifications } from './notifications/store.js';
 import { claimLaunch, interruptLaunchSteps } from './launches/claim.js';
 import { tickLaunches, executeLaunchStep } from './launches/engine.js';
 import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks, haltSelfHeal } from './self-heal/engine.js';
 import { syncStreams, stopStreams } from './self-heal/streams.js';
+import { recoverInterruptedDomainChecks } from './domains/jobs.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
 // so a SIGKILLed worker cannot crash-loop its replacement. A legacy worker.lock is only reported: exclusion lives in the
@@ -42,10 +46,14 @@ failInterruptedInstalls();
 interruptLaunchSteps();
 // A self-heal restart is one helper call; an interrupted one is failed, counts toward the limit and is not retried.
 recoverInterruptedHeals();
+// A domain check is one read-only helper call; an interrupted one is failed and can be run again.
+recoverInterruptedDomainChecks();
 // Any job still 'running' belonged to a worker that no longer holds the lease.
 db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
 let stopping=false,lost=false;
 await recoverInterruptedSelfBackups();
+// A kit check is one read and one decryption; an interrupted one runs again.
+requeueInterruptedKitChecks();
 // A copy step the previous worker did not finish resumes from its journal (src/artifact-journal.js).
 try{await recoverInterruptedCopies(verifyEncrypted);}catch{console.error('Backup copy recovery is pending; it is retried by the copy step.');}
 // Self-heal restarts queued by an event start at once beside the running job (src/self-heal/engine.js healNow), only
@@ -59,15 +67,15 @@ function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=
 heartbeat();
 // The heartbeat (every 15 s) also wakes self-heal, so settings changes, re-pins and finished site work reach the
 // streams and queued restarts promptly even while the loop runs a long job of another site.
-const heartbeatTimer=setInterval(()=>{if(renew()){heartbeat();if(!stopping)try{syncStreams();tickSelfHeal();}catch{/* Retried at the next heartbeat. */}}},LEASE_TTL_MS/4);
+const heartbeatTimer=setInterval(()=>{if(renew()){heartbeat();if(!stopping)try{syncStreams();tickSelfHeal();tickClientReports();}catch{/* Retried at the next heartbeat. */}}},LEASE_TTL_MS/4);
 // Drain: the first signal stops claiming and lets the current job finish, then the lease is released and the worker
 // exits 0. A second signal exits at once and leaves the lease to expire; the next worker marks the job recovery_required.
 let signals=0;
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){console.error(`${event} received again; exiting without draining. The lease expires in ${LEASE_TTL_MS/1000}s and interrupted jobs become recovery_required on next start.`);process.exit(1);}stopping=true;console.log(`${event} received; draining: no new jobs will be claimed, waiting for the current job to finish.`);});
 try{
  let reconcileAt=0;
- const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}try{purgeSelfHealEvents();}catch{/* Self-heal history older than 90 days is deleted at the next maintenance. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickLaunches();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimLaunch:()=>claimLaunch(),executeLaunch:executeLaunchStep,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
+ const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}try{purgeSelfHealEvents();}catch{/* Self-heal history older than 90 days is deleted at the next maintenance. */}try{purgeNotifications();}catch{/* Notifications older than 90 days are deleted at the next maintenance. */}reconcileAt=Date.now()+300000;};
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickLaunches();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup:async run=>{if(await executeSelfBackup(run))queueKitCheckAfterBackup();},claimKitCheck,executeKitCheck,claimJob,executeJob,claimInstall,executeInstall,claimLaunch:()=>claimLaunch(),executeLaunch:executeLaunchStep,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);stopStreams();cancelRechecks();await healRunner.running;if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);

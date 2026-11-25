@@ -43,6 +43,7 @@ test('setup, mandatory 2FA, sessions, CSRF, replay protection and one-use recove
   assert.equal(verified.status, 200);
   assert.match(verified.cookie, /HttpOnly/);
   assert.match(verified.cookie, /SameSite=Strict/);
+  assert.match(verified.cookie, /dbm_device=[^;]+;[^,]*Max-Age=2592000/, 'a full sign-in leaves the known-device cookie for 30 days');
   cookie = verified.cookie.split(';')[0]; csrfToken = verified.data.csrfToken;
   assert.equal((await request('/state')).status, 200);
   assert.equal((await request('/auth/verify', { challenge: setup.data.challenge, code })).status, 401);

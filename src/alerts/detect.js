@@ -1,11 +1,13 @@
 // Turns state changes that already happen in the database into alert events (docs/alerts.md). It only READS the tables
-// jobs, site_moves, servers and update_checks and changes none of them, so backups, moves, server checks and update checks
-// behave exactly as before. A cursor in `settings` keeps each change from being seen twice; the first run starts at "now",
-// so enabling alerts never replays history.
+// jobs, site_moves, servers, update_checks and audit_events and changes none of them, so backups, moves, server checks and
+// update checks behave exactly as before. A cursor in `settings` keeps each change from being seen twice; the first run
+// starts at "now", so enabling alerts never replays history.
 import net from 'node:net';
 import { db } from '../db.js';
 import { checksEnabled, compareSemver, packageVersion, finalTag } from '../updates/check.js';
 import { emit, deliverDue } from './delivery.js';
+import { notify } from '../notifications/store.js';
+import { recoveryBySite } from '../restore-tests/views.js';
 import { DISK_USED_PERCENT, DISK_FREE_BYTES } from './events.js';
 import { enabledRules } from './store.js';
 import { detectCertificates } from './certificates.js';
@@ -19,7 +21,7 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, edits: at, launches: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, edits: at, launches: at, missed: at, reconnects: at, restores: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
   // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
   const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
@@ -33,6 +35,15 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   // Launches: a cursor from before 2.16.0 has no `launches` field, which means "start now" (no history replayed).
   const launches = cursor.launches ? detectLaunches(cursor.launches) : { count: 0, at };
   count += launches.count;
+  // Missed scheduled backups: a cursor from before 3.0.0 has no `missed` field, which means "start now" (no history replayed).
+  const missed = cursor.missed ? detectMissed(cursor.missed) : { count: 0, at };
+  count += missed.count;
+  // Cloud drives that need a new sign-in: a cursor from before 3.0.0 has no `reconnects` field, which means "start now".
+  const reconnects = cursor.reconnects ? detectReconnects(cursor.reconnects) : { count: 0, at };
+  count += reconnects.count;
+  // Restores (notification centre only): a cursor from before 3.0.0 has no `restores` field, which means "start now".
+  const restores = cursor.restores ? detectRestores(cursor.restores) : { count: 0, at };
+  count += restores.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE (j.type='backup' AND j.status IN ('completed','failed','recovery_required') OR j.type='scrub' AND j.status='failed' AND json_extract(j.details,'$.chainBroken')=1) AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -52,9 +63,37 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || edits.at !== cursor.edits || launches.at !== cursor.launches) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, edits: edits.at, launches: launches.at });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || edits.at !== cursor.edits || launches.at !== cursor.launches || missed.at !== cursor.missed || reconnects.at !== cursor.reconnects || restores.at !== cursor.restores) write(CURSOR, { restores: restores.at, jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, edits: edits.at, launches: launches.at, missed: missed.at, reconnects: reconnects.at });
   return count;
 }
+
+// Finished restores of a recovery point (notification centre only: restores never had an external alert). One row per job.
+function detectRestores(since) {
+  let count = 0, last = since;
+  const rows = db.prepare(`SELECT j.id,j.status,j.finished_at,s.id AS site_id,s.name AS site,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
+    WHERE j.type='restore' AND j.status IN ('completed','failed') AND j.finished_at>? ORDER BY j.finished_at,j.id LIMIT 100`).all(since);
+  for (const job of rows) {
+    last = job.finished_at;
+    count += notify({ type: job.status === 'completed' ? 'restore.succeeded' : 'restore.failed', key: `occ:restore:${job.id}`, at: job.finished_at, jobId: job.id, siteId: job.site_id, timeZone: zoneFor(job.site_id), siteName: job.site, serverName: job.server }, { at: Date.parse(job.finished_at) || Date.now() }) > 0 ? 1 : 0;
+  }
+  return { count, at: last };
+}
+
+// Recovery time proven by a restore test that is now old (notification centre only). Read from the same summary the Map and
+// the Recovery Guide show; one row per site and per proof, so it is raised once until a new test replaces the proof.
+let nextStaleCheck = 0;
+export function detectRecoveryStale(at = Date.now()) {
+  if (at < nextStaleCheck) return 0;
+  nextStaleCheck = at + 3600_000;
+  let count = 0;
+  for (const [siteId, time] of recoveryBySite(null, at)) {
+    if (!time?.stale) continue;
+    const site = db.prepare('SELECT name FROM sites WHERE id=? AND id NOT IN (SELECT site_id FROM site_archives)').get(siteId);
+    if (site) count += notify({ type: 'recovery_time.stale', key: `occ:rto:${siteId}:${time.provenAt}`, siteId, siteName: site.name }, { at }) > 0 ? 1 : 0;
+  }
+  return count;
+}
+export const resetStaleCheck = () => { nextStaleCheck = 0; };
 
 // Finished restore tests (failed, couldn't run, passed after a failure) and clean-ups that failed after their retries.
 // Clean-up failures are read from the audit row the engine writes, so a retried clean-up that fails again alerts again.
@@ -70,6 +109,7 @@ function detectRestoreTests(since, cleanupsSince) {
       const previous = db.prepare("SELECT result FROM restore_tests WHERE site_id=? AND id<>? AND result IN ('passed','failed') AND finished_at<=? ORDER BY finished_at DESC,id DESC LIMIT 1").get(test.site_id, test.id, test.finished_at);
       if (previous?.result === 'failed') type = 'restore_test.recovered';
     }
+    if (!type && test.result === 'passed') notify({ type: 'restore_test.passed', key: `occ:restore-test:${test.id}:passed`, at: test.finished_at, siteId: test.site_id, timeZone: zoneFor(test.site_id), siteName: test.site, serverName: test.server, when: '' }, { at: Date.parse(test.finished_at) || Date.now() });
     if (type) count += emit({ type, key: `occ:restore-test:${test.id}:${type}`, at: test.finished_at, siteId: test.site_id, serverId: test.live_id, targetServerId: test.server_id, timeZone: zoneFor(test.site_id), siteName: test.site, serverName: test.server });
   }
   const failures = db.prepare(`SELECT a.id,a.created_at,a.target AS site_id,a.detail FROM audit_events a WHERE a.action='restore_test.cleanup_failed' AND a.created_at>? ORDER BY a.created_at,a.id LIMIT 100`).all(cleanupsSince);
@@ -131,6 +171,36 @@ function detectEdits(since) {
   return { count, at: last };
 }
 
+// Missed scheduled backups (docs/alerts.md, "Missed scheduled backups"): read from the audit row the scheduler writes once
+// per miss (src/engine.js, noteMissed). Sent as the site's "Backup failed" with the code 'missed', so every line that
+// already reports failed backups also reports a run that never happened. The time shown is the time the run was due.
+// Cloud drives (docs/cloud-drives.md): src/storage/rclone-state.js writes one audit row when a destination first needs a new
+// sign-in, so one outage is one alert. Names only: the destination name the owner typed, never an account or an error.
+function detectReconnects(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT a.id,a.target,a.created_at,t.name FROM audit_events a LEFT JOIN storage_targets t ON t.id=a.target WHERE a.action='storage.reconnect_needed' AND a.created_at>? ORDER BY a.created_at,a.id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    if (!row.name) continue;
+    count += emit({ type: 'storage.reconnect_needed', key: `occ:reconnect:${row.id}`, at: row.created_at, destinationName: row.name });
+  }
+  return { count, at: last };
+}
+
+function detectMissed(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT id,target,detail,created_at FROM audit_events WHERE action='backup.missed' AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
+    const info = db.prepare('SELECT s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(row.target ?? '');
+    if (!info) continue;
+    const due = typeof detail.scheduledFor === 'string' && !Number.isNaN(Date.parse(detail.scheduledFor)) ? detail.scheduledFor : row.created_at;
+    count += emit({ type: 'backup.failed', code: 'missed', key: `occ:missed:${row.id}`, at: due, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server });
+  }
+  return { count, at: last };
+}
+
 export function detectUpdate() {
   if (!checksEnabled(db)) return 0;
   const row = db.prepare('SELECT latest_version FROM update_checks WHERE id=?').get(1);
@@ -174,7 +244,7 @@ export const resetProbeState = () => misses.clear();
 // Worker entry points. Each swallows its own errors: alerting must never stop backups, moves or the update check.
 const guard = (label, fn) => { try { return fn(); } catch (error) { console.error(`Alerts: ${label} skipped (${error.code ?? error.name})`); return 0; } };
 export function tickAlerts() {
-  guard('detect', detectJobsAndMoves); guard('update', detectUpdate); guard('disk', detectDisk); guard('certificates', () => detectCertificates());
+  guard('detect', detectJobsAndMoves); guard('update', detectUpdate); guard('disk', detectDisk); guard('certificates', () => detectCertificates()); guard('recovery time', () => detectRecoveryStale());
   deliverDue().catch(error => console.error(`Alerts: delivery skipped (${error.code ?? error.name})`));
 }
 let nextProbe = 0, probing = false;

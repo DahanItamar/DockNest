@@ -17,7 +17,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
   return()=>{alive=false};
  },[client,site.id,tries]);
 
- if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setData(null);setTries(n=>n+1)}}>Try again</button></div></div>;
+ if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setData(null);setTries(n=>n+1)}}>Try again</button></div></div>;
  if(!data)return <div className="modal-body"><div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Loading settings…</StatusLabel></div></div>;
 
  const bad=enabled&&!validBackups(every),failed=failure=>{if(failure.status===401){onSessionExpired?.();return}setError(saveError(failure))};
@@ -35,7 +35,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
  const nextFull=enabled&&data.fullNext;
  return <form className="modal-body site-wizard inc-form" onSubmit={save} noValidate>
   <div className="sb-switch-row">
-   <span className="sb-switch-text"><span id="inc-on" className="sb-switch-label">Incremental backups</span><span id="inc-on-help" className="t-caption">Beta. {enabled?'Between full backups, only changed files are saved.':'Every backup is a complete package.'}</span></span>
+   <span className="sb-switch-text"><span id="inc-on" className="sb-switch-label">Incremental backups</span><span id="inc-on-help" className="t-caption">{enabled?'Between full backups, only changed files are saved.':'Every backup is a complete package.'}</span></span>
    <button type="button" role="switch" className="switch" aria-checked={enabled} aria-labelledby="inc-on" aria-describedby="inc-on-help" onPointerDown={event=>event.preventDefault()} onClick={()=>{setError(null);setEnabled(value=>!value)}}></button>
   </div>
   <div className="inc-row">
@@ -46,11 +46,11 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
    <div className="inc-row-text"><span className="inc-row-label" id="inc-full">New chain</span><span className="t-caption" id="inc-full-help">A full backup, then increments. Old backups stay.</span>{(!data.enabled||!enabled)&&<span className="t-caption inc-hint">Save first.</span>}</div>
    <div className="inc-row-add"><button type="button" aria-describedby="inc-full-help" disabled={busy||!data.enabled||!enabled} onClick={fullNow}>Full backup now</button></div>
   </div>
-  {data.available===false&&<AlertPanel variant="info" title="Not available">Incremental backups need a Docker site on a server with the latest helper.</AlertPanel>}
+  {data.available===false&&<AlertPanel variant="info" title="Not available">Incremental backups need a Docker app on a server with the latest helper.</AlertPanel>}
   {enabled&&<p className="inc-next t-caption"><StatusLabel state="queued">{nextFull?'Next backup: full':'Next backup: increment'}</StatusLabel></p>}
   {enabled&&nextFull&&data.fullNextMessage&&<AlertPanel variant="warning" title="Full backup planned">{data.fullNextMessage}</AlertPanel>}
   {!enabled&&data.enabled&&<AlertPanel variant="info" title="Existing chains stay">Turning this off makes the next backup full. Older backups can still be restored.</AlertPanel>}
   {error&&<AlertPanel variant="error" title={error.reason}>{error.action}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Save'}</button></div>
+  <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Save'}</button></div>
  </form>;
 }

@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0 as a beta; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 
@@ -17,8 +17,8 @@ Real incremental backup and restore count as validated only after the Linux inte
 | | A. Hybrid chains with GNU tar (recommended) | B. restic or Kopia layer |
 |---|---|---|
 | How | A full package every few backups. In between, packages that hold only the files that changed, made with GNU tar's built-in `--listed-incremental` mode. | A proven deduplicating engine stores the data in its own repository. DockNest drives it. |
-| New software on site servers | None. The helper already runs GNU tar. | A restic or Kopia binary on every site server. This breaks the "Python standard library only" helper rule in AGENTS.md. |
-| Expected saving | Most of the estimate for mount data (databases, uploads). Less for images (see Images). | Close to the full estimate, plus dedup across sites. |
+| New software on app servers | None. The helper already runs GNU tar. | A restic or Kopia binary on every app server. This breaks the "Python standard library only" helper rule in AGENTS.md. |
+| Expected saving | Most of the estimate for mount data (databases, uploads). Less for images (see Images). | Close to the full estimate, plus dedup across apps. |
 | Encryption | Unchanged. Each package is the existing AES-256-GCM format with the same master key. | A second key system (the engine's repository password) to store, rotate and recover. |
 | Offline recovery and recovery kit | Still works: restore the full package, then each increment in order. Same tools. | Needs the engine to read anything. The recovery kit has to ship it. |
 | Retention | Chains: a full package is kept until every increment that needs it is gone. | The engine's own prune, separate from DockNest's retention and pins. |
@@ -33,10 +33,10 @@ on the storage report after release, is far below the estimate.
 
 | Topic | Decision |
 |---|---|
-| Default | Off. Opt in per site under backup settings: "Incremental backups (beta)". Existing sites and backups do not change. |
+| Default | Off. Opt in per app under backup settings: "Incremental backups". Existing apps and backups do not change. |
 | Chain | One full package, then up to N increments. Default N = 6 (with daily backups, one full per week). Range 1 to 30. |
 | What is incremental | Mount archives (`mount-I-J.tar`). Images only when their ID is new to the chain (see Images). Manifest, config files and restore guide are always complete. |
-| New full package when | The interval is reached; the chain's full package is missing, unverified or being removed; the source's tar snapshot file is missing or does not match; the container, mount or image set changed; the storage destination changed; the site moved; the manifest format changed; the previous increment renamed folders (GNU tar repeats rename records in later increments, so the chain ends there); the owner asks ("Make a full backup now"). |
+| New full package when | The interval is reached; the chain's full package is missing, unverified or being removed; the source's tar snapshot file is missing or does not match; the container, mount or image set changed; the storage destination changed; the app moved; the manifest format changed; the previous increment renamed folders (GNU tar repeats rename records in later increments, so the chain ends there); the owner asks ("Make a full backup now"). |
 | Restore | Restore the full package, then each increment in order, into a fresh directory. Every package in the chain is authenticated before any byte is extracted. |
 | Retention | Counts restore points as today. A full package is deleted only when none of its increments are still kept. So up to N extra packages may stay. Pinning an increment pins its whole chain. |
 | Integrity | Every increment's encrypted manifest names its parent's backup ID and ciphertext SHA-256. A chain is valid only when every link matches. |
@@ -105,7 +105,7 @@ Free space checks use the sum of the chain's package sizes.
 
 ## Checks when a backup is made (2.12.1)
 
-Before DockNest publishes a package from an incremental site, it checks what the helper says it made against what
+Before DockNest publishes a package from an incremental app, it checks what the helper says it made against what
 DockNest asked for and against the package itself:
 
 - the chain id, the position (no gap, no repeat) and the parent's backup ID and SHA-256;
@@ -115,14 +115,14 @@ DockNest asked for and against the package itself:
   mounts of its parent, and a mount that holds renames is never in a package that says it has none.
 
 If any check fails, DockNest fails closed: the package is not published, the job fails with a plain message, and the
-source keeps its previous snapshot files. The next backup of the site is full (reason `chain-inconsistent`), so a new
-chain starts from a package DockNest can trust. The site's "Backup failed" alert says the backup was not saved and the
+source keeps its previous snapshot files. The next backup of the app is full (reason `chain-inconsistent`), so a new
+chain starts from a package DockNest can trust. The app's "Backup failed" alert says the backup was not saved and the
 next one will be full. Failing the job was chosen over keeping the package and only forcing the next backup full: a
 package DockNest cannot confirm as part of its chain must never look like a good restore point. The cost is one missed
 restore point; the next scheduled backup is a full one. No database change: the forced full backup reuses the existing
-per-site flag with a new value, which an older DockNest reads as "full backup requested".
+per-app flag with a new value, which an older DockNest reads as "full backup requested".
 
-DockNest sends its own helper to the server on every call, so an older helper on a site server should not happen in
+DockNest sends its own helper to the server on every call, so an older helper on an app server should not happen in
 normal use; the check also covers a modified or broken helper.
 
 ## Scrub and broken chains (2.12.1)
@@ -130,20 +130,20 @@ normal use; the check also covers a modified or broken helper.
 A scrub (re-verify) of an increment authenticates every package of its chain and checks every link (unchanged). A scrub
 of a package that later increments build on now also checks the links of every backup built on it (the database rows
 and the stored manifests). If a link is broken, the scrub fails, names the backup the broken link depends on, marks the
-backups that can no longer be restored as unverified (so the next backup is full) and raises the site's "Backup failed"
+backups that can no longer be restored as unverified (so the next backup is full) and raises the app's "Backup failed"
 alert with its own reason. If the scrubbed package itself fails, every backup built on it is marked unverified too.
 DockNest has no scheduled scrub; the scheduled check of a chain is the restore test, which tests the newest restore
 point and so its whole chain.
 
 ## Recovery without DockNest
 
-Only the recovery kit and a copy of the site's storage folder are needed: no DockNest database, API or "Download chain".
+Only the recovery kit and a copy of the app's storage folder are needed: no DockNest database, API or "Download chain".
 The kit's `decrypt-backup.js` verifies the chain links the same way the server does, and the kit's `helper.py` rebuilds
 the files with the same checks as a DockNest restore. Steps (as root on a Linux host with GNU tar, Node 24 and Python 3):
 
 1. Restore the kit into a new folder: `node scripts/recovery-kit.js restore manager.dkit NEW_KIT_FOLDER PASSPHRASE_FILE`.
    It writes `master.key`, `recovery/decrypt-backup.js` and `recovery/helper.py`.
-2. Copy the site's backup folder from storage (all its `backup_<time>--<backup ID>.tar.gz.enc` files) to a local folder.
+2. Copy the app's backup folder from storage (all its `backup_<time>--<backup ID>.tar.gz.enc` files) to a local folder.
 3. Decrypt the chain of the backup you want:
    `node NEW_KIT_FOLDER/recovery/decrypt-backup.js --chain COPY/backup_<time>--<ID>.tar.gz.enc NEW_KIT_FOLDER/master.key DECRYPTED`.
    It starts at that package and follows the parent links of the sealed manifests back to the full backup (each parent
@@ -174,9 +174,9 @@ folders swap names) and compares the file tree and database with the source at t
   `backups` keeps its columns because older code and tools insert into it positionally.
 - Existing backups are full packages and keep working unchanged.
 - Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Turn
-  incremental off for every site, then make a backup, before downgrading to 2.11. The upgrade notes say so, and the update center
+  incremental off for every app, then make a backup, before downgrading to 2.11. The upgrade notes say so, and the update center
   warns before a downgrade when the database contains incremental backups.
-- The feature ships labelled beta and opt-in, like moves and restore tests did.
+- The feature ships opt-in, like moves and restore tests did.
 
 ## What we will not do
 
@@ -184,7 +184,7 @@ folders swap names) and compares the file tree and database with the source at t
   into chunks.
 - No block-level database increments. A database file that changed is stored whole. Online database dumps (Q2) are a
   separate topic.
-- No cross-site dedup.
+- No cross-app dedup.
 
 ## Tests before it counts as working
 
@@ -193,7 +193,7 @@ folders swap names) and compares the file tree and database with the source at t
 - Helper: an increment holds only changed files; deletions and renames apply on restore; xattrs, ACLs, owners, modes,
   symlinks and hard links survive a full + 3 increments restore; a missing or mismatched snapshot file forces a full
   backup; a failed upload does not advance the snapshot file.
-- Linux integration (required): a real site with a database and uploads, 1 full + 6 increments with changes, deletes
+- Linux integration (required): a real app with a database and uploads, 1 full + 6 increments with changes, deletes
   and renames between them; restore from every point and compare file trees and database checks to the source at that
   time; restore test passes on the newest point; storage migration of a chain; downgrade refusal.
 - Measured result in the release notes: the real saving on the test fixture next to the storage report's estimate.
@@ -203,11 +203,11 @@ folders swap names) and compares the file tree and database with the source at t
 1. Option A (hybrid GNU tar chains) is approved.
 2. Default interval: one full backup every 7 backups (N = 6).
 3. Phase 1: "Download chain" for increments; ZIP export for full backups only.
-4. Release: 2.12.0, after storage per site and backup copies (2.11.0), so each destination can hold whole chains.
+4. Release: 2.12.0, after storage per app and backup copies (2.11.0), so each destination can hold whole chains.
 
-## Leaving beta
+## Validation
 
-Incremental backups stay beta until all of these are true. The 4-week clock started on 2026-10-30, when the first real
+Incremental backups count as validated on real servers when all of these are true. The 4-week clock started on 2026-10-30, when the first real
 chain (one full backup and two increments) was captured, re-verified and restored in an isolated restore test.
 
 - The Linux integration tests above pass on the release commit and are part of the required checks.

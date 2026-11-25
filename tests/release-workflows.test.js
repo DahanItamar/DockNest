@@ -9,17 +9,24 @@ const sha = 'a'.repeat(40);
 
 test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate validation of the same commit', async () => {
   const text = await workflow('release.yml');
-  const jobs = text.slice(text.indexOf('\njobs:\n')), gateAt = jobs.indexOf('\n  gate:\n'), publishAt = jobs.indexOf('\n  publish:\n');
-  assert.ok(gateAt >= 0 && publishAt > gateAt, 'a gate job comes before the publish job');
-  assert.equal([...jobs.matchAll(/^ {2}[\w-]+:$/gm)].length, 2, 'exactly two jobs');
-  const gate = jobs.slice(gateAt, publishAt), publish = jobs.slice(publishAt);
+  const jobs = text.slice(text.indexOf('\njobs:\n')), gateAt = jobs.indexOf('\n  gate:\n'), runtimeAt = jobs.indexOf('\n  helper-runtime:\n'), publishAt = jobs.indexOf('\n  publish:\n');
+  assert.ok(gateAt >= 0 && runtimeAt > gateAt && publishAt > runtimeAt, 'the gate comes first, then the helper runtime build, then the publish job');
+  assert.equal([...jobs.matchAll(/^ {2}[\w-]+:$/gm)].length, 3, 'exactly three jobs');
+  const gate = jobs.slice(gateAt, runtimeAt), runtime = jobs.slice(runtimeAt, publishAt), publish = jobs.slice(publishAt);
+  // The helper runtime image is built by a job that can only read the repository and has no secret, and the publish job needs it.
+  assert.match(runtime, /\n {4}needs: gate\n/);
+  assert.match(runtime, /\n {4}permissions:\n {6}contents: read[^\n]*\n {4}outputs:/);
+  assert.doesNotMatch(runtime, /: write|secrets\.|id-token|packages|docker\/login-action|cosign/);
+  assert.match(runtime, /scripts\/build-helper-runtime\.sh/);
+  assert.doesNotMatch(runtime, /--pin/, 'the build job never pins; the publish job verifies and pins');
 
   // The gate is read-only; only the publish job can write, and it runs only after the gate succeeded.
   assert.match(gate, /\n {4}permissions:\n {6}contents: read[^\n]*\n {6}actions: read[^\n]*\n {4}steps:/);
   assert.doesNotMatch(gate, /: write/);
-  assert.match(publish, /\n {4}needs: gate\n/);
+  assert.match(publish, /\n {4}needs: \[gate, helper-runtime\]\n/);
+  assert.match(publish, /--manifest-digest-from-tar helper-runtime\.tar\)" = "\$MANIFEST"/, 'the publish job checks the artifact against the build job outputs before pinning');
   assert.match(publish, /\n {4}permissions:\n {6}contents: write[^\n]*\n {6}packages: write[^\n]*\n {6}id-token: write[^\n]*\n {4}steps:/);
-  for (const job of [gate, publish]) {
+  for (const job of [gate, runtime, publish]) {
     const checkouts = job.split('uses: actions/checkout@').slice(1);
     assert.equal(checkouts.length, 1);
     assert.match(checkouts[0].split('\n      - ')[0], /persist-credentials: false/, 'checkouts keep no git credentials');
@@ -59,7 +66,10 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   // the Verify result of main.
   assert.match(ciOn, /\n {2}workflow_dispatch:\n {4}inputs:\n {6}only:\n/);
   assert.match(ci, /\n {2}linux-integration:\n {4}if: github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event\.pull_request\.draft == false\n/);
-  for (const job of ['privacy', 'check', 'browser', 'upgrade', 'controlled-beta-gate', 's3-integration']) assert.match(ci, new RegExp(`\n {2}${job}:\n {4}if: github\.event_name != 'workflow_dispatch'\n`), `${job} is skipped on a manual run`);
+  // The gate runs even when a need failed (a skipped required check would count as passing) and then fails itself
+  // unless every need succeeded; it stays skipped on drafts and manual runs, like the integration chain.
+  assert.match(ci, /\n {2}controlled-beta-gate:\n {4}if: always\(\) && github\.event_name != 'workflow_dispatch' && \(github\.event_name == 'push' \|\| github\.event\.pull_request\.draft == false\)\n {4}needs: \[privacy, check, helper-runtime, browser, linux-integration, mongo-integration\]\n {4}runs-on: [^\n]+\n {4}steps:\n {6}- name: Every needed job passed\n {8}env:\n {10}NEEDS: \$\{\{ toJSON\(needs\) \}\}\n[^]*?job\.result!=='success'[^]*?process\.exit\(1\)/);
+  for (const job of ['privacy', 'check', 'browser', 'upgrade', 's3-integration']) assert.match(ci, new RegExp(`\n {2}${job}:\n {4}if: github\.event_name != 'workflow_dispatch'\n`), `${job} is skipped on a manual run`);
   assert.match(ci, /INTEGRATION_ONLY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.only \|\| '' \}\}/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);
 });
@@ -139,8 +149,11 @@ test('release.yml pushes only a commit tag and moves the version tags by digest 
 test('the image build pins its base by digest and sends only an allow-listed context', async () => {
   const dockerfile = (await readFile(new URL('../Dockerfile', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
   const froms = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map(match => match[1]);
-  assert.equal(froms.length, 2);
+  assert.equal(froms.length, 3, "build, pinned rclone download, runtime");
   for (const from of froms) assert.match(from, /^node:24-bookworm-slim@sha256:[a-f0-9]{64}$/);
+  // The runtime stage needs the system certificates, or rclone fails every HTTPS call with an x509 error.
+  const runtime = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
+  assert.match(runtime, /apt-get install -y --no-install-recommends [^\n]*\bca-certificates\b/);
   const ignore = (await readFile(new URL('../.dockerignore', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').split('\n').filter(line => line && !line.startsWith('#'));
   assert.equal(ignore[0], '*', 'everything is excluded first');
   const allowed = ignore.filter(line => line.startsWith('!')).map(line => line.slice(1).replace(/\/$/, ''));
@@ -175,7 +188,7 @@ test('release-validation.yml validates a main commit privately and names the run
 
 test('every action in every workflow is pinned to a full commit SHA', async () => {
   // ci.yml too: the release gate trusts its Verify result, so a moved action tag there could fake a green check.
-  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml', 'env-live.yml']) {
     const uses = [...(await workflow(name)).matchAll(/uses: (\S+)/g)].map(match => match[1]);
     assert.ok(uses.length > 0, name);
     for (const action of uses) assert.match(action, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${name}: ${action}`);
@@ -183,7 +196,7 @@ test('every action in every workflow is pinned to a full commit SHA', async () =
 });
 
 test('no workflow checkout leaves the job token in .git/config', async () => {
-  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml', 'env-live.yml']) {
     const text = (await workflow(name)).replace(/\r\n/g, '\n');
     const checkouts = [...text.matchAll(/uses: actions\/checkout@\S+[^\n]*\n((?: {8,}[^\n]*\n)*)/g)];
     assert.ok(checkouts.length > 0, name);
@@ -197,4 +210,14 @@ test('a candidate is released as v + its final package version', () => {
   assert.throws(() => candidateTag(sha, ''), /Cannot read package\.json/);
   assert.throws(() => candidateTag('abc1234', JSON.stringify({ version: '2.2.0' })), /full 40-character/);
   assert.throws(() => candidateTag('A'.repeat(40), JSON.stringify({ version: '2.2.0' })), /full 40-character/);
+});
+
+test('env-live.yml is manual only, read-only and outside both gates', async () => {
+  const text = await workflow('env-live.yml'), on = text.slice(text.indexOf('\non:'), text.indexOf('\npermissions:'));
+  assert.match(on, /^\non:\n {2}workflow_dispatch:\n/);
+  assert.doesNotMatch(on, /pull_request|push|schedule|workflow_run/);
+  assert.match(text, /\npermissions:\n {2}contents: read\n/);
+  assert.doesNotMatch(text, /contents: write|id-token|pull-requests: write|secrets\./);
+  for (const name of ['ci.yml', 'release.yml', 'release-validation.yml']) assert.ok(!(await workflow(name)).includes('env-live'), name + ' does not depend on the live checks');
+  for (const job of ['rootless-docker', 'rootless-docker-apt', 'rootless-podman', 'no-delegation', 'webdav', 'podman-extras', 'podman-only', 'smb']) assert.match(text, new RegExp(`\\n {2}${job}:\\n {4}if: inputs\\.only == 'all' \\|\\| inputs\\.only == '${job}'\\n`), job);
 });

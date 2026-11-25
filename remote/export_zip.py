@@ -3,7 +3,7 @@
 import io,sys,tarfile,zipfile,json,pathlib,shutil,re,stat,os
 
 START_STATIC='DockNest static website backup\n\nsite-files/ contains the captured HTML, assets and other website files. configuration/ contains the selected nginx and deployment files. recovery-originals/static-files.tar preserves Linux owners, permissions, ACLs and xattrs; use it for a faithful Linux restore. Verify the manifest file digest before a separate nginx cutover. The existing website, TLS keys and external services are not changed or automatically restored. This ZIP is decrypted and may contain private configuration. Keep it private.\n'
-START_DOCKER='DockNest site backup\n\nsite-files/ contains browsable copies of captured persistent data, including selected database files and uploads. Read manifest.excludedPaths for any data outside the selected backup scope. Excluded external storage must be recovered separately.\nconfiguration/ contains your deployment configuration.\nrecovery-originals/ contains the complete original backup bundle: exact Docker images (including writable application layers), mount archives preserving Linux UID/GID, permissions, links, ACLs and xattrs, the private manifest and restore guide. Use these original archives for a faithful Linux restore; ZIP browsing copies do not preserve every Linux attribute.\n\nDatabase data files require the matching database image; this is not a SQL dump. Temporary RAM folders are recreated empty.\nThis ZIP contains credentials and is decrypted. Keep it private.\n'
+START_DOCKER='DockNest site backup\n\nsite-files/ contains browsable copies of captured persistent data, including selected database files and uploads. Read manifest.excludedPaths for any data outside the selected backup scope. Excluded external storage must be recovered separately.\nA database saved as an online dump has an empty data folder here; its dump is recovery-originals/database-N.tar (restore-guide.md, Database dumps).\nconfiguration/ contains your deployment configuration.\nrecovery-originals/ contains the complete original backup bundle: exact Docker images (including writable application layers), mount archives preserving Linux UID/GID, permissions, links, ACLs and xattrs, the private manifest and restore guide. Use these original archives for a faithful Linux restore; ZIP browsing copies do not preserve every Linux attribute.\n\nDatabase data files require the matching database image; this is not a SQL dump. Temporary RAM folders are recreated empty.\nThis ZIP contains credentials and is decrypted. Keep it private.\n'
 
 class IncrementalBackup(ValueError):
     """A format v2 increment holds only changed files, so it cannot become a complete ZIP on its own."""
@@ -83,7 +83,9 @@ def export_zip(payload,output):
 #          (a ZIP can only write one entry at a time). Hard links cannot be re-read from a stream: they are written as
 #          small .docknest-link.txt notes; the exact bytes remain in recovery-originals/.
 # snapshot-*.snar: GNU tar snapshot files of a format v2 package; kept in recovery-originals, never browsed.
-OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar|snapshot-[0-9a-f]{64}\.snar)')
+# database-*.tar: online logical database dumps (restore-guide.md, "Database dumps"), kept in recovery-originals.
+# run-definition/*: the Compose file and env files of containers started without Compose (2.16.5), kept in recovery-originals.
+OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar|database-\d{1,3}\.tar|snapshot-[0-9a-f]{64}\.snar|run-definition/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:yaml|env))')
 SNAPSHOT=re.compile(r'snapshot-[0-9a-f]{64}\.snar')
 MOUNT=re.compile(r'mount-\d+-\d+\.tar')
 MAX_MANIFEST=16*1024*1024

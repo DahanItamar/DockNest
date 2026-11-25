@@ -51,7 +51,7 @@ function ConfirmUpdateDialog({client,from,version,releasedAt,jobs,retryOf,onClos
     <label className="field"><span>Authenticator code</span><input name="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={authFailed||undefined} aria-describedby={authFailed?'uc-confirm-error':undefined}/><small>6 digits, or a saved recovery code</small></label>
    </div>
    {error&&<div id="uc-confirm-error" className="dlg-alert"><AlertPanel variant="error">{error}</AlertPanel></div>}
-   <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" aria-disabled={!ready||busy||undefined} aria-describedby="uc-start-hint">{busy?'Starting…':'Start update'}</button></div>
+   <div className="modal-foot"><button className="link-action" type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" aria-disabled={!ready||busy||undefined} aria-describedby="uc-start-hint">{busy?'Starting…':'Start update'}</button></div>
    {!ready&&<p id="uc-start-hint" className="submit-hint">Enter your password and a 6-digit code</p>}
   </form>
  </UCDialog>;
@@ -72,7 +72,7 @@ function HostUpdaterCard({up,status,busy,onCheck}){
 function AutoChecksCard({data,busy,checking,onToggle}){
  const on=data.consent?.checkEnabled===true,pending=data.consent?.checkEnabled==null,who=data.consent?.decidedBy?.name;
  return <article className="card uc-card" aria-labelledby="uc-auto-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-auto-title">Automatic checks</h2><button type="button" role="switch" className="switch" aria-checked={on} aria-labelledby="uc-auto-title" aria-describedby="uc-auto-desc" disabled={busy} onClick={onToggle}></button></div>
-  <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
+  <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, apps or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
   {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div>
 </article>;
 }

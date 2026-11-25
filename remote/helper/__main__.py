@@ -5,21 +5,31 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     VERSION, diagnostic, docker, emit, inspect)
+from .keys import (
+    key_context, key_scan, key_scan_operation)
 from .backup import (
     backup_plan, capture, public_plan, readiness)
 from .incremental import (
     incremental_commit, incremental_discard)
 from .net import (
-    certbot_certificates, skip_refused_probes)
+    certbot_certificates, certificate_facts, skip_refused_probes)
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
-    configuration_paths, hardening_report, list_project_files, nginx_sites, web_hints)
+    configuration_paths, discovered_volumes, hardening_report, inspect_each, link_report, list_project_files, nginx_sites, stack_managers, user_networks, web_hints)
+from .runspec import (
+    describe_containers)
 from .restore import (
     external_restore_plan, prepare_restore, restore, restore_chain_offline, verify_recovery,
     verify_restore_recovery)
+from .routing import (
+    proxy_routes)
+from .nas import (
+    attach_nas, nas_template_restore)
+from .stage_io import (
+    stage_read, stage_write)
 from .staging import (
-    cleanup_staging, install_boot_recovery, list_staging)
+    cleanup_staging, install_boot_recovery, list_staging, nas_staging_facts)
 from .move import (
     MOVES_ROOT, deploy_restore, deploy_status, deploy_teardown, move_certificate, move_facts,
     move_finalize_target, move_id, move_remove_old, move_resume_source, move_retire_source, move_stop_target,
@@ -78,8 +88,26 @@ def stop_after_stdin(read=None,limit=180):
         previous=current;time.sleep(2)
     os._exit(1)
 def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
+def readiness_keys(req):
+    """The app's key scan beside a readiness answer (docs/keys-safe.md); a scan that fails never changes readiness."""
+    context=key_context(req);cfg=req['config']
+    if context is None or cfg.get('kind')=='static':return {}
+    try:return {'keyScan':key_scan(context,cfg,inspect(cfg['containers']))}
+    except Exception:return {}
+def discover_keys(req,containers):
+    """Key scans of the apps DockNest names in a discover request (`keys.apps`: id and config), from the containers
+    discovery inspected. An app whose containers are not all found gets no scan."""
+    context=key_context(req);apps=(req.get('keys') or {}).get('apps')
+    if context is None or not isinstance(apps,list):return {}
+    by_ref={ref:c for c in containers for ref in (c['Id'],c['Name'].lstrip('/'))};scans={}
+    for app in apps[:200]:
+        try:
+            cfg=app['config'];selected=[by_ref[ref] for ref in cfg['containers']]
+            if selected:scans[str(app['id'])]=key_scan(context,cfg,selected)
+        except Exception:continue
+    return {'keyScans':scans}
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED,RUNTIME
     # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
     if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:
         try:CLEANUP_SHARED=cleanup_shared()
@@ -107,21 +135,37 @@ def main(req):
     if req.get('operation') in WATCHED_LAUNCH_OPS and req.get('watchStdin') and isinstance(req.get('launchId'),str) and LAUNCH_UUID.fullmatch(req['launchId']):
         SNAPSHOT_FILTER='label=docknest.launch='+req['launchId'];watch_stdin()
     op=req['operation']
+    refuse_foreign_runtime(req)
+    RUNTIME=request_runtime(req)  # None: rootful Docker, exactly as before
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
-    if op=='capture-stream':EVENT_STREAM=sys.stderr
-    if op=='readiness':emit(result=readiness(req['config']))
+    if op in ('capture-stream','stage-read'):EVENT_STREAM=sys.stderr
+    if op=='readiness':emit(result={**readiness(req['config']),**readiness_keys(req)})
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates()})
+        engines=engine_probe()
+        emit(result={'helperVersion':VERSION,**engine_facts(engines),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates(),'engines':engines,**(nas_staging_facts(req['stagingBase']) if isinstance(req.get('stagingBase'),str) else {})})
+    elif op=='runtime-restore-cleanup':emit(result=runtime_restore_cleanup(req))
     elif op=='discover':
-        ids=docker('ps','-aq').decode().split()
-        cs=inspect(ids) if ids else []
+        engine_errors=[]
+        try:cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):
+            # Rootful Docker is installed but stopped: say so (never an empty list that looks like "no apps"), and still list the other engines.
+            if not rootful_docker_down():raise
+            cs,uninspected=[],[];engine_errors.append({'runtime':{'engine':'docker','rootless':False},'reason':'failed'})
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
-        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates()})
+        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs);managers=stack_managers(cs)
+        engines=engine_probe();homes=engine_homes()
+        foreign=other_engine_containers(engines,homes,engine_errors)
+        emit(result=attach_nas({**discover_keys(req,cs),'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c,managers),'runtime':{'engine':'docker','rootless':False}} for c,facts,link in zip(cs,reports,links)]+[foreign_container(runtime,c) for runtime,c in foreign],'engineErrors':engine_errors,'certificates':certbot_certificates(),'routing':proxy_routes(cs,routes)},cs))
+    elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
+    elif op=='nas-template-restore':nas_template_restore(req)
+    elif op=='stage-read':stage_read(req)
+    elif op=='stage-write':stage_write(req)
+    elif op=='describe-containers':describe_containers(req)
+    elif op=='key-scan':key_scan_operation(req)
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

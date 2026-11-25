@@ -55,7 +55,7 @@ const overfull = new Set();
 export function desiredStreams() {
   overfull.clear();
   const rows = db.prepare(`SELECT h.site_id,h.watched,h.updated_at,s.server_id,v.host,v.port,v.username,v.host_key,v.private_key,
-      (SELECT MAX(finished_at) FROM jobs j WHERE j.site_id=s.id AND j.type NOT IN ('self-heal','restore-test')) AS last_work
+      (SELECT MAX(finished_at) FROM jobs j WHERE j.site_id=s.id AND j.type NOT IN ('self-heal','restore-test','domain-check')) AS last_work
     FROM self_heal_settings h JOIN sites s ON s.id=h.site_id JOIN servers v ON v.id=s.server_id
     WHERE h.enabled=1 AND s.id NOT IN (SELECT site_id FROM site_archives) ORDER BY s.server_id,h.site_id`).all();
   const desired = new Map();

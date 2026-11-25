@@ -16,15 +16,24 @@ remote/
 │   │                       and ALL mutable runtime state
 │   ├── guides.py           restore guide texts written into every backup
 │   ├── paths.py            protected paths, mount table, source classification, source archives
-│   ├── databases.py        SQLite proofs, PostgreSQL/MySQL/Redis contracts, clean shutdown, data checks
+│   ├── keys.py             app keys and configuration fingerprints: detection, packaged-bytes proof (docs/keys-safe.md)
+│   ├── engine_base.py      what every database engine provides (DatabaseEngine, SqlEngine), shared mount check
+│   ├── engine_postgres.py  PostgreSQL: contract, control-file clean-stop proof, readiness, row counts
+│   ├── engine_mysql.py     MySQL and MariaDB: contract, verified slow shutdown, clean-stop log proof, row counts
+│   ├── engine_redis.py     Redis 7.4: standalone contract, final-save proof, offline RDB/AOF checks, key digests
+│   ├── engine_mongo.py     MongoDB 6.0/7.0/8.0: mongosh contract, WiredTiger clean-stop proof, document counts
+│   ├── databases.py        SQLite proofs, the ENGINES registry, contracts, clean shutdown, restart, data checks
 │   ├── backup.py           backup plan, artifact streaming and checks, static sites, preflight, readiness, capture
 │   ├── incremental.py      snapshot state, chain records, commit and discard
 │   ├── net.py              pinned HTTP(S), probe URL policy, public probes, health checks
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
-│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
+│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs, hardening and linked apps facts
+│   ├── runspec.py          run spec of plain containers: docker create flags, Compose file, describe-containers
+│   ├── restore_gaps.py     restore check: host schedules, Docker objects and files a new server would miss
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
-│   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
+│   ├── move.py             app moves: facts, deploy, compose override, nginx, cut-over steps
+│   ├── routing.py          read-only proxy routes (nginx, Nginx Proxy Manager, Caddy, Traefik) for domain checks
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
 │   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
@@ -45,7 +54,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (19 modules)"]
+  subgraph Source["remote/helper/ (27 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -93,7 +102,7 @@ classDiagram
     atomic_json() complete_recovery()
   }
   class main["__main__"] {
-    main(req) dispatch of 64 operations
+    main(req) dispatch of 65 operations
     move_lock() stop_after_stdin()
     restore-chain entry point
   }
@@ -104,12 +113,16 @@ classDiagram
   class edit { edit_operation() edit_gate() edit_env_apply() edit_apply() edit_rollback() }
   class heal { health_events() self_heal_resolve() self_heal_restart() }
   class launch { launch_facts() launch_fetch() launch_build() launch_start() launch_runtime_gate() launch_teardown() }
-  class databases { sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
+  class databases { ENGINES sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
+  class engines["engine_*"] { detect() validate() prepare_stop() stop_evidence() ready() data_check() }
   class incremental { plan_incremental() incremental_commit() }
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
   class maintenance { maintenance() setup_maintenance() }
   class discovery { nginx_sites() configuration_paths() }
+  class routing { proxy_routes() match_upstream() }
+  class runspec { run_spec() create_args() compose_document() describe_containers() }
   class paths { classify_source() protected_paths() source_archive() }
+  class keys { key_context() key_hits() key_proof() restored_keys() }
   class staging { install_boot_recovery() cleanup_staging() }
   class install { install_status() install_package() }
   class guides { RESTORE_GUIDE INCREMENTAL_GUIDE }
@@ -126,6 +139,8 @@ classDiagram
   main --> staging
   backup --> databases
   backup --> paths
+  backup --> keys
+  restore_test --> keys
   backup --> incremental
   backup --> guides
   restore --> backup
@@ -133,8 +148,13 @@ classDiagram
   edit --> move
   edit --> maintenance
   move --> restore
+  move --> runspec
+  backup --> routing
+  routing --> discovery
+  backup --> runspec
   maintenance --> net
   databases --> net
+  databases --> engines
   backup ..> common
   restore ..> common
   move ..> common
@@ -162,7 +182,7 @@ The full, exact dependency list of each module is its build header (the `from .x
 - `VERSION=1` does not change: it is also the backup `formatVersion` that restores require.
 - Old backups, recovery kits and running restore test reapers each hold their own complete helper and keep working.
   Their guide texts (`python3 helper.py restore-chain ...`) stay true: the kit still ships `recovery/helper.py`.
-- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, sites
+- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, apps
   with boot recovery show it as outdated until it is reinstalled, as after any helper change. The old copy keeps
   working until then.
 

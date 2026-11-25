@@ -3,6 +3,9 @@
 // resolve(options,remote) test readiness makeDirectory statFile openRead openWrite
 // syncFile renameFile removeFile removeDirectory capacity — all taking (options,value).
 import path from 'node:path';
+import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import { db } from '../db.js';
 import { open } from '../crypto.js';
@@ -10,13 +13,19 @@ import { backupLayout,backupRoot } from '../backup-layout.js';
 import * as local from './local.js';
 import * as sftp from './sftp.js';
 import * as s3 from './s3.js';
+import * as rclone from './rclone.js';
+import * as folder from './folder.js';
+import { settingsOf,loadSecrets } from './rclone-state.js';
+import { writeMode,keptError,markDeletesRefused,recordLeftovers } from './write-mode.js';
+export { keptByStorage,KEPT_BY_STORAGE,KEPT_UNTIL_RETEST } from './write-mode.js';
 
-export const adapters={sftp,s3};
+export const adapters={sftp,s3,rclone,folder};
 const schemes=Object.keys(adapters);
 export const remoteModes=schemes;
 export const targetPrefix=options=>options.mode+':'+options.id+':';
 // Rows store S3 settings beside the shared columns; the credential is sealed like SFTP secrets.
-export const targetMode=row=>row.auth_type==='s3-access-key'?'s3':'sftp';
+// A row of auth type 'rclone' is a cloud drive or network share. 2.16.x reads it as SFTP and fails closed on its sentinel host.
+export const targetMode=row=>row.auth_type==='local'?'folder':row.auth_type==='rclone'?'rclone':row.auth_type==='s3-access-key'?'s3':'sftp';
 export const isRemoteFile=file=>schemes.some(scheme=>file.startsWith(scheme+':'));
 export function targetOptions(id){
  if(id==='env')return {...config.storage,id:'env'};
@@ -28,7 +37,24 @@ export function targetOptions(id){
   const {accessKeyId,secretAccessKey}=JSON.parse(open(row.credential));
   return {id:row.id,mode:'s3',name:row.name,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,capacity:null,accessKeyId,secretAccessKey};
  }
- return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
+ if(targetMode(row)==='folder'){
+  const settings=settingsOf(row.id);
+  if(!settings?.path)throw new Error('Folder settings are missing; reconnect the destination');
+  return {id:row.id,mode:'folder',name:row.name,folder:settings.path,root:row.root,capacity:null,status:row.status};
+ }
+ if(targetMode(row)==='rclone'){
+  const settings=settingsOf(row.id);
+  if(!settings?.backend)throw new Error('Cloud drive settings are missing; reconnect the destination');
+  return {id:row.id,mode:'rclone',name:row.name,backend:settings.backend,settings,root:row.root,capacity:row.capacity_bytes,status:row.status,secrets:loadSecrets(row.id)};
+ }
+ const {writeMode:mode,keepsFiles}=writeMode(row.id);
+ return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,writeMode:mode,keepsFiles,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
+}
+// True when `file` is on a destination that keeps what it stores (append-only, or it refused a delete since its last
+// test): callers skip the delete instead of trying it again.
+export function storageKeepsFiles(file){
+ if(!isRemoteFile(file))return false;
+ try{return Boolean(parseRemote(file).options.keepsFiles);}catch{return false;}
 }
 export function activeStorage(){
  const selected=db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get();
@@ -56,6 +82,8 @@ export async function checkStorageReadiness(options=activeStorage()){
  if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Insufficient storage capacity');
  return {reachable:true,writeTested:false};
 }
+// Total size an unsaved SFTP destination reports, or null (S3 never reports one).
+export const probeTargetCapacity=options=>sftp.probeCapacity({mode:'sftp',...options});
 export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
 // `options`: the site's main destination (src/site-storage.js); the default destination when omitted.
 export function backupDirectory(server,site,options=activeStorage()){
@@ -70,7 +98,7 @@ export function storageJoin(directory,name){
 }
 export function managerBackupDirectory(targetId,keyId){
  const options=targetOptions(targetId);
- if(!adapters[options.mode])throw new Error('DockNest backup requires the selected SFTP destination');
+ if(!adapters[options.mode])throw new Error('Self Backup requires the selected SFTP destination');
  if(!/^[a-f0-9]{16}$/.test(keyId))throw new Error('Invalid manager key identifier');
  return targetPrefix(options)+path.posix.join(backupRoot(options.root),'docknest-recovery');
 }
@@ -83,12 +111,45 @@ export const statFile=route('statFile');
 export const openRead=route('openRead');
 export const openWrite=route('openWrite');
 export const syncFile=route('syncFile');
-export const removeFile=route('removeFile');
-export const removeDirectory=route('removeDirectory');
+// Append-only destinations (src/storage/write-mode.js): a delete never reaches the server. A missing file still reports
+// missing (callers treat that as gone); a present one throws KEPT_BY_STORAGE and nothing counts as freed. A normal SFTP
+// destination that answers a delete with "permission denied" is marked for a new test and treated the same way.
+// Kept .partial files are listed as leftovers.
+const temporaryName=value=>/\.(?:migration-)?partial$/.test(value);
+export async function removeFile(file){
+ if(!isRemoteFile(file))return local.removeFile(file);
+ const {adapter,options,value}=parseRemote(file);
+ if(options.keepsFiles){
+  await adapter.statFile(options,value);
+  if(temporaryName(value))recordLeftovers(options.id,[file]);
+  throw keptError();
+ }
+ try{return await adapter.removeFile(options,value);}
+ catch(error){
+  if(options.mode!=='sftp'||options.id==='env'||error?.code!==3)throw error;
+  markDeletesRefused(options.id);if(temporaryName(value))recordLeftovers(options.id,[file]);
+  throw keptError();
+ }
+}
+export async function removeDirectory(directory){
+ if(!isRemoteFile(directory))return local.removeDirectory(directory);
+ const {adapter,options,value}=parseRemote(directory);
+ if(options.keepsFiles)throw keptError();
+ return adapter.removeDirectory(options,value);
+}
 export async function renameFile(from,to){
  if(!isRemoteFile(from)&&!isRemoteFile(to))return local.renameFile(from,to);
  const a=parseRemote(from),b=parseRemote(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');
  return a.adapter.renameFile(a.options,a.value,b.value);
+}
+// Publishes a local file at `published`: written as .partial, synced, read back for its SHA-256, renamed (never over an
+// existing file) and read back again. Throws on any mismatch, leaving at most the .partial behind.
+export async function storedHash(file){const hash=createHash('sha256');for await(const chunk of await openRead(file))hash.update(chunk);return hash.digest('hex');}
+export async function publishVerified(file,published,sha256){
+ await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
+ if(await storedHash(published+'.partial')!==sha256)throw new Error('Uploaded file checksum mismatch');
+ await renameFile(published+'.partial',published);
+ if(await storedHash(published)!==sha256)throw new Error('Published file checksum mismatch');
 }
 // A backup whose main package aged out while a copy is kept points backups.path at that copy; its bytes are counted once,
 // as a copy. Copies count on the destination that holds them (docs/backup-copies.md).

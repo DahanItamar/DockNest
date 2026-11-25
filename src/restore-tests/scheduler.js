@@ -8,11 +8,11 @@
 import { db, audit } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { movingSite } from '../engine.js';
-import { createRestoreTest, advanceRestoreTest, latestTestableBackup, needsExternalStorage, testTransport } from './engine.js';
+import { createRestoreTest, advanceRestoreTest, testableBackup, needsExternalStorage, testTransport } from './engine.js';
 import { settingsRow, followingDueAt } from './settings.js';
 
 export const MANUAL_TESTS_PER_DAY = 6;
-export const TOO_MANY_MESSAGE = `You can run ${MANUAL_TESTS_PER_DAY} tests a day for each site.`;
+export const TOO_MANY_MESSAGE = `You can run ${MANUAL_TESTS_PER_DAY} tests a day for each app.`;
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 const iso = ms => new Date(ms).toISOString();
 // Work on the site itself, other than restore tests: queued or running jobs, unresolved recovery, or a move.
@@ -43,34 +43,36 @@ export function resolveProbe(probe, manifest) {
 function prepare(site, settings, backupId) {
   if (!settings?.server_id) throw httpError(409, 'NO_TEST_SERVER', 'Choose a test server first.');
   if (!db.prepare('SELECT 1 FROM servers WHERE id=?').get(settings.server_id)) throw httpError(409, 'NO_TEST_SERVER', 'The chosen test server was removed. Choose another one.');
-  const backup = backupId ? db.prepare('SELECT * FROM backups WHERE id=? AND site_id=? AND verified=1').get(backupId, site.id) : latestTestableBackup(site.id);
-  if (!backup || db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backup.id)) throw httpError(409, 'NO_VERIFIED_BACKUP', 'Not tested: no verified backup yet.');
+  // No source (every row before 3.0.0) tests the main package, exactly as before; a chosen copy is tested on its own.
+  const sourceTargetId = settings.source_target_id ?? null;
+  const backup = testableBackup(site.id, backupId, sourceTargetId);
   let manifest; try { manifest = JSON.parse(backup.manifest || '{}'); } catch { manifest = {}; }
-  if (needsExternalStorage(manifest)) throw httpError(409, 'EXTERNAL_STORAGE', 'This site needs external storage that a restore test cannot attach.');
+  if (needsExternalStorage(manifest)) throw httpError(409, 'EXTERNAL_STORAGE', 'This app needs external storage that a restore test cannot attach.');
   let probe = null; try { probe = settings.probe ? JSON.parse(settings.probe) : null; } catch { probe = null; }
   return {
     siteId: site.id, serverId: settings.server_id, backupId: backup.id,
     limits: { timeLimitMinutes: settings.time_limit_minutes, memoryMb: settings.memory_mb, cpus: settings.cpus },
     internet: settings.allow_internet === 1, liveServer: settings.allow_live_server === 1, probe: resolveProbe(probe, manifest),
+    ...(sourceTargetId ? { sourceTargetId } : {}),
   };
 }
 
 // POST /api/sites/:id/restore-tests. Returns { id, jobId }; jobId is null while the test waits for its server.
 export function runTestNow(site, { backupId = null, actor }) {
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'SITE_ARCHIVED', 'This site was removed from active sites.');
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'SITE_ARCHIVED', 'This app was removed from active apps.');
   const settings = settingsRow(site.id);
   if (!settings?.server_id) throw httpError(409, 'NO_TEST_SERVER', 'Choose a test server first.');
   if (settings.server_id === site.server_id && settings.allow_live_server !== 1) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'Testing on the live server needs the live-server opt-in.');
   const open = unfinishedTest(site.id);
-  if (open) throw httpError(409, 'TEST_ACTIVE', open.cleanup === 'failed' ? 'The last test of this site could not clean up. Resolve it in Jobs first.' : 'This site already has a restore test that has not finished.');
-  if (siteBusy(site.id)) throw httpError(409, 'SITE_BUSY', 'This site is busy with a backup, restore or move. Try again when it finishes.');
+  if (open) throw httpError(409, 'TEST_ACTIVE', open.cleanup === 'failed' ? 'The last test of this app could not clean up. Resolve it in Jobs first.' : 'This app already has a restore test that has not finished.');
+  if (siteBusy(site.id)) throw httpError(409, 'SITE_BUSY', 'This app is busy with a backup, restore or move. Try again when it finishes.');
   const since = iso(testTransport.now() - 86_400_000);
   if (db.prepare("SELECT COUNT(*) AS n FROM restore_tests WHERE site_id=? AND trigger='manual' AND created_at>?").get(site.id, since).n >= MANUAL_TESTS_PER_DAY) throw httpError(429, 'TOO_MANY_TESTS', TOO_MANY_MESSAGE);
   const { id: testId } = createRestoreTest({ ...prepare(site, settings, backupId), trigger: 'manual', actor });
   return { id: testId, jobId: advanceRestoreTest(testId) };
 }
 
-const SKIPS = { NO_TEST_SERVER: 'no_test_server', LIVE_SERVER_NOT_ALLOWED: 'live_server_not_allowed', NO_VERIFIED_BACKUP: 'no_verified_backup', EXTERNAL_STORAGE: 'external_storage', SITE_ARCHIVED: 'site_archived', INVALID: 'invalid' };
+const SKIPS = { NO_TEST_SERVER: 'no_test_server', LIVE_SERVER_NOT_ALLOWED: 'live_server_not_allowed', NO_VERIFIED_BACKUP: 'no_verified_backup', NO_VERIFIED_COPY: 'no_verified_copy', SOURCE_UNAVAILABLE: 'source_unavailable', EXTERNAL_STORAGE: 'external_storage', SITE_ARCHIVED: 'site_archived', INVALID: 'invalid' };
 // Runs in the worker tick, before tickRestoreTests. Event-driven: one indexed query, nothing when nothing is due.
 export function tickRestoreTestSchedule() {
   const nowMs = testTransport.now();

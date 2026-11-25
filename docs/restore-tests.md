@@ -1,31 +1,31 @@
 # Automatic restore tests (ADR, PM-22)
 
-Status: accepted design for 2.9.0. Implemented in 2.9.0; out of beta since 2.13.1. Date: 2026-10-26.
+Status: accepted design for 2.9.0. Implemented in 2.9.0; validated since 2.13.1. Date: 2026-10-26.
 Backlog: PM-22 (this design), PM-23 (build), PM-19 (storage report part). Owner answers: Q9 (test server), Q6 (no
 incremental backups in 2.9.0). Release order: restore tests are 2.9.0; the radar moves to 2.10.0.
 
-An automatic restore test restores a site's latest verified backup onto a test server, starts it, checks it, records
+An automatic restore test restores an app's latest verified backup onto a test server, starts it, checks it, records
 the result, and removes everything it created. It answers one question on a schedule: "would this backup come back if
 I needed it today?"
 
 Real restore tests count as validated only when the Linux integration test below passes (see AGENTS.md). Until then
-the feature ships with its own "beta" label, like moves did. It left beta in 2.13.1 after real-site validation (see
+the feature was not claimed as validated at first. It was validated in 2.13.1 on real apps (see
 [acceptance.md](acceptance.md)).
 
 ## Decisions at a glance
 
 | Topic | Decision |
 |---|---|
-| Where | A test server the owner picks per site. The site's own (live) server only with an explicit opt-in and a warning. |
+| Where | A test server the owner picks per app. The app's own (live) server only with an explicit opt-in and a warning. |
 | Which backup | The latest backup that is `verified=1` and not in retention. "Run test now" may name another backup. |
-| When | Off by default. Daily, weekly (suggested) or monthly, 30 minutes after the site's next scheduled backup. |
+| When | Off by default. Daily, weekly (suggested) or monthly, 30 minutes after the app's next scheduled backup. |
 | Network | No internet by default (`--network none` or fresh `--internal` isolated networks). Admin-only "Allow internet" in Advanced: rules inside each copy's own network namespace block mail, the metadata service and this server before the copy gets a route out. No published ports. |
 | Limits | Presets or a custom number: memory per container (default 1 GB, swap equal), CPUs per container (default 1), time limit (default 30 minutes); pids 1024, log size. Free space `size*3 + 1 GiB`, re-checked at step changes. Disk is not capped. |
 | Passed | Services that ran at capture run, are Docker-healthy and still run after 60 seconds; configured database checks match; the optional internal web check answers 200-399. |
 | Results | `passed`, `failed` (the backup did not come back), `couldnt_run` (the test server or a test limit stopped it), `cancelled`. |
 | Worker | A ticked step machine like moves. Only the copy and restore steps hold the worker for long; health waits are polled across ticks. |
 | Clean up | Always, after the checks or at the time limit. Journalled on both sides; survives manager and worker restarts; a reaper on the test server is the backstop. |
-| Concurrency | One test per test server; never with a backup, restore, install or move there. Backups go first. A stuck clean-up blocks only the test server, never the site. |
+| Concurrency | One test per test server; never with a backup, restore, install or move there. Backups go first. A stuck clean-up blocks only the test server, never the app. |
 | Evidence | Append-only rows per test. Backup evidence only for backup-side results, never downgrading another method's evidence. |
 | Alerts | `restore_test.failed`, `restore_test.couldnt_run`, `restore_test.recovered`, `restore_test.needs_you` (Telegram and email). |
 | Storage | A storage report with a rough best-case estimate of what incremental backups could save. No incremental backups. |
@@ -33,33 +33,64 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
 
 ## Choosing the test server
 
-- Settings hold one `serverId` per site. Any connected server can be chosen.
-- If `serverId` is the site's own server, `allowLiveServer` must be true. Turning it on needs an administrator and a
-  re-verification within 5 minutes (as for installs). The sheet shows: "The test runs next to your live sites. It can
+- Settings hold one `serverId` per app. Any connected server can be chosen.
+- If `serverId` is the app's own server, `allowLiveServer` must be true. Turning it on needs an administrator and a
+  re-verification within 5 minutes (as for installs). The sheet shows: "The test runs next to your live apps. It can
   use up to {memory} and {cpus} CPUs per container for up to {minutes} minutes. Backups on this server wait while it
   runs."
-- The chooser always says: "The test server receives a full copy of this site, including its passwords. Pick a server
+- The chooser always says: "The test server receives a full copy of this app, including its passwords. Pick a server
   you trust as much as the live one." This is already true for a manual restore.
 - A test on the live server never touches live containers: names start `dbm-test-<id12>`, the Compose project label is
   replaced (as the restore already does), restart policy is `no`, and no host port is bound.
-- Sites whose backup excludes paths marked `requiredForRestore` (external storage) are skipped with the reason "This
-  site needs external storage that a restore test cannot attach." Reviewed read-only external mappings are out of scope
+- Apps whose backup excludes paths marked `requiredForRestore` (external storage) are skipped with the reason "This
+  app needs external storage that a restore test cannot attach." Reviewed read-only external mappings are out of scope
   for 2.9.0.
 
 ## Which backup and when
 
-- The test uses the newest backup of the site with `verified=1`, no `retention_operations` row and a readable storage
-  object. If there is none, no test is created; the site shows "Not tested: no verified backup yet" and the audit log
+- The test uses the newest backup of the app with `verified=1`, no `retention_operations` row and a readable storage
+  object. If there is none, no test is created; the app shows "Not tested: no verified backup yet" and the audit log
   records `restore_test.skipped`.
-- `next_due_at` is set when tests are turned on: the site's next scheduled backup (`policies.next_run`) plus 30
+- `next_due_at` is set when tests are turned on: the app's next scheduled backup (`policies.next_run`) plus 30
   minutes, so a test normally checks a fresh backup and tests spread out the way backups do. Without a backup schedule
   it is now plus one cadence period.
-- The worker's tick queues a due test only when the site has no queued or running backup, no unfinished move, no
+- The worker's tick queues a due test only when the app has no queued or running backup, no unfinished move, no
   unfinished test and no deployment hold. Otherwise it waits for the next tick.
 - After queueing, `next_due_at` advances by the cadence (1, 7 or 30 days) until it is in the future. A long outage does
   not cause a burst of catch-up tests.
-- "Run test now": administrators and operators (as safe as a manual restore), at most one unfinished test per site and
-  6 manual tests per site per 24 hours. Settings stay administrator-only.
+- "Run test now": administrators and operators (as safe as a manual restore), at most one unfinished test per app and
+  6 manual tests per app per 24 hours. Settings stay administrator-only.
+
+## Testing a copy
+
+Since 3.0.0 a restore test can read a backup copy on another destination (docs/backup-copies.md) instead of the main
+package, so the owner learns that the off-site copy itself restores.
+
+- Settings gain "Test from": Main storage (the default, and the value of every existing row) or one of the app's copy
+  destinations (`sourceTargetId`). It applies to scheduled tests and to "Run test now". A client that leaves the field
+  out keeps the saved choice. A destination the app no longer copies to stays valid while it exists, until the owner
+  changes it.
+- Which backup: the newest backup with a verified copy on that destination that retention is not removing. The main
+  package may be unverified or gone. With none, the scheduled test is skipped with "Not tested: no verified copy on
+  <destination> yet." (`restore_test.skipped`, reason `no_verified_copy`); a removed destination is `source_unavailable`.
+- Fail closed, never a silent fallback to the main package:
+  - Check space first loads the chain (`loadChain`, `verifyChainLinks`) and needs a verified copy on that destination
+    for the backup and every package it builds on. A missing or unverified one ends the test as "couldn't run" before
+    anything reaches the test server, with a reason that names the backup and the destination.
+  - Copy backup reads every package from that destination only (`uploadBackupTo` with `sourceTargetId`, strict). One
+    that cannot be read there or fails authentication ends the test as "couldn't run" (`copy_unavailable`). It does not
+    mark the main package unverified and writes no backup evidence.
+  - A chain whose links do not match is still a failed test, as for the main package: that is the backup's fault, not the
+    storage's.
+- The result records what was read: `progress.source` (`role` main or copy, destination id and name; never paths).
+  The test detail and the card's last test return `source` (`role`, `name`, `chosen`), the Copy backup step says "From
+  the copy on <destination>", and passed or failed evidence carries `sourceTargetId`. A test of the main package that
+  fell back to a copy (the existing restore rule) also shows that copy.
+- No new timer or loop: the same steps and worker tick. Data: migration 26 adds `restore_test_settings.source_target_id`
+  (NULL means the main package); the chosen copy of a test is kept in its `limits`.
+- Linux integration (`scripts/integration-incremental.js`): with the S3 (MinIO) copy of an incremental chain, a test from
+  the copy is "couldn't run" when a link is not verified there or its object is missing (main packages intact), and passes
+  with every main package deleted.
 
 ## Resource limits
 
@@ -81,7 +112,7 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
   (`restore_network_plan`), so a test never gets them either.
 - The copy keeps the original's protections (2.14.0): read-only root filesystem (with its RAM folders), dropped
   capabilities and default ones added back, no-new-privileges, the seccomp profile (also `unconfined`), the AppArmor
-  profile and SELinux labels. See [Hardened sites](#hardened-sites).
+  profile and SELinux labels. See [Hardened apps](#hardened-apps).
 - The time limit runs from claim to the end of the checks. Clean-up has its own 10 minutes.
 - Disk is not capped. Docker has no portable per-container disk quota for bind mounts. Instead:
   - "Check space" requires free space at the staging root of `backup.size*3 + 1 GiB` (the `planRestore` rule; the
@@ -95,7 +126,7 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
     preflight reserve (`size*3 + 1 GiB`), the time limit and choosing a test server that is not the live server limit
     this; it is documented on the live-server warning.
 - "Check space" also requires `MemAvailable` (from `/proc/meminfo`) of at least containers x M (2 x on the live
-  server), Docker 28+ for grouped sites, the same architecture, root SSH, and no leftovers labelled
+  server), Docker 28+ for grouped apps, the same architecture, root SSH, and no leftovers labelled
   `docknest.restore-test`. A miss ends the test `couldnt_run` at "Check space" with one plain reason.
 
 ## Network policy
@@ -104,7 +135,7 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
   bridge networks with `gateway_mode_ipv4/ipv6=isolated`, original aliases, `--dns 127.0.0.1`. No published ports.
   Never the default bridge.
 - Why: a restored copy holds live API keys, mail passwords and webhook URLs. Without internet it cannot send mail,
-  charge cards, call webhooks or fight the live site for a lock.
+  charge cards, call webhooks or fight the live app for a lock.
 - An app that needs an outside service to start (an external database, a licence server, OAuth at boot) fails with
   "The copy may need a service outside the server; restore tests run without internet."
 - **Allow internet** (Advanced, administrator only with re-verification, off by default). Still no published ports.
@@ -140,11 +171,11 @@ Checks run in order. The first failure ends the test at that step.
 | Backup authentic | all | Full AES-256-GCM authentication and stored SHA256 match (existing upload path). |
 | Package complete | all | The artifact inventory matches the manifest before any Docker load or extraction (existing `unpack_verified`). |
 | Static files | static sites | Restored tree digest equals the captured `staticFiles` digest (existing). |
-| Containers running | Docker sites | Every service that ran at capture is running; services stopped at capture stay stopped. |
+| Containers running | Docker apps | Every service that ran at capture is running; services stopped at capture stay stopped. |
 | Docker health | services with a healthcheck | `healthy` within 120 seconds (existing `health()`). |
-| Still running | Docker sites | All of the above still hold 60 seconds later. Catches crash loops, since restart is `no`. |
+| Still running | Docker apps | All of the above still hold 60 seconds later. Catches crash loops, since restart is `no`. |
 | Database checks | configured services | Existing `data_checks` row counts and SQLite proofs match the values recorded at capture. |
-| Internal web check | optional, Docker sites | GET `http://127.0.0.1:{port}{path}` in the chosen container's network namespace returns 200-399 within 10 seconds. |
+| Internal web check | optional, Docker apps | GET `http://127.0.0.1:{port}{path}` in the chosen container's network namespace returns 200-399 within 10 seconds. |
 
 - The web check runs `nsenter --net=<SandboxKey> setpriv --reuid 65534 --regid 65534 --clear-groups
   --no-new-privs python3 -I -c '<inline probe>'`, only while Docker reports the container running; the namespace
@@ -157,7 +188,7 @@ Checks run in order. The first failure ends the test at that step.
   check fired, the time limit ran out, the test server was unreachable or full, or (with internet) the mail block
   could not be set inside the copy. The card says, for example, "Test couldn't finish: memory limit. Raise it in Advanced."
 - A pass cannot prove logins, payments, emails, background jobs, anything that needs the internet (by default), or
-  data beyond the configured checks. The card says: "Your site started from this backup and passed {n} checks. It does
+  data beyond the configured checks. The card says: "Your app started from this backup and passed {n} checks. It does
   not prove every page works."
 
 ## Steps and the worker
@@ -176,8 +207,8 @@ Checks run in order. The first failure ends the test at that step.
   `restore-test` job, and waits (health, stability) are polls on later ticks that release the worker in between.
   Between polls the `check_health` job rests in `test_waiting` (never claimed) and the tick queues it again when the
   next poll is due, so a test leaves one job row per step.
-- Honest effect: while `copy_backup` and `restore_copy` run, other sites' backups wait for the worker, as with a manual
-  restore today. The copy grows with package size: a 5 GB package takes minutes, a 50 GB site can hold the worker for
+- Honest effect: while `copy_backup` and `restore_copy` run, other apps' backups wait for the worker, as with a manual
+  restore today. The copy grows with package size: a 5 GB package takes minutes, a 50 GB app can hold the worker for
   about an hour. The waits in `check_health` do not delay other servers.
 - `cancel_requested` on the test row is polled between steps and inside long helper calls, as moves do. The current
   step stops, then clean-up runs. The result is `cancelled`.
@@ -233,7 +264,7 @@ Restart and failure paths:
   does not survive a reboot of the test server; containers have restart `no`, so they stay stopped, and the next
   manager tick cleans up.
 - Clean-up that fails is retried after 5, 15 and 60 minutes. Then the test's `cleanup` becomes `failed` (state
-  `needs_cleanup`) and `restore_test.needs_you` fires. The test server stays blocked; the site does not.
+  `needs_cleanup`) and `restore_test.needs_you` fires. The test server stays blocked; the app does not.
 - `POST /api/jobs/:id/recovery` gets a `restore-test` branch: it calls `restore-test-status` and acknowledges only when
   nothing is left (`cleanup='acknowledged'`).
 
@@ -245,11 +276,11 @@ Restart and failure paths:
   until `cleanup` is `done` or `acknowledged`, `claimJob`, `claimInstall` and "Install on server" refuse other work
   whose server is the test server (`src/restore-tests/hold.js`, the same predicate as the partial unique index).
   Other servers are unaffected.
-- `busy(siteId)` excludes `restore-test` jobs. A pending or failed clean-up never blocks the site's backups, readiness
+- `busy(siteId)` excludes `restore-test` jobs. A pending or failed clean-up never blocks the app's backups, readiness
   checks or restores on its own server (unless that is the test server).
 - Order: `claimJob` sorts `restore-test` jobs after every other queued job, then by `created_at`. A test is not started
-  when an enabled backup policy of a site on the test server has `next_run` within the test's time limit.
-- One unfinished test per site and one active test per test server (partial unique indexes, below).
+  when an enabled backup policy of an app on the test server has `next_run` within the test's time limit.
+- One unfinished test per app and one active test per test server (partial unique indexes, below).
 - Retention: unchanged rules, plus `deletionBlocked` refuses a backup with an unfinished test or clean-up. This is the
   test's lease on the package.
 
@@ -280,7 +311,7 @@ New events in `src/alerts/events.js`, detected by `detect.js` from `restore_test
 | `restore_test.recovered` | A pass after the previous finished test failed | `Restore test passed again: {site} on {server} at {time}.` |
 | `restore_test.needs_you` | Clean-up failed after its retries | `Restore test could not clean up on {server}. Open DockNest to check it.` |
 
-Keyed by test id (occurrence events, never repeated). `{server}` is the test server; site and server rules match
+Keyed by test id (occurrence events, never repeated). `{server}` is the test server; app and server rules match
 (`targetServerId` is set). Names only, as the alert policy requires. No webhooks.
 
 ## Audit events
@@ -294,7 +325,7 @@ Keyed by test id (occurrence events, never repeated). `{server}` is the test ser
 
 All routes need a session; changes need CSRF. Settings: administrator only. Read, run and cancel: operators too.
 
-`GET /api/sites/:id/restore-tests` → the site's card:
+`GET /api/sites/:id/restore-tests` → the app's card:
 
 ```json
 {
@@ -331,7 +362,7 @@ running test.
   "limits": { "memoryMb": 1024, "cpus": 1, "timeLimitMinutes": 30, "internet": false },
   "steps": [ { "step": "check_space", "label": "Check space", "state": "pending | running | done | failed | skipped",
     "startedAt": null, "finishedAt": null, "detail": null } ],
-  "checks": [ { "name": "Containers running", "kind": "running | health | stable | database | sqlite | http | static-files",
+  "checks": [ { "name": "Containers running", "kind": "running | health | stable | database | sqlite | http | static-files | keys",
     "target": "web", "status": "passed | failed | skipped | not-configured", "detail": "HTTP 200 in 140 ms" } ] }
 ```
 
@@ -350,9 +381,9 @@ Implementation notes (PR C, `src/restore-tests/routes.js`):
 - A probe of only `{ "path": "/health" }` is completed at test creation: the first container that ran at capture and
   exposes a TCP port, preferring 80, 8080, 8000, 3000, 5000, 443, 8443, 8081 and 2368. Without one, no web check runs.
 - `POST /api/sites/:id/restore-tests` returns `jobId: null` while the test waits for its server or a due backup; the
-  first step is queued at once otherwise. 429 `TOO_MANY_TESTS` says "You can run 6 tests a day for each site."
+  first step is queued at once otherwise. 429 `TOO_MANY_TESTS` says "You can run 6 tests a day for each app."
 - Cancel of a test whose first step no worker has claimed ends it at once (`cancelled`, nothing reached the server).
-- `POST /api/jobs/:id/recovery` for a `restore-test` job: administrator only, body `{ "confirmation": "<site name>",
+- `POST /api/jobs/:id/recovery` for a `restore-test` job: administrator only, body `{ "confirmation": "<app name>",
   "reviewedRemoteRecovery": true }`; 409 `LEFTOVERS` while `restore-test-status` reports anything, 502 `UNREACHABLE`
   when the test server does not answer.
 - The schedule runs inside the worker's existing tick (`tickRestoreTestSchedule`, before `tickRestoreTests`), with no
@@ -365,7 +396,7 @@ Implementation notes (PR C, `src/restore-tests/routes.js`):
 ## Storage report (Q6 / PM-19)
 
 Helps the owner decide later whether incremental backups are worth building. It measures what is stored and gives a
-rough best-case estimate per site, labelled as an estimate.
+rough best-case estimate per app, labelled as an estimate.
 
 ```json
 { "generatedAt": "ISO",
@@ -378,14 +409,14 @@ rough best-case estimate per site, labelled as an estimate.
 
 - Bytes are `backups.size` of current packages. Storage comes from the backup path reference (`sftp:<id>:`,
   `s3:<id>:` or a local path).
-- Estimate per site, packages by capture time: `needed = max(largest package, first package + sum of every increase
+- Estimate per app, packages by capture time: `needed = max(largest package, first package + sum of every increase
   between consecutive packages)`; `upTo = stored - needed`, never below zero.
 - It treats only growth as new data, so it is a best case. Real savings may differ: it cannot see which bytes changed
   inside an encrypted, compressed package (a database rewritten in place at the same size counts as unchanged here);
-  it does not see base images repeated in every package or shared across sites, an incremental tool's index, or
+  it does not see base images repeated in every package or shared across apps, an incremental tool's index, or
   compression differences. The card says: "Up to {x} might be saved. A rough best-case estimate from package sizes;
   DockNest cannot see inside encrypted backups."
-- Computed on request from metadata. It reads no backup data and calls no site server. `capacityBytes` uses the
+- Computed on request from metadata. It reads no backup data and calls no app server. `capacityBytes` uses the
   existing storage capacity call to each destination, cached for 10 minutes; a destination that does not answer
   shows "unknown". Nothing is stored. No new dependencies.
 
@@ -445,13 +476,15 @@ arguments (they hold data paths).
 
 ## Upgrade safety
 
-- Upgrading from 2.8.x runs the migration after the normal pre-upgrade snapshot. Tests are off for every site because
+- Upgrading from 2.8.x runs the migration after the normal pre-upgrade snapshot. Tests are off for every app because
   no settings row exists. Backups, restores, moves and alerts behave as before. Existing alert rules do not gain the
   new events; the owner ticks them.
 - The compatibility floor does not move, so rolling back to 2.8.x still opens the database. 2.8.x ignores `test_*`
   jobs and the new tables, but it also does not see a test holding a server. `upgrading.md` gets: "Finish or cancel
   restore tests before rolling back to 2.8.x." A test caught mid-run is removed by its reaper.
 - Upgrade fixtures (PM-01) gain a 2.8.2 database; the test asserts exact preservation and idempotence.
+- 3.0.0 (migration 26, compatible): `restore_test_settings.source_target_id` is added as NULL for every row, so every
+  existing schedule keeps testing the main package. Older releases ignore the column.
 
 ## Security review points
 
@@ -463,7 +496,7 @@ arguments (they hold data paths).
    route out, or the test refuses to start.
 3. Image tags are restored right after `docker load`, so a test never changes what a later `docker compose up` runs.
 4. Resource abuse: memory, swap, CPU, pids and log limits, a time limit, free-space checks at step changes, one test per server, memory
-   and CPU prechecks, at most daily scheduling and 6 manual runs per site per day. Disk is not capped.
+   and CPU prechecks, at most daily scheduling and 6 manual runs per app per day. Disk is not capped.
 5. Probe: nobody uid with no new privileges, loopback in the container's namespace, isolated Python, capped size and
    time, no redirects.
 6. Clean-up: label and journal must agree; fixed roots only; never `docker image rm -f`; a failure blocks only the test
@@ -479,17 +512,17 @@ Sign-off before PM-23 merges: Security Engineer and Reality Checker (per PM-22).
 
 - Single container with a healthcheck: passes; `HostConfig.Memory`, `NanoCpus`, `PidsLimit` and `LogConfig` match;
   `NetworkMode` is `none`; no port bindings.
-- Grouped Compose site (web + PostgreSQL with a row-count check and a web check on `/`): passes. Isolation asserts
+- Grouped Compose app (web + PostgreSQL with a row-count check and a web check on `/`): passes. Isolation asserts
   from inside a container: no route to the host gateway IP, to `169.254.169.254`, to a public IPv4 or IPv6 address,
   and no public DNS answer.
-- Grouped site with Allow internet: outbound HTTPS works; ports 25, 465, 587 and 2525, `169.254.169.254` and the host
+- Grouped app with Allow internet: outbound HTTPS works; ports 25, 465, 587 and 2525, `169.254.169.254` and the host
   gateway are rejected; the in-namespace rules exist for IPv4 and IPv6. A host iptables flush mid-test (`iptables -F`,
   `ip6tables -F`) leaves the in-namespace rules intact and mail is still blocked.
 - Allow internet is refused when a container adds `NET_ADMIN`.
 - Static site: passes on the digest.
 - Failures: a container that exits after 20 seconds fails at "Still running"; one that exceeds its memory ends
   `couldnt_run` (memory limit) with no backup evidence written.
-- Live-server opt-in next to a running fixture site: live containers, tags and ports unchanged afterwards.
+- Live-server opt-in next to a running fixture app: live containers, tags and ports unchanged afterwards.
 - Docker with the containerd image store enabled: tag restore and image removal behave the same.
 - Restarts: kill the worker during `restore_copy`; the next worker cleans up. Stop the manager past the deadline; the
   reaper cleans up.
@@ -506,7 +539,7 @@ Not "validated" until all cases pass in CI on Linux.
   unchanged; triggers; `claimJob`/`claimInstall` server blocking by the test row and ordering; `busy()` ignores tests;
   step machine and cancel; scheduler due times and skips; evidence never downgrades another method; `deletionBlocked`
   lease; settings validation, roles, re-verification, rate limit; alerts detection and messages; storage estimate
-  maths with growing, shrinking and single-package sites.
+  maths with growing, shrinking and single-package apps.
 - Python (`remote/test_restore_tests.py`): journal before create, teardown idempotent and label-gated, tag restore,
   path roots, reaper exit without journal, probe limits, status output.
 - Browser suites: settings sheet (live-server and internet warnings), Run test now, step timeline in each state,
@@ -522,7 +555,7 @@ Not "validated" until all cases pass in CI on Linux.
    startup clean-up, lease, evidence rules, Linux integration script. Engine functions for PR C: `createRestoreTest`,
    `cancelRestoreTest`, `retryRestoreTestCleanup`, `acknowledgeRestoreTestCleanup`, `latestTestableBackup`.
 3. API, scheduler, alerts and audit events, with API tests.
-4. UI: site settings, run now, timeline, backup Tested state, failure details. Browser tests and design review.
+4. UI: app settings, run now, timeline, backup Tested state, failure details. Browser tests and design review.
 5. Storage report (API and card) and docs: README, `alerts.md`, `recovery-verification.md`, `upgrading.md`, release
    notes.
 
@@ -534,7 +567,7 @@ for the design and trade-offs, and
 [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md)
 for isolation, secrets, abuse limits and clean-up failure handling.
 
-## Hardened sites
+## Hardened apps
 
 Since 2.14.0 every copy DockNest makes (restore, restore test, move) keeps the original container's protections:
 
@@ -565,5 +598,5 @@ Only settings on the container itself are kept. Docker's host-wide defaults (the
 none is set, a daemon-wide seccomp profile) belong to the server that runs the copy; a move notes when the new server
 has no AppArmor.
 
-A restore test that cannot run because of one of these ends "Couldn't run" with that reason. A move checks the site's
+A restore test that cannot run because of one of these ends "Couldn't run" with that reason. A move checks the app's
 settings and the new server's AppArmor profiles in the preflight and blocks before it starts.

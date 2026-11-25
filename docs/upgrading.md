@@ -1,15 +1,17 @@
 # Upgrading DockNest
 
-Before rolling back to 2.5.0 or older, finish or cancel every site move ([moving-sites.md](moving-sites.md)): older
+Before rolling back to 2.5.0 or older, finish or cancel every app move ([moving-sites.md](moving-sites.md)): older
 releases ignore move jobs but cannot continue or undo a move.
 
 Before rolling back to 2.8.x or older, finish or cancel every automatic restore test and its clean-up ([restore-tests-guide.md](restore-tests-guide.md)). Older releases ignore test jobs and cannot continue a test or clean up its copy on the test server. The test server's safety timer removes leftovers in that case, but it is better to see "Clean up" finish first. Releases from 2.9.0 add new tables only (migration 9, `compatible: true`), so older releases run on the upgraded database. Restore test settings and history stay in the database and show again after you upgrade.
+
+Before rolling back from 3.0.0 to 2.16.x, read [Upgrading to 3.0.0](#upgrading-to-300): the migrations added since 2.16.4 are all compatible, so 2.16.x runs on the upgraded database as is, but it ignores everything the newer release added.
 
 Before rolling back to 2.14.x or older, let every Safe Edit finish ([safe-edit-guide.md](safe-edit-guide.md)), including one that needs attention. Older releases cannot see Safe Edit jobs, so they could neither finish nor roll back a change. `scripts/upgrade.sh` refuses such a downgrade while an edit is unfinished (and when it cannot check), and its wait for running work counts Safe Edit and self-heal steps. Releases from 2.15.0 add new tables only (migrations 15 and 16, `compatible: true`), so older releases run on the upgraded database.
 
 This page covers upgrades and rollbacks for a server installed with `git clone`, `scripts/setup.js` and `docker compose up -d --build`. It also lists what stays stable between versions.
 
-Upgrades never move, rename or delete your volumes, secrets, certificates, site configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.
+Upgrades never move, rename or delete your volumes, secrets, certificates, app configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database. `scripts/upgrade.sh` (and so the Update Center) also copies `.env`, `compose.override.yaml`, `data/master.key` and `data/setup.token` to `data/upgrade-backups/` before it changes anything; the database snapshot is taken by DockNest itself on the first start of the new release. Going back is described in [Rolling back](#rolling-back).
 
 Before a release is tagged, its commit is upgraded from a real v2.0.0 Compose installation in CI, then downgraded and upgraded again with `scripts/upgrade.sh`; see [Release validation](release-validation.md) for what that run proves and what it does not.
 
@@ -33,7 +35,7 @@ git show v2.1.0:scripts/upgrade.sh > /tmp/docknest-upgrade.sh
 sh /tmp/docknest-upgrade.sh --version v2.1.0
 ```
 
-**Upgrading from 2.1.x to 2.2.0 runs 2.1's script.** The script that performs an upgrade is the one in the checkout you start from, so the hop to 2.2.0 uses the 2.1 script, not the 2.2.0 one. That hop has none of the 2.2.0 behavior below: no on-`main` or signature check, no cleanup of old upgrade files, and no exit 4 after a compatible migration (a failure after the schema changed ends with exit 5 and manual commands). It also does not pause DockNest self-backups: 2.1's hold covers site jobs only, so a self-backup that starts during the hop is not waited for. Run the hop outside your self-backup window. After it, the checkout holds the 2.2.0 script and every later upgrade behaves as described here. To get the 2.2.0 behavior on the hop itself, run the script from the target release, as for the first upgrade from v2.0.0 above (`git show v2.2.0:scripts/upgrade.sh`).
+**Upgrading from 2.1.x to 2.2.0 runs 2.1's script.** The script that performs an upgrade is the one in the checkout you start from, so the hop to 2.2.0 uses the 2.1 script, not the 2.2.0 one. That hop has none of the 2.2.0 behavior below: no on-`main` or signature check, no cleanup of old upgrade files, and no exit 4 after a compatible migration (a failure after the schema changed ends with exit 5 and manual commands). It also does not pause DockNest self-backups: 2.1's hold covers app jobs only, so a self-backup that starts during the hop is not waited for. Run the hop outside your self-backup window. After it, the checkout holds the 2.2.0 script and every later upgrade behaves as described here. To get the 2.2.0 behavior on the hop itself, run the script from the target release, as for the first upgrade from v2.0.0 above (`git show v2.2.0:scripts/upgrade.sh`).
 
 The script:
 
@@ -190,11 +192,11 @@ nodes need a credential and send nothing.
 
 ## Backup copies in 2.11
 
-Storage per site and backup copies are new in 2.11. Nothing needs doing and nothing changes until you configure them:
+Storage per app and backup copies are new in 2.11. Nothing needs doing and nothing changes until you configure them:
 
-- Migration 11 (compatible) only adds tables (per-site storage, copy list and copy status). Existing sites keep using
+- Migration 11 (compatible) only adds tables (per-app storage, copy list and copy status). Existing apps keep using
   the default destination with no copies, and existing backups are not copied or moved.
-- After you add a copy destination to a site, each new backup is also copied there in the background. Copies are the
+- After you add a copy destination to an app, each new backup is also copied there in the background. Copies are the
   same encrypted package, so the same master key opens them.
 - Recovery kits are also written to every other destination that holds copies.
 
@@ -205,8 +207,8 @@ them on its next maintenance run after you upgrade again.
 
 ## Incremental backups in 2.12
 
-Incremental backups are new in 2.12 and are off for every site. Nothing needs doing and nothing changes until you turn
-them on for a site under its backup settings ("Incremental backups (beta)"):
+Incremental backups are new in 2.12 and are off for every app. Nothing needs doing and nothing changes until you turn
+them on for an app under its backup settings ("Incremental backups"):
 
 - Migration 12 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
 - After you turn the option on, the next backup is a full one. By default a full backup is made every 7 backups (the
@@ -217,7 +219,7 @@ them on for a site under its backup settings ("Incremental backups (beta)"):
   can stay. Pinning an increment pins its chain.
 - Turning the option off makes the next backup a plain full package. Existing chains stay restorable.
 
-**Going back to 2.11.** Turn incremental backups off for every site, then make a backup. With the option off, that
+**Going back to 2.11.** Turn incremental backups off for every app, then make a backup. With the option off, that
 backup is a plain full package that 2.11 restores. 2.11 starts on the same database (the migration is compatible), but
 it refuses every format 2 package, increments and the full backups made while the option was on, with the plain message
 "Unsupported or incomplete backup", and its retention does not know that an increment needs its full backup. If the
@@ -227,14 +229,14 @@ plain packages and restore on 2.11 as before. To recover a format 2 backup witho
 
 ## Safe Edit in 2.15
 
-Safe Edit (beta) is new in 2.15. Nothing changes for existing sites until an administrator saves a change:
+Safe Edit is new in 2.15. Nothing changes for existing apps until an administrator saves a change:
 
 - Migration 15 (compatible) only adds tables: the edit history, its steps, and the Compose invocation recorded per
-  site. For sites that existed before, DockNest derives that invocation once from the Compose labels Docker keeps on
-  the containers, the first time someone opens Safe Edit for the site.
+  app. For apps that existed before, DockNest derives that invocation once from the Compose labels Docker keeps on
+  the containers, the first time someone opens Safe Edit for the app.
 - Existing alert lines do not gain the two new events (Change undone, Change needs you); add them on the Map if you
   want them.
-- While a Safe Edit runs, the site's other work is refused with 409 (manual backups, restores, moves, maintenance
+- While a Safe Edit runs, the app's other work is refused with 409 (manual backups, restores, moves, maintenance
   actions) or skipped (scheduled backups), and `scripts/upgrade.sh` waits for it like for a running backup.
 
 **Going back to 2.14.** Let every Safe Edit finish first. `scripts/upgrade.sh` refuses the downgrade while one is
@@ -243,10 +245,10 @@ unfinished. If a server was left mid-edit anyway, it keeps its journal under `/v
 
 ## Self-heal in 2.15
 
-Self-heal is new in 2.15 and is off for every site ([self-heal-guide.md](self-heal-guide.md)). Migration 16
+Self-heal is new in 2.15 and is off for every app ([self-heal-guide.md](self-heal-guide.md)). Migration 16
 (compatible) only adds its settings and history tables. Going back to 2.14 ignores them and any queued restart, which
 then never runs; `scripts/upgrade.sh` waits for a running restart like for any other job.
-## Launching sites in 2.16
+## Launching apps in 2.16
 
 Migration 17 (`site-launches`, compatible) adds the launch and deploy key tables. It also rebuilds `server_installs`
 so it can hold Git installs. Every row is copied with its values, and the index and the link to its server are kept.
@@ -257,7 +259,7 @@ servers)`) and upgrade again.
 Rolling back to 2.15 or 2.14 is a compatible rollback:
 
 - The older release ignores the launch and deploy key tables.
-- Sites made by a launch are normal sites and keep backing up.
+- Apps made by a launch are normal apps and keep backing up.
 - Git install rows stay in the install history. A Git install still queued when you roll back fails with "DockNest
   cannot install that.", because the older helper does not know Git. Nothing is installed.
 
@@ -271,12 +273,12 @@ rules or SSH keys is not copied into new backups. Examples are a `.ssh` folder (
 `/root/.ssh` in a CI runner), `/etc/ssh`, `/etc/sudoers.d`, `/etc/shadow`, or a system folder such as `/etc` or
 `/root` that contains them. Nothing needs doing to keep backups running:
 
-- Scheduled backups of such sites keep working. The mount's place in the package holds an empty placeholder, and the
-  backup is recorded with a warning that names each mount that was not copied. The site's readiness check shows the
+- Scheduled backups of such apps keep working. The mount's place in the package holds an empty placeholder, and the
+  backup is recorded with a warning that names each mount that was not copied. The app's readiness check shows the
   same list as a non-blocking item.
 - Recover these files separately, for example from your own secrets or key management. A restored copy gets the empty
   placeholder, never the real keys.
-- A move refuses such a site and asks you to move it by hand, because DockNest never writes these locations.
+- A move refuses such an app and asks you to move it by hand, because DockNest never writes these locations.
 - Backups made before 2.11.1 are unchanged and still hold what they captured.
 
 ### Key folders inside copied mounts (2.12.1)
@@ -291,7 +293,7 @@ out of the backup; the rest of the mount is copied as before. Names that only co
 - With incremental backups, a chain whose full backup still holds one of these folders starts again with a full
   backup the first time 2.12.1 finds it. Later increments continue normally.
 - A bind mount of a `.gnupg` folder itself is now a protected mount, like a `.ssh` mount: it is not copied, and a
-  move refuses the site.
+  move refuses the app.
 
 ## Restored files never keep setuid or setgid (2.12.1)
 
@@ -336,7 +338,7 @@ DockNest checks for updates only after an administrator agrees (see [the Update 
 
 ## Boot recovery after upgrades
 
-Most remote operations stream the current helper over SSH, so they update automatically. Boot recovery is the exception: installing it copies the built `helper.py` (see [remote helper](remote-helper.md)) and `remote/boot_recovery.py` onto the host, and those copies go stale after an upgrade. DockNest records the SHA-256 of the installed bundle. Site state (`GET /api/state`) and `GET /api/sites/:id/boot-recovery` report `bootRecoveryOutdated: true` when the copy differs from the running release. This includes installs made before fingerprints were recorded. Upgrades never connect to your hosts. After each upgrade, reinstall boot recovery on the affected sites (`POST /api/sites/:id/boot-recovery`, administrators only) once no work is active. The dashboard does not show this flag yet.
+Most remote operations stream the current helper over SSH, so they update automatically. Boot recovery is the exception: installing it copies the built `helper.py` (see [remote helper](remote-helper.md)) and `remote/boot_recovery.py` onto the host, and those copies go stale after an upgrade. DockNest records the SHA-256 of the installed bundle. App state (`GET /api/state`) and `GET /api/sites/:id/boot-recovery` report `bootRecoveryOutdated: true` when the copy differs from the running release. This includes installs made before fingerprints were recorded. Upgrades never connect to your hosts. After each upgrade, reinstall boot recovery on the affected apps (`POST /api/sites/:id/boot-recovery`, administrators only) once no work is active. The dashboard does not show this flag yet.
 
 ## Customising without conflicts
 
@@ -348,9 +350,60 @@ The upgrade script refuses to run if tracked files are edited, because an upgrad
 
 If `git status` lists a modified file, move the change into one of these, then run `git restore <file>`.
 
+## Upgrading to 3.0.0
+
+Applies to an install on 2.16.x (the oldest upgrade `minUpgradeFrom` allows is still 2.0.0, see below). 3.0.0 is not released yet; this section describes the 3.0.0 development line (`integration/2.16.5`) and is updated as it changes. Upgrade the usual way: the Update Center, or `scripts/upgrade.sh`. Take no other step: the `.env` file, secrets, Compose services and volumes are unchanged, and the only addition to the image is the bundled dashboard fonts.
+
+**Database migrations.** From 2.16.4 (schema 18) the database moves to schema 27 in one start. Every one of these migrations only adds tables and is marked `compatible: true`:
+
+| Migration | Adds |
+| --- | --- |
+| 19 `server-coverage-ignores` | What you chose to skip in backup coverage |
+| 20 `server-app-links` | Linked-app facts found by a scan |
+| 21 `site-restore-decisions` | Your answers in the restore check |
+| 22 `kit-checks-emergency-keys` | Recovery kit checks and the optional emergency kit split |
+| 23 `domain-checks` | Domain checks |
+| 24 `keys-safe` | App keys and configuration fingerprints |
+| 25 `runbook-state` | Recovery Guide state and login notes |
+
+Open pull requests add more if they are included in 3.0.0. At the time of writing only one adds a migration:
+
+| Pull request | Migration | Adds |
+| --- | --- | --- |
+| Restore test from a backup copy (#230) | 26 `restore-test-source`, compatible | An empty-by-default "Test from" choice on restore test settings |
+| Client reports (#249) | 27 `client-reports`, compatible | Clients, their apps and report history (the tables `clients`, `client_apps`, `client_reports`) |
+| Portainer and Dockge stacks (#229), capacity auto-fill (#231), append-only SFTP (#232), online database dumps (#233) | none | These add no migration |
+
+If more migrations land before the release, they are added here. If more migrations land before the release, they are added here.
+
+**What changes for you.**
+
+- Sites are called Apps (menu entry **Apps & schedules**), and DockNest's own backup is called **Self Backup**. Settings, links, bookmarks and existing backups are untouched.
+- A new look (design system v2): colours, fonts, dialogs, tabs, lists with an actions menu, and an animated sign-in. Nothing to configure. Reduced motion is respected.
+- Recovery Guide: numbered steps to rebuild every app on a new server, with an optional PDF. It starts as "never made".
+- Keys safe: DockNest finds the encryption keys of your apps and checks they are inside the last backup. The first scan of each app is a silent baseline, so an upgrade raises no "Configuration changed" alert.
+- Domain checks, backup coverage, linked apps and the restore check's extra findings. They read your servers only when you ask or after a scan, readiness check or backup.
+- A "Backup missed" alert when a scheduled backup could not start on time. It uses your existing channels and alert lines for failed backups.
+- If included: Portainer and Dockge stacks in Add app, restore tests from a backup copy, capacity auto-fill for SFTP, append-only SFTP storage, and opt-in online dumps for PostgreSQL, MySQL and MariaDB. Each is off or unchanged until you use it.
+
+**Also new in 3.0.0.**
+
+- Backup format 3 (`formatVersion: 3`) is written only for Podman and rootless apps. Docker apps keep the older format. DockNest 2.16 and older refuse to restore format 3.
+- Cloud drives use a bundled rclone, `linux/amd64` only. Other CPU architectures get no cloud drive destinations.
+- NAS servers (TrueNAS SCALE; Unraid and Synology when enabled under Settings) connect as root, or as a non-root SSH user with passwordless sudo.
+- Moving an app between container engines is not supported yet and is blocked.
+
+**No Beta labels.** Incremental backups, launching apps and safe changes no longer carry a Beta label in 3.0.0. Nothing about how they work changes with the upgrade. Unraid and Synology support are the only early-access items: they are off by default under Settings.
+
+**`minUpgradeFrom`.** It stays at 2.0.0. The 3.0.0 migrations are additive and the upgrade test below runs from every final release since 2.0.0. A direct upgrade from 2.0.0 and from 2.16.4 both pass it. Upgrading from an older 2.x straight to 3.0.0 therefore needs no intermediate release.
+
+**Rolling back to 2.16.x.** All migrations since 2.16.4 are compatible, so 2.16.x starts on the upgraded database as is: `scripts/upgrade.sh --version v2.16.4` checks out that tag, rebuilds and starts it, with no snapshot restore and no `--allow-data-rollback`. What 2.16.x does not know stays in the database and is ignored (kit checks, domain checks, keys safe, Recovery Guide state). It shows again after you upgrade once more. The Update Center does not downgrade: it only upgrades, so a downgrade is a command-line task. If you also want the exact database from before the upgrade (for example because something looks wrong), use the snapshot DockNest wrote on the first start, `upgrade-snapshots/state-v18-to-v25-<UTC time>.sqlite` in the state volume (named `state-v18-to-v26-…` if migration 26 is included), with the steps in [Rolling back](#rolling-back). That discards every job, backup record and setting change made after the upgrade. The copy of `.env` and the secrets in `data/upgrade-backups/` is only needed if you changed them.
+
+**What the upgrade test checks.** The CI `upgrade` job (`npm run test:upgrade -- vX.Y.Z`, `scripts/upgrade-compat.js`) fills a database with the code of each released version since `minUpgradeFrom` (including v2.16.4): users, a session, a server, two apps with schedules, two backups, the Self Backup settings and its kit. It starts the current API on it and checks that the data and the session survive and that the new tables start empty. It then starts the old release on the upgraded database as is (when its migrations are all compatible), checks the downgrade guard, restores the pre-upgrade snapshot and checks that the old release reads its data again. It uses made-up data, not a real Docker host or a real Update Center run: the in-app path and a rollback on a real host are validated separately.
+
 ## Stability contract
 
-DockNest follows [Semantic Versioning](https://semver.org/). Within a major version (2.x), the following stay compatible. A new release may add to them but will not rename, remove or reinterpret them.
+DockNest follows [Semantic Versioning](https://semver.org/). Within a major version (2.x, and 3.x from 3.0.0), the following stay compatible. A new release may add to them but will not rename, remove or reinterpret them.
 
 | Area | Stable items |
 | --- | --- |
@@ -359,7 +412,7 @@ DockNest follows [Semantic Versioning](https://semver.org/). Within a major vers
 | Compose | Project `docknest`; services `api`, `worker` and `proxy` (profile `https`); volumes `docker-backup-manager_state`, `docker-backup-manager_caddy_data` and `docker-backup-manager_caddy_config` (legacy names kept on purpose, so certificates and state carry over), and, from 2.2.0, `docknest_updater` (mounted read-only into `api` only; empty unless the host updater is installed); loopback API port `127.0.0.1:${HOST_PORT:-3000}`. |
 | `DATA_DIR` layout | `state.sqlite` with its `-wal` and `-shm` files, `worker.lock`, `upgrade-snapshots/`, `manager-backups/`, `private-exports/`, and `backups/` in local mode. Snapshot names follow `state-v<from>-to-v<to>-<UTC>.sqlite`. |
 | Sessions | The `dbm_session` cookie and the `x-csrf-token` header. An upgrade keeps valid sessions, except the one-time v2.0.0 cleanup of legacy sessions without timestamps. |
-| Site configuration | The JSON fields accepted by `POST /api/sites`: `kind`, `documentRoot`, `containers`, `stagingRoot`, `deliveryMode`, `sqliteIntegrityCheck`, `exclusiveSourcesConfirmed`, `stopTimeout`, `shutdownProfile`, `cleanShutdownConfirmed`, `unresolvedDependencies`, `services`, `configFiles`, `mountExclusions`, `mountExclusionsConfirmed`, `restoreReferences`, `temporaryMemoryFolders`, `composeFiles`, `externalReferencesConfirmed`, `maintenanceRequired`, `maintenanceProbeOrigin`, `maintenancePublicUrl`, `domains`, `healthUrl` and `maintenance`. Saved configurations keep loading. New fields always get defaults. |
+| App configuration | The JSON fields accepted by `POST /api/sites`: `kind`, `documentRoot`, `containers`, `stagingRoot`, `deliveryMode`, `sqliteIntegrityCheck`, `exclusiveSourcesConfirmed`, `stopTimeout`, `shutdownProfile`, `cleanShutdownConfirmed`, `unresolvedDependencies`, `services`, `configFiles`, `mountExclusions`, `mountExclusionsConfirmed`, `restoreReferences`, `temporaryMemoryFolders`, `composeFiles`, `externalReferencesConfirmed`, `maintenanceRequired`, `maintenanceProbeOrigin`, `maintenancePublicUrl`, `domains`, `healthUrl` and `maintenance`. Saved configurations keep loading. New fields always get defaults. |
 | Public endpoints | `GET /healthz` returns `{status}` and `GET /api/version` returns `{version, schemaVersion}`. Neither needs a session. From 2.2.0, `GET /api/updates/progress` is also public and returns `{active, phase, to, state, stale, updatedAt, events: [{phase, at}]}`, nothing else, rate limited per client address (120 a minute); its fields may gain values but are not renamed. The update lock view relies on these endpoints to see the new release come up. |
 | Backup formats | DBM1 encrypted payloads (`scripts/decrypt-backup.js`), manifests and recovery kits written by any 2.x release stay readable by later 2.x releases. |
 

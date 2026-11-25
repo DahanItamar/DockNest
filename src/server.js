@@ -2,6 +2,7 @@ import {maintenanceDefaults,normalizeMaintenance} from '../shared/maintenance-de
 import express from 'express';
 import helmet from 'helmet';
 import { z, ZodError } from 'zod';
+import { runtimeSchema, runtimeRefusal, isRootfulDocker } from './runtime.js';
 import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -11,18 +12,23 @@ import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
 import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
+import { runbookRoutes } from './runbook/routes.js';
+import { clientRoutes } from './reports/routes.js';
+import { noteInventoryChange, runbookSummary } from './runbook/state.js';
 import { moveRoutes, cloudflareRoutes } from './moves/routes.js';
 import { deployKeyRoutes } from './launches/deploy-keys.js';
 import { launchRoutes, serverLaunchRoutes } from './launches/routes.js';
 import { launchOfSite } from './launches/engine.js';
 import { requestInstall, findInstall } from './installs.js';
 import { alertRoutes, connectionRoutes } from './alerts/routes.js';
+import { notificationRoutes } from './notifications/routes.js';
+import { summary as notificationSummary } from './notifications/store.js';
 import { canManageAlerts } from './alerts/connections.js';
 import { restoreTestRoutes, acknowledgeTestJob } from './restore-tests/routes.js';
 import { selfHealRoutes } from './self-heal/routes.js';
 import { siteEditRoutes, REVIEW_PATH } from './site-edits/routes.js';
 import { storageReportRoutes } from './storage-report.js';
-import { backupTestStates, notTested } from './restore-tests/views.js';
+import { backupTestStates, notTested, recoveryBySite, recoverySummary } from './restore-tests/views.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { schemaVersion } from './migrations.js';
@@ -34,10 +40,12 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin, requireRecentAuth } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, describeContainers, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
+import { ENGINE_IDS, SQL_ENGINE_IDS, engineCheckField, engineCapabilities } from '../shared/database-engines.js';
+import { coverageConflict } from './site-coverage.js';
 import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
@@ -45,8 +53,20 @@ import { backupCopyViews } from './backup-copies.js';
 import { retryCopy, packagePath } from './artifact-journal.js';
 import { incrementalRoutes } from './incremental-routes.js';
 import { serverCleanupRoutes } from './server-cleanup.js';
+import { restoreDecisionRoutes } from './restore-decisions.js';
+import { coverageRoutes } from './server-coverage.js';
+import { domainRoutes } from './domains/routes.js';
 import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 import { hardeningView } from './hardening.js';
+import { keysSafeRoutes } from './keys-safe/routes.js';
+import { keysView } from './keys-safe/padlock.js';
+import { serverLinksView } from './server-links.js';
+import { withoutNasFacts } from './nas/readiness.js';
+import { connectCapabilities, ConnectRefused } from './nas/connect.js';
+import { inspectNas } from './nas/service.js';
+import { forgetRuntime } from './nas/runtime-prepare.js';
+import { nasWizard, loginHint } from './nas/guidance.js';
+import { nasEnabled, nasGates, setNasEnabled, withoutGated, GATED_KINDS } from './nas/gate.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -75,11 +95,21 @@ app.use('/api', lockMiddleware(updates));
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
+// A change to servers, apps, storage, Self Backup or the guide's note may leave the Recovery Guide out of date
+// (src/runbook/state.js): compare the digest once such a request has succeeded. Other changes do not touch its inputs.
+const INVENTORY_ROUTES = /^\/(servers|sites|storage-targets|self-backup|moves|runbook\/notes)(\/|$)/;
+app.use('/api', (req, res, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && INVENTORY_ROUTES.test(req.path)) res.once('finish', () => { if (res.statusCode < 400) noteInventoryChange().catch(() => {}); });
+  next();
+});
 app.use('/api/access', access);
 app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
+app.use('/api/runbook', runbookRoutes);
+app.use('/api/clients', clientRoutes);
 app.use('/api/moves', moveRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api', notificationRoutes);
 app.use('/api/connections', connectionRoutes);
 app.use('/api/deploy-keys', deployKeyRoutes);
 app.use('/api/launches', launchRoutes);
@@ -90,12 +120,16 @@ app.use('/api', siteEditRoutes);
 app.use('/api', storageReportRoutes);
 app.use('/api', incrementalRoutes);
 app.use('/api', serverCleanupRoutes);
+app.use('/api', restoreDecisionRoutes);
+app.use('/api', coverageRoutes);
+app.use('/api', keysSafeRoutes);
+app.use('/api', domainRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
-const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
+const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('App not found.');
 const safeServer = row => { const { private_key, ...rest } = parse(row); return rest; };
 // List endpoints pass a preloaded Map so each backup row does not issue its own verification query.
 const view = (row, verifications) => {
@@ -103,6 +137,9 @@ const view = (row, verifications) => {
   for (const [name, value] of Object.entries(parsed)) converted[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
   if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=verifications instanceof Map&&verifications.has(converted.id)?verifications.get(converted.id):backupVerification(converted.id);}
   if (converted.manifest?.downtimeSeconds != null) converted.downtimeMs = converted.manifest.downtimeSeconds * 1000;
+  // Keys safe: a backup's key proof (full fingerprints and the key that made them) stays on the server; the padlock
+  // shows 8 characters of a fingerprint.
+  if (converted.manifest && typeof converted.manifest === 'object' && ['keys', 'keysCheck', 'keysServerId'].some(name => name in converted.manifest)) { const { keys: _keys, keysCheck: _check, keysServerId: _server, ...manifest } = converted.manifest; converted.manifest = manifest; }
   if (converted.detail) converted.details = converted.detail;
   if (converted.target) converted.targetId = converted.target;
   return converted;
@@ -117,17 +154,22 @@ const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
     kind:z.enum(['docker','static']).default('docker'),
+    // Container engine of the app; missing means rootful Docker (docs/podman-rootless.md).
+    runtime: runtimeSchema.optional(),
     documentRoot:linuxPath.optional(),
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
     stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').refine(value => outsideSystemFolders(value.replace(/\/+$/, '')), 'Use a staging directory outside system folders such as /etc, /root or /usr/bin, for example /var/lib/docknest.').default('/var/lib/docknest'),
     deliveryMode: z.enum(['staged','direct']).default('staged'),
+    // Online logical dumps (docs/online-dumps.md): opt-in; absent means every database stops for a file copy.
+    onlineDumps: z.boolean().optional(),
+    dumpTimeout: z.number().int().min(60).max(21600).optional(),
     sqliteIntegrityCheck: z.enum(['full','off']).optional(),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
     unresolvedDependencies: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
-    services: z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),engine:z.enum(['auto','generic','postgres','mysql','mariadb','redis']).default('auto'),version:z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),dependsOn:z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30).default([]),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),user:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),sqliteFiles:z.array(linuxPath).max(30).default([]),sqliteVersion:z.string().regex(/^3\.\d+\.\d+$/).optional(),sqliteSigtermConfirmed:z.boolean().default(false),checks:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9 _-]{1,80}$/),table:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/).optional(),key:z.string().min(1).max(512).refine(value=>!/[\x00-\x1f\x7f]/.test(value)).optional()}).refine(check=>Boolean(check.table)!==Boolean(check.key),'Specify exactly one table or Redis key')).max(20).default([])}).superRefine((service,context)=>{for(const check of service.checks){if(service.engine==='redis'&&(!check.key||(service.database!==undefined&&!/^\d+$/.test(service.database))))context.addIssue({code:'custom',message:'Redis checks need a key and numeric database index'});if(['postgres','mysql','mariadb'].includes(service.engine)&&!check.table)context.addIssue({code:'custom',message:'SQL database checks need a table'});}})).max(30).default([]),
+    services: z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),engine:z.enum(['auto','generic',...ENGINE_IDS]).default('auto'),version:z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),dependsOn:z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30).default([]),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),flavor:z.enum(['redis','valkey']).optional(),persistence:z.enum(['disk','cache']).optional(),user:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),sqliteFiles:z.array(linuxPath).max(30).default([]),sqliteVersion:z.string().regex(/^3\.\d+\.\d+$/).optional(),sqliteSigtermConfirmed:z.boolean().default(false),checks:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9 _-]{1,80}$/),table:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/).optional(),key:z.string().min(1).max(512).refine(value=>!/[\x00-\x1f\x7f]/.test(value)).optional(),collection:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_.-]{0,119}$/).refine(value=>!value.startsWith('system.'),'System collections cannot be checked').optional(),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional()}).refine(check=>[check.table,check.key,check.collection].filter(Boolean).length===1,'Specify exactly one table, Redis key or MongoDB collection').transform(({database,...check})=>check.collection&&database?{...check,database}:check)).max(20).default([])}).superRefine((service,context)=>{for(const check of service.checks){if(service.engine==='redis'&&(!check.key||(service.database!==undefined&&!/^\d+$/.test(service.database))))context.addIssue({code:'custom',message:'Redis checks need a key and numeric database index'});if(SQL_ENGINE_IDS.includes(service.engine)&&!check.table)context.addIssue({code:'custom',message:'SQL database checks need a table'});if(engineCheckField(service.engine)==='collection'&&!check.collection)context.addIssue({code:'custom',message:'MongoDB checks need a collection'});}})).max(30).default([]),
     configFiles: z.array(linuxPath).max(50).default([]),
     mountExclusions:z.array(z.object({source:linuxPath,path:linuxPath,reason:z.string().trim().min(1).max(300),requiredForRestore:z.boolean().optional()})).max(50).default([]),
     mountExclusionsConfirmed:z.boolean().default(false),
@@ -161,19 +203,20 @@ const actorNames = rows => {
 };
 app.get('/api/state', async (req, res) => {
   const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC,id DESC LIMIT 1000').all().map(parse), verifications = backupVerifications(backups.map(backup => backup.id));
-  const storage = await storageCapacity({maxAgeMs:30000});
+  const storage = await storageCapacity({maxAgeMs:30000}), recoveries = recoveryBySite();
   const auditRows = db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 250').all().map(view);
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type<>'self-heal' ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), recovery: recoverySummary(recoveries.get(site.id)), hardening: hardeningView(site.id), keys: keysView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), databaseEngines: engineCapabilities(), ...(req.user.role === 'admin' ? { notifications: notificationSummary(req.user.id), update: { available: cachedOffer(db, release) }, runbook: runbookSummary() } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
 const historyQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: historyCursor.optional() });
-// Self-heal restarts are listed in their own history (GET /api/self-heal/events), not among site jobs.
-const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at', only: "type<>'self-heal'" }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
+// Self-heal restarts are listed in their own history (GET /api/self-heal/events) and domain checks on the domain path
+// (GET /api/domains), not among site jobs.
+const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at', only: "type NOT IN ('self-heal','domain-check')" }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
 for (const [name, { table, time, only }] of Object.entries(histories)) app.get('/api/' + name, (req, res) => {
   const { limit, cursor } = historyQuery.parse(req.query);
   const filters = [only, cursor && `(${time},id)<(?,?)`].filter(Boolean);
@@ -183,7 +226,9 @@ for (const [name, { table, time, only }] of Object.entries(histories)) app.get('
   const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null, chains = backups ? chainViews(page) : null;
   res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id), ...chains.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
-app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
+app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand,nas:nasWizard(nasGates(db)),nasGates:nasGates(db)}));
+app.get('/api/settings/nas', requireAdmin, (_req,res) => res.json(nasGates(db)));
+app.put('/api/settings/nas/:kind', requireAdmin, (req,res) => { const kind=z.enum(GATED_KINDS).parse(req.params.kind),{enabled}=z.object({enabled:z.boolean()}).strict().parse(req.body); setNasEnabled(kind,enabled,db); audit(req.user.id,`settings.${kind}_${enabled?'on':'off'}`); res.json(nasGates(db)); });
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
   const result=await prepareServerKey();
   audit(req.user.id,'server.key_prepared');
@@ -192,8 +237,10 @@ app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), as
 app.post('/api/servers/connect', requireAdmin, rateLimit('server-connect',5), async (req,res) => {
   const data=serverSchema.parse(req.body), serverId=id();
   const server={id:serverId,host:data.host,port:data.port,username:data.username,private_key:seal(data.privateKey),host_key:fingerprint(data.hostKey)};
-  const capabilities=await testServer(server);
-  if(capabilities.uid!==0)return res.status(409).json({error:'SSH connected, but this backup engine requires a root SSH account to preserve volume ownership. Run the setup command as root and connect using root.'});
+  // Root keeps today's rules. A non-root user is accepted only on a detected NAS with passwordless sudo (src/nas/connect.js).
+  let capabilities;
+  try{capabilities=await connectCapabilities(server,{inspect:inspectNas,test:testServer});}
+  catch(error){if(error instanceof ConnectRefused)return res.status(409).json({error:error.message,...(error.fix?{fix:error.fix}:{})});throw error;}
   db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(serverId,data.name,data.host,data.port,data.username,server.private_key,server.host_key,'connected',JSON.stringify(capabilities),now(),data.note);
   audit(req.user.id,'server.connected',serverId);
   res.status(201).json(safeServer(getServer(serverId)));
@@ -215,6 +262,7 @@ app.patch('/api/servers/:id', requireAdmin, (req, res) => {
   const data = serverSchema.extend({ note:z.string().trim().max(200).optional(), privateKey: serverSchema.shape.privateKey.optional(), hostKeyConfirmation: z.literal(true).optional() }).parse(req.body);
   if (fingerprint(data.hostKey) !== previous.host_key && !data.hostKeyConfirmation) return res.status(409).json({ error: 'SSH host key changed. Verify the new fingerprint independently and explicitly confirm the change.' });
   db.prepare("UPDATE servers SET name=?,note=?,host=?,port=?,username=?,private_key=?,host_key=?,status='unchecked',capabilities=NULL WHERE id=?").run(data.name, data.note??previous.note, data.host, data.port, data.username, data.privateKey ? seal(data.privateKey) : previous.private_key, fingerprint(data.hostKey), previous.id);
+  forgetRuntime(previous.id);
   audit(req.user.id, 'server.update', previous.id); res.json(safeServer(getServer(previous.id)));
 });
 app.post('/api/servers/:id/install', requireAdmin, requireRecentAuth, rateLimit('server-install', 10, 10 * 60_000), async (req, res) => {
@@ -227,20 +275,30 @@ app.post('/api/servers/:id/test', async (req, res) => {
     const result = await testServer(server);
     // Merged, so facts recorded elsewhere (the CPU count from a restore test's Check space) survive a connection test.
     let previous = {}; try { previous = JSON.parse(server.capabilities || '{}') || {}; } catch { previous = {}; }
-    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...result }), server.id);
+    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...withoutNasFacts(result) }), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
-  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
+  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); const hint = loginHint(server, error, { synology: nasEnabled('synology', db) }); if (hint) error.message = hint; throw Object.assign(error, serverTestFailure(error)); }
+});
+// Read-only NAS readiness for the server panel: identity, helper runtime, staging folder, Docker and key persistence, each
+// failed check with one fix. Runs fixed argv commands over SSH, changes nothing and stores nothing.
+app.get('/api/servers/:id/nas', requireAdmin, rateLimit('server-nas', 20, 60_000), async (req, res) => {
+  const server = getServer(req.params.id);
+  const { nas, identity, helperRuntime, stagingBase, ready, checks, gatedOff } = await inspectNas(server);
+  res.json({ nas: nas ?? null, ...(gatedOff ? { gatedOff } : {}), identity: identity ?? null, helperRuntime: helperRuntime ?? null, stagingBase: stagingBase ?? null, ready: Boolean(ready), checks: checks ?? [] });
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
-  const result = await discover(getServer(req.params.id), { recordHardening: req.user.role === 'admin' });
+  const found = await discover(getServer(req.params.id), { record: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
+  const result = Array.isArray(found) ? found : withoutGated(found, nasGates(db));
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
+  res.json({ nas: result.nas ?? null, staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });
+const containerNames = query => siteSchema.shape.config.shape.containers.min(1).parse(typeof query === 'string' ? query.split(',') : []);
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
-  const containers=siteSchema.shape.config.shape.containers.min(1).parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
   const directory=linuxPath.optional().parse(req.query.path);
-  res.json(await browseProjectFiles(getServer(req.params.id),containers,directory));
+  res.json(await browseProjectFiles(getServer(req.params.id),containerNames(req.query.containers),directory));
 });
+// Any signed-in role may read: the helper only inspects the containers and never returns environment values.
+app.get('/api/servers/:id/describe-containers', async (req, res) => res.json(await describeContainers(getServer(req.params.id), containerNames(req.query.containers))));
 function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const maintenance = data.config.maintenance || { required: data.config.maintenanceRequired, directory: `${data.config.stagingRoot}/maintenance/${siteId}`, publicUrl: data.config.domains[0] ? 'https://' + data.config.domains[0] : '', healthUrl: data.config.healthUrl };
@@ -282,7 +340,7 @@ async function sitePathRefusal(req, saved, next, siteId) {
   let found = { configFiles: new Set(), composeFiles: new Set(), documentRoot: new Set() };
   if (fields.every(field => field in found)) { try { found = discoveredSitePaths(await discover(getServer(next.serverId))); } catch { /* Unconfirmed paths need an administrator. */ } }
   const refused = fields.filter(field => !found[field] || changes[field].some(value => !found[field].has(value)));
-  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of a site, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
+  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of an app, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
 }
 // Only lists that are new or changed are checked: a stored list that was already odd must not block unrelated edits.
 export function sqliteListProblem(next, saved) {
@@ -294,12 +352,22 @@ export function sqliteListProblem(next, saved) {
   }
   return '';
 }
+// A runtime is saved only when that server reported the engine; an app's engine is never changed or dropped by an edit.
+const serverCapabilities = server => { try { return JSON.parse(server.capabilities || '{}') || {}; } catch { return {}; } };
+const runtimeProblem = (runtime, server, saved) => {
+  if (!saved) return runtimeRefusal(runtime, serverCapabilities(server));
+  if (runtime === undefined || (isRootfulDocker(runtime) && isRootfulDocker(saved.runtime)) || JSON.stringify(runtime) === JSON.stringify(saved.runtime)) return '';
+  return 'An app keeps its container engine. Make a new app to use another engine.';
+};
 app.post('/api/sites', async (req, res) => {
-  const data = siteSchema.parse(req.body); getServer(data.serverId);
+  const data = siteSchema.parse(req.body), server = getServer(data.serverId);
+  { const problem = runtimeProblem(data.config.runtime, server); if (problem) return res.status(400).json({ error: problem }); }
   { const problem = sqliteListProblem(data.config.services, []); if (problem) return res.status(400).json({ error: problem }); } const siteId = id();
   const settings = normalizedSite(data, siteId);
   const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
   if (refusal) return res.status(403).json(refusal);
+  const conflict = coverageConflict(data.serverId, settings);
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, data.serverId, data.name, JSON.stringify(settings), now());
   db.prepare('INSERT INTO policies VALUES (?,0,?,?,7,NULL)').run(siteId, '0 2 * * *', 'Asia/Jerusalem');
   audit(req.user.id, 'site.create', siteId); res.status(201).json(getSite(siteId));
@@ -307,13 +375,16 @@ app.post('/api/sites', async (req, res) => {
 // The current saved site: the failed-backup fix view reads it right before it changes a SQLite list.
 app.get('/api/sites/:id', (req, res) => res.json(getSite(req.params.id)));
 app.patch('/api/sites/:id', async (req, res) => {
-  const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
+  const site = getSite(req.params.id), data = siteSchema.parse(req.body), server = getServer(data.serverId);
   requireNotMoving(site.id);
+  { const savedConfig = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, problem = runtimeProblem(data.config.runtime, server, savedConfig || {});
+    if (problem) return res.status(400).json({ error: problem });
+    if (data.config.runtime === undefined && savedConfig?.runtime) data.config.runtime = savedConfig.runtime; }
   // The site form does not edit the SQLite check mode; keep the saved choice.
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
   { const problem = sqliteListProblem(data.config.services, (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.services); if (problem) return res.status(400).json({ error: problem }); }
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
   const refusal = await sitePathRefusal(req, { serverId: site.server_id, config: saved }, { serverId: data.serverId, config: next }, site.id);
@@ -321,12 +392,14 @@ app.patch('/api/sites/:id', async (req, res) => {
   // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
   const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
   const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
+  const conflict = coverageConflict(data.serverId, next, { exceptSiteId: site.id, keep: site.server_id === data.serverId ? saved : null });
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
   audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   const data = z.object({ enabled: z.boolean(), schedule: z.string().max(100), timezone: z.string().max(100), retention: z.number().int().min(1).max(1000) }).parse(req.body);
   new Intl.DateTimeFormat('en', { timeZone: data.timezone });
   const next = CronExpressionParser.parse(data.schedule, { tz: data.timezone }).next().toISOString();
@@ -337,7 +410,7 @@ app.post('/api/sites/:id/policy', (req, res) => {
 app.get('/api/sites/:id/storage', (req, res) => res.json(siteStorageView(getSite(req.params.id).id)));
 app.put('/api/sites/:id/storage', requireAdmin, requireRecentAuth, (req, res) => {
   const site = getSite(req.params.id);
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This app was removed from active apps.', code: 'site_removed' });
   try { res.json(updateSiteStorage(site.id, req.body, req.user.id)); }
   catch (error) { if (error.code && error.status) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
 });
@@ -365,7 +438,7 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   if (job.type === 'restore-test') return acknowledgeTestJob(req, res, job);
   const site = getSite(job.site_id);
   const data = z.object({ confirmation: z.string(), reviewedRemoteRecovery: z.literal(true) }).parse(req.body);
-  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the site name and review its remote recovery before acknowledging.' });
+  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the app name and review its remote recovery before acknowledging.' });
   const result = await verifyRecovery(job);
   if(job.type==='restore'){
     const details=JSON.parse(job.details);
@@ -460,7 +533,7 @@ app.post('/api/backups/:id/scrub', (req,res)=>res.status(202).json(enqueueScrub(
 // A chosen restore source that is not a verified copy: 409 with its code, so the dialog can say which copy is unusable.
 const sourceRefusal = error => { if (error.code === 'source_unavailable') throw Object.assign(new Error(error.message), { status: 409, expose: true, publicCode: error.code }); throw error; };
 app.post('/api/backups/:id/restore-plan', async (req, res) => {
-  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
+  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}), sourceTargetId: z.string().min(1).max(64).nullable().optional(), runtime: runtimeSchema.optional() }).parse(req.body);
   const plan = await planRestore(req.params.id, { ...data, sourceTargetId: data.sourceTargetId || null, mode: data.mode === 'copy' ? 'new-copy' : data.mode }).catch(sourceRefusal);
   // Where it restores from (docs/backup-copies.md): the main copy first, then copies newest-verified first.
   res.json({ plan, sources: plan.sources, source: plan.source });
@@ -468,10 +541,10 @@ app.post('/api/backups/:id/restore-plan', async (req, res) => {
 app.post('/api/backups/:id/restore', async (req, res) => {
   const data = z.object({ plan: z.object({ serverId: z.uuid(), mode: z.string(), mappings: z.record(z.string(), z.unknown()).default({}) }).passthrough(), confirmation: z.string(), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
   const backup = db.prepare('SELECT * FROM backups WHERE id=?').get(req.params.id) || notFound('Backup not found.');
-  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the site name to confirm the restore.' });
+  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the app name to confirm the restore.' });
   // Never trust the executable flag, capabilities or blockers submitted by a client.
   const sourceTargetId = data.sourceTargetId || (typeof data.plan.sourceTargetId === 'string' ? data.plan.sourceTargetId : null);
-  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId }).catch(sourceRefusal);
+  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId, runtime: runtimeSchema.optional().parse(data.plan.runtime) }).catch(sourceRefusal);
   res.status(202).json(await enqueueRestore(backup.id, plan, req.user.id));
 });
 app.patch('/api/maintenance', (req, res) => {
