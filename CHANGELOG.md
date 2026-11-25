@@ -2,6 +2,12 @@
 
 All notable changes to DockNest are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and DockNest uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/upgrading.md](docs/upgrading.md) describes what stays stable within a major version and the deprecation policy. Detailed notes for each release live in [docs/releases](docs/releases).
 
+## [3.0.2] - 2026-11-25
+
+### Fixed
+
+- The browser tab icon now updates reliably in Chrome when you change your accent colour. It could stay the old colour before.
+
 ## [3.0.1] - 2026-11-25
 
 ### Fixed
@@ -626,7 +632,9 @@ Pre-release of 2.1.0, tagged `v2.1.0-rc.1`. The GitHub release for it has been r
 
 See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
 
-[3.0.0]: https://github.com/DahanItamar/DockNest/compare/v2.16.4...HEAD
+[3.0.2]: https://github.com/DahanItamar/DockNest/compare/v3.0.1...v3.0.2
+[3.0.1]: https://github.com/DahanItamar/DockNest/compare/v3.0.0...v3.0.1
+[3.0.0]: https://github.com/DahanItamar/DockNest/compare/v2.16.4...v3.0.0
 [2.1.0]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0
 [2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0

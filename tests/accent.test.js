@@ -46,16 +46,30 @@ test('no hardcoded purple or blue literals are left outside the token file', () 
 });
 
 test('the tab and touch icons follow the accent, with teal as the fallback', () => {
-  const links = { icon: { href: '' }, touch: { href: '' } };
-  const document = { querySelector: s => (s.includes('apple') ? links.touch : links.icon) };
+  // Minimal DOM: the head starts with the baked-in teal links; dnSetIcons must remove them and append fresh ones.
+  const makeLink = (rel, href) => ({ rel, href, setAttribute(k, v) { if (k === 'rel') this.rel = v; }, remove() { head.children = head.children.filter(c => c !== this); } });
+  const head = {
+    children: [makeLink('icon', '/brand/favicon-teal.png'), makeLink('alternate icon', '/brand/favicon-teal.ico'), makeLink('apple-touch-icon', '/brand/apple-touch-teal.png')],
+    querySelectorAll(sel) { return this.children.filter(c => (/apple-touch-icon/.test(sel) && c.rel === 'apple-touch-icon') || (/rel~="icon"/.test(sel) && /(^| )icon( |$)/.test(c.rel))); },
+    appendChild(l) { this.children.push(l); },
+  };
+  const document = { head, createElement: () => makeLink('', ''), querySelector: () => null };
   const window = {};
   new Function('window', 'document', read('public/theme-init.js').split('// Apply a saved')[0])(window, document);
+  const path = href => href.split('?')[0];
+  const current = rel => head.children.filter(c => c.rel === rel);
   for (const id of ['teal', 'blue', 'indigo', 'orange', 'pink']) {
     window.dnSetIcons(id);
-    assert.match(links.icon.href, id === 'teal' ? /favicon-[a-f0-9]+\.png$/ : new RegExp('favicon-' + id + '-32-'));
-    assert.ok(existsSync(new URL('../public' + links.icon.href, import.meta.url)) && existsSync(new URL('../public' + links.touch.href, import.meta.url)), id);
+    // Exactly one icon link and one touch link remain (old ones removed, no teal leftover).
+    assert.equal(current('icon').length, 1, id + ' single icon link');
+    assert.equal(current('apple-touch-icon').length, 1, id + ' single touch link');
+    assert.equal(head.children.filter(c => c.rel === 'alternate icon').length, 0, id + ' stale .ico removed');
+    const icon = current('icon')[0].href, touch = current('apple-touch-icon')[0].href;
+    assert.match(path(icon), id === 'teal' ? /favicon-[a-f0-9]+\.png$/ : new RegExp('favicon-' + id + '-32-'));
+    assert.match(icon, new RegExp('\\?a=' + id + '$'), id + ' cache-busted so Chrome re-fetches');
+    assert.ok(existsSync(new URL('../public' + path(icon), import.meta.url)) && existsSync(new URL('../public' + path(touch), import.meta.url)), id);
   }
   window.dnSetIcons('nope');
-  assert.match(links.icon.href, /favicon-[a-f0-9]+\.png$/);
+  assert.match(path(current('icon')[0].href), /favicon-[a-f0-9]+\.png$/);
   assert.match(read('web/brand.jsx'), /dnSetIcons\?\.\(accent\)/);
 });
