@@ -223,7 +223,7 @@ scripts/upgrade.sh --dry-run    # show the plan only
 
 With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
 
-Upgrading from 2.16.x to 3.0.0 adds only compatible database tables (migrations 19 to 27), so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300). Worth knowing before you update:
+Upgrading from 2.16.x to 3.0.0 adds only compatible database tables (migrations 19 to 28), so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300). Worth knowing before you update:
 
 - 3.0.0 backups of Podman and rootless apps use backup format 3 (`formatVersion: 3`); 2.16 and older cannot read or restore them. Docker apps keep the older format.
 - New system passwords must be 12 to 128 characters; existing passwords keep working.
