@@ -1,9 +1,9 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconCircleCheck,IconX} from '@tabler/icons-react';
 import {AlertPanel} from '../system.jsx';
 import {UCDialog,ExtLink,Notes,DOCS_SECURITY} from './parts.jsx';
 import {createUpdatesClient} from './client.js';
 import {tagUrl,vv} from './model.js';
+import {toasts} from '../notifications/toast-store.js';
 
 export const UPDATED_KEY='docknest-updated-to';
 // Asked once. Closing it (Escape, X, backdrop) records nothing and asks again at the next sign-in.
@@ -30,19 +30,14 @@ export function WhatsNewDialog({data,onClose}){
  const version=vv(data.version),link=tagUrl(version);
  return <UCDialog title={'What’s new in DockNest '+version} onClose={onClose} label="dialog"><Notes markdown={data.markdown} tag={version}/><p className="notes-foot">These notes are included with this version of DockNest.</p>{link&&<p><ExtLink href={link}>Full release notes on GitHub</ExtLink></p>}<div className="modal-foot"><button type="button" className="primary" onClick={onClose}>Got it</button></div></UCDialog>;
 }
-export function UpdateToast({version,onNotes,onDismiss}){
- // A success toast clears itself after 5 seconds; an error toast would stay until dismissed.
- useEffect(()=>{const timer=setTimeout(onDismiss,5000);return()=>clearTimeout(timer)},[]);
- return <div className="toast-wrap"><div className="dn-toast" role="status"><IconCircleCheck size={20} aria-hidden="true"/><span className="dn-toast-text">DockNest updated to {version}</span>{onNotes&&<button type="button" onClick={onNotes}>What{'’'}s new</button>}<button type="button" className="icon" onClick={onDismiss} aria-label="Dismiss message"><IconX size={18}/></button></div></div>;
-}
 // First admin sign-in: consent first, then What's new (dialog, or the toast after an in-app update).
 export function UpdateGate({api}){
  const client=useMemo(()=>createUpdatesClient(api),[api]);
- const [dialog,setDialog]=useState(null),[notes,setNotes]=useState(null),[toast,setToast]=useState(null),updatedRef=useRef(null);
+ const [dialog,setDialog]=useState(null),[notes,setNotes]=useState(null),updatedRef=useRef(null);
  async function proceed(updated){
   let data=null;try{data=await client.whatsNew()}catch{}
   const show=data?.show&&data.markdown&&data.version;
-  if(updated){setToast({version:vv(updated),notes:show?data:null});return}
+  if(updated){toasts.push({key:'updated:'+vv(updated),severity:'success',title:'DockNest updated to '+vv(updated),actions:show?[{label:'What’s new',onClick:()=>{setNotes(data);setDialog('notes')}}]:undefined});return}
   if(show){setNotes(data);setDialog('notes')}
  }
  useEffect(()=>{
@@ -59,6 +54,5 @@ export function UpdateGate({api}){
  return <>
   {dialog==='consent'&&<ConsentDialog client={client} onClose={()=>{setDialog(null);proceed(updatedRef.current)}}/>}
   {dialog==='notes'&&notes&&<WhatsNewDialog data={notes} onClose={()=>closeNotes(notes)}/>}
-  {toast&&<UpdateToast version={toast.version} onDismiss={()=>setToast(null)} onNotes={toast.notes?()=>{const data=toast.notes;setToast(null);setNotes(data);setDialog('notes')}:undefined}/>}
  </>;
 }

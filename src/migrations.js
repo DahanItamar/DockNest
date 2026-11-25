@@ -405,6 +405,14 @@ CREATE INDEX IF NOT EXISTS server_installs_status ON server_installs(status,crea
   if (db.prepare('SELECT COUNT(*) AS n FROM server_installs').get().n !== rows) throw new Error('server_installs rebuild lost rows; nothing was changed.');
   if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs rebuild found rows without their server; nothing was changed.');
 }
+// Notification centre (docs/notifications.md): one row per user and event, a repeat counts up instead of adding a row.
+// A new table only, so 2.16 code ignores it and a downgrade leaves it untouched. Nothing existing is read or changed.
+export const notificationsSchema = `
+CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,event_key TEXT NOT NULL CHECK (length(event_key) <= 64),dedupe_key TEXT NOT NULL CHECK (length(dedupe_key) <= 200),severity TEXT NOT NULL CHECK (severity IN ('error','warning','info','success')),category TEXT NOT NULL CHECK (length(category) <= 32),title TEXT NOT NULL CHECK (length(title) <= 120),body TEXT NOT NULL CHECK (length(body) <= 400),link TEXT CHECK (link IS NULL OR length(link) <= 120),count INTEGER NOT NULL DEFAULT 1 CHECK (count >= 1),first_at TEXT NOT NULL,last_at TEXT NOT NULL,read_at TEXT,archived_at TEXT);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id,archived_at,last_at);
+CREATE INDEX IF NOT EXISTS notifications_dedupe ON notifications(user_id,dedupe_key,last_at);
+CREATE INDEX IF NOT EXISTS notifications_age ON notifications(last_at);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -477,6 +485,7 @@ export const migrations = [
   { version: 26, name: 'restore-test-source', compatible: true, up: restoreTestSource },
   // Client reports (docs/client-reports.md): three new tables, so 2.16 code ignores them; a downgrade leaves them untouched.
   { version: 27, name: 'client-reports', compatible: true, up: db => db.exec(clientReportsSchema) },
+  { version: 28, name: 'notifications', compatible: true, up: db => db.exec(notificationsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

@@ -26,7 +26,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Discovers the Docker projects and static nginx sites on each server you connect.
 - Backs up each app on its own schedule to encrypted SFTP or S3-compatible storage. Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults.
 - Verifies recovery points and restores them to a separate copy. The live app is not overwritten.
-- New in 3.0.0: measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (TrueNAS SCALE; Unraid and Synology as early access in Settings); Podman and rootless Docker apps; a new look with a choice of accent colour (Settings > Appearance), with a smooth fade when you change it or switch light and dark.
+- New in 3.0.0: a notification center; measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (TrueNAS SCALE; Unraid and Synology as early access in Settings); Podman and rootless Docker apps; a new look with a choice of accent colour (Settings > Appearance), with a smooth fade when you change it or switch light and dark.
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
@@ -57,6 +57,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Recovery Guide: plain steps and the exact commands to bring every app back on a new server, as a PDF to print or keep with the emergency kit, also in Hebrew. Open it from Recovery Guide in the menu, choose the apps and what goes in, and download. A copy without logins is saved next to the recovery kit after every Self Backup. See [Recovery Guide](docs/recovery-guide.md).
 - Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time. Backups can also go to Google Drive, OneDrive, Dropbox, WebDAV, an SMB share or a mounted local folder. See [cloud drives](docs/cloud-drives.md).
+- Notification center: a bell and a Notifications page for backups, restores, restore tests, storage and system events, with unread counts, filters, Archive, and toasts for new problems. See [notifications](docs/notifications.md).
 - Clients: group apps per client and make a monthly PDF proof page, downloaded or emailed on day 1 to up to 3 recipients. See [client reports](docs/client-reports.md).
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
