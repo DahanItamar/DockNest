@@ -88,7 +88,7 @@ button.text-link:disabled{background:transparent;border:0;color:var(--dn-text-di
 @media(max-width:767px){button.text-link{min-height:var(--dn-control-h-touch)}}
 /* Empty, loading and error state: icon in a neutral 40px square, title, one sentence, one action. */
 .empty-state{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;gap:var(--dn-space-2);padding:var(--dn-space-10) var(--dn-space-6);min-height:240px}
-.empty-state-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:var(--dn-space-1);border-radius:var(--dn-radius-md);background:var(--dn-bg-subtle);border:1px solid var(--dn-border-subtle);color:var(--dn-text-secondary)}
+.empty-state-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:var(--dn-space-1);color:var(--dn-text-secondary)}
 .empty-state.is-error .empty-state-icon{color:var(--dn-danger-text)}
 .empty-state.is-loading .empty-state-icon svg{animation:dn-spin 1s linear infinite}
 .empty-state h3{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--heading)}
@@ -115,3 +115,6 @@ button.link-action:disabled,.map-root button.link-action:disabled{background:tra
 :root:root .map-root .map-toolbar button.link-action{min-height:var(--control-height);padding:4px 8px}
 @media(max-width:767px){:root:root :is(.modal-foot,.card-footer,.form-actions) button.link-action,:root:root .map-root .map-toolbar button.link-action{min-height:44px}}
 .map-root .map-dialog-foot button.link-action,.map-root .map-panel-foot button.link-action{min-height:44px;padding-inline:8px}
+
+/* Touch targets: 44px on small screens for buttons and text links (icon buttons and switches size themselves). */
+@media(max-width:899px){button:not(.icon,[role=switch],.theme-toggle,.berry-bell,.alert-panel-close,.berry-menu,.berry-nav-toggle),a.link-ext,.link-btn,.sr-info,.cp-link,.site-metadata .cp-link,button.text.link-btn,.berry-customizer a{min-height:var(--dn-control-h-touch)}a.link-ext,.cp-link,.site-metadata .cp-link,.sr-info,.berry-customizer a{display:inline-flex;align-items:center}.sr-info{min-width:var(--dn-control-h-touch);justify-content:center}}
