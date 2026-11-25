@@ -33,13 +33,14 @@ const selfBackup={active:null,lastAttempt:{status:'completed'},destination:{name
  latest:{finishedAt:time(5),size:3.4*1024**2,release:'3.0.0',checksum:'9f2c'.repeat(16),storage:{mode:'sftp',name:'Backup vault'}},
  settings:{enabled:true,schedule:'0 3 * * *',timezone:'UTC',hasPassphrase:true,nextRun:new Date(now+19*3600000).toISOString()}};
 const meta={version:'v2.4.0',publishedAt:iso,releaseUrl:'https://github.com/DahanItamar/DockNest/releases/latest',highlights:{security:false,features:2,improvements:4},highlightsVerified:true,compatibility:{minimumMet:true,updatesDatabase:'yes',fromSchema:5,toSchema:5},downtime:{seconds:240,basis:'last-run'},pauses:['Backups and restores'],notesMarkdown:'# Release notes\n\n## New features\n- Problem reports without personal data.\n- Clearer failure explanations.\n\n## Improvements\n- Faster job list.\n',notesSource:'verified'};
-async function open({width=1440,height=1000,scale=2,theme='light',signedIn=true}={}){
+async function open({width=1440,height=1000,scale=2,theme='light',signedIn=true,extra=null,pageState=state}={}){
  const context=await browser.newContext({viewport:{width,height},deviceScaleFactor:scale,reducedMotion:'reduce',colorScheme:theme});
  await context.addInitScript(t=>{try{localStorage.setItem('docknest-theme',t)}catch{}},theme);
  await context.route('**/api/**',route=>{
   const path=new URL(route.request().url()).pathname;
-  const json=path==='/api/auth/status'&&!signedIn?{authenticated:false,setupRequired:false,csrfToken:'',serverTime:now}:path==='/api/self-backup'?selfBackup:path==='/api/auth/status'?{authenticated:true,setupRequired:false,csrfToken:'demo-fixture',user:{id:'demo-admin',name:'Administrator',role:'admin'},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}
-  :path==='/api/state'?{...state,update:{available:'v2.4.0'}}:path==='/api/storage-targets'?storageTargets:path==='/api/alerts'?alerts:path==='/api/updates'?updates:path==='/api/version'?{version:'2.3.0',schemaVersion:5}
+  const over=extra?extra(path):undefined;
+  const json=over!==undefined?over:path==='/api/auth/status'&&!signedIn?{authenticated:false,setupRequired:false,csrfToken:'',serverTime:now}:path==='/api/self-backup'?selfBackup:path==='/api/auth/status'?{authenticated:true,setupRequired:false,csrfToken:'demo-fixture',user:{id:'demo-admin',name:'Administrator',role:'admin'},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}
+  :path==='/api/state'?{...pageState,update:{available:'v2.4.0'}}:path==='/api/storage-targets'?storageTargets:path==='/api/alerts'?alerts:path==='/api/updates'?updates:path==='/api/version'?{version:'2.3.0',schemaVersion:5}
   :path.startsWith('/api/updates/releases/')?meta:path==='/api/updates/history'?{items:[{id:'r1',version:'v2.3.0',at:time(200),outcome:'succeeded',source:'in-app'},{id:null,version:'v2.2.0',at:time(900),outcome:'succeeded',source:'cli'}],next:null}
   :path==='/api/updates/progress'?{active:false,phase:null,to:null,state:null,stale:false,updatedAt:null,events:[]}:path==='/api/updates/whats-new'?{show:false}:{};
   return route.fulfill({json});
@@ -84,5 +85,20 @@ try{
  // Sign-in page with a few typed characters (never a real password) so the dots show.
  ({context,page}=await open({signedIn:false}));await page.locator('input[name=password]').pressSequentially('0000000000',{delay:20});await page.waitForTimeout(600);await settle(page);await shot(page,'login.png');await context.close();
  ({context,page}=await open({width:402,height:874,scale:2}));await settle(page);await shot(page,'dashboard-mobile.png');await context.close();
+
+ // TrueNAS SCALE server on the Map and a Podman rootless app on Apps (1280x800, 1x, like the other 3.0.0 views).
+ const truenas={id:'demo-nas-1',name:'Storage NAS',note:'',host:'192.0.2.40',username:'admin',port:22,hostKey:'12'.repeat(32),status:'connected',capabilities:{nas:{kind:'truenas',version:'25.04.2'},helperRuntime:'container',stagingBase:'/mnt/tank/docknest',sshIdentity:'sudo',freeBytes:1.4e12,dockerVersion:'27.3.1',engines:[{engine:'docker',rootless:false,version:'27.3.1',cgroupDelegated:true}]}};
+ const nasChecks=[{id:'nas-version',status:'ok',message:'truenas 25.04.2'},{id:'identity',status:'ok',message:'Connected as admin with passwordless sudo.'},{id:'runtime',status:'ok',message:'The helper runtime image is loaded.'},{id:'staging',status:'ok',message:'/mnt/tank/docknest is on persistent storage.',freeBytes:1.4e12},{id:'docker',status:'ok',message:'Docker 27.3.1'}];
+ const nasSite={id:'demo-nas-site',name:'Photo Library',serverId:truenas.id,config:{containers:['photos','photos-db'],domains:[]}};
+ const nasState={...state,servers:[truenas],sites:[nasSite],policies:[{siteId:nasSite.id,enabled:true,schedule:'0 2 * * *',timezone:'UTC',retention:7}],backups:[],jobs:[]};
+ ({context,page}=await open({width:1280,height:800,scale:1,pageState:nasState,extra:p=>p==='/api/servers/'+truenas.id+'/nas'?{nas:truenas.capabilities.nas,identity:'sudo',helperRuntime:'container',stagingBase:truenas.capabilities.stagingBase,ready:true,checks:nasChecks}:undefined}));
+ await go(page,'Map');await page.getByRole('heading',{level:1,name:'Map'}).waitFor();
+ await page.locator('[data-node="server:'+truenas.id+'"]').click();await page.getByText('Helper runtime: Container (no Python on host)').waitFor();await settle(page);await shot(page,'nas-server.png');await context.close();
+ const rootless={engine:'podman',rootless:true,user:'svc',uid:1002};
+ const podSites=[{id:'demo-pod-1',name:'Demo Shop',serverId:servers[0].id,config:{containers:['shop-web'],domains:[]}},{id:'demo-pod-2',name:'Team Portal',serverId:servers[0].id,config:{containers:['portal-app'],runtime:rootless,domains:[]}}];
+ const podServer={...servers[0],capabilities:{...servers[0].capabilities,engines:[{engine:'docker',rootless:false,version:'28.0.1',cgroupDelegated:true},{...rootless,version:'5.2.1',cgroupDelegated:true}]}};
+ const podState={...state,servers:[podServer],sites:podSites,policies:podSites.map(s=>({siteId:s.id,enabled:true,schedule:'0 2 * * *',timezone:'UTC',retention:7})),backups:[],jobs:[]};
+ ({context,page}=await open({width:1280,height:800,scale:1,pageState:podState}));
+ await go(page,'Apps & Schedules');await page.locator('.site-card',{hasText:'Team Portal'}).getByText('Podman rootless, user svc').waitFor();await settle(page);await shot(page,'podman-app.png');await context.close();
  console.log('Documentation screenshots captured with synthetic data only.');
 }finally{await browser.close();}
