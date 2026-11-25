@@ -57,6 +57,7 @@ const cases = [
   // Proxy
   ['proxy', 'unknown:not-checked', c => { c.servers[0].facts = null; }],
   ['proxy', 'fail:no-route', c => { facts(c).routes = []; }],
+  ['proxy', 'unknown:tunnel', c => { facts(c).routes = []; facts(c).containers.push({ name: 'cloudflared', running: true, health: null, published: [] }); }],
   ['proxy', 'warn:route-unknown', c => { facts(c).routes = []; facts(c).notUnderstood = [{ proxy: 'traefik', container: 'forum-web', router: 'api' }]; }],
   ['proxy', 'warn:route-unknown', c => { facts(c).routes = []; facts(c).incomplete = true; }],
   ['proxy', 'ok:routed', c => { facts(c).notUnderstood = [{ proxy: 'traefik', container: 'forum-web', router: 'api' }]; }],

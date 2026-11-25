@@ -76,6 +76,8 @@ function proxyHop(domain, server, declared, sites, servers) {
   // understand only means a missing route may exist after all.
   const partial = facts.incomplete, unknownRoutes = partial || facts.notUnderstood.length > 0;
   const [route] = routesFor(facts, domain);
+  // A Cloudflare Tunnel container reaches the app without any proxy rule, so no route is not a failure.
+  if (!route && facts.containers.some(item => item.running && /cloudflared/i.test(item.name))) return { hop: hop('unknown', 'tunnel', { serverId: server.id }), route: null, site: declared };
   if (!route) return { hop: unknownRoutes ? hop('warn', 'route-unknown') : hop('fail', 'no-route'), route: null, site: declared };
   const params = { proxy: route.proxy, serverId: server.id, ...(route.container ? { container: route.container } : {}) };
   const proxy = facts.proxies.find(item => item.proxy === route.proxy && (item.container ?? null) === (route.container ?? null));

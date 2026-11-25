@@ -7,7 +7,7 @@ import {Paginated} from '../pagination.jsx';
 import {createConnectionsClient,testState,usedByText,usedByShort} from './client.js';
 import {ProviderIcon,SwitchRow} from './parts.jsx';
 import {DeployKeys} from './DeployKeys.jsx';
-import {ConnectionDialog,DeleteConnectionDialog,useReauth} from './ConnectionDialog.jsx';
+import {CloudflareDialog,ConnectionDialog,DeleteConnectionDialog,useReauth} from './ConnectionDialog.jsx';
 import './connections.css';
 
 // Administration, Connections (docs/alert-channels.md, "Screens"): the logins alerts use. One table with straight
@@ -60,7 +60,8 @@ export function ConnectionsPage({api,user,servers=[],openNew=0,onSessionExpired}
   </section>
   {role==='admin'&&<DeployKeys api={api} connections={client} servers={servers}/>}
   {role==='admin'&&<Settings client={client} settings={data.settings} onChanged={load}/>}
-  {(dialog?.kind==='new'||dialog?.kind==='edit')&&<ConnectionDialog key={dialog.connection?.id||'new'} client={client} providers={providers} connection={dialog.connection} role={role} onClose={close} onSaved={async(view,created)=>{close();setNote({ok:true,text:created?`${view.name} is saved. Pick it on an alert node on the Map.`:`${view.name} is saved.`});await load()}}/>}
+  {(dialog?.kind==='new'||dialog?.kind==='edit')&&<ConnectionDialog key={dialog.connection?.id||'new'} client={client} providers={providers} connection={dialog.connection} role={role} onCloudflare={role==='admin'?()=>setDialog({kind:'cloudflare'}):undefined} onClose={close} onSaved={async(view,created)=>{close();setNote({ok:true,text:created?`${view.name} is saved. Pick it on an alert node on the Map.`:`${view.name} is saved.`});await load()}}/>}
+  {dialog?.kind==='cloudflare'&&<CloudflareDialog api={api} onClose={close} onSaved={text=>{close();setNote({ok:true,text})}}/>}
   {dialog?.kind==='delete'&&<DeleteConnectionDialog client={client} connection={dialog.connection} onClose={close} onDeleted={async()=>{close();setNote({ok:true,text:`${dialog.connection.name} is deleted.`});await load()}}/>}
  </div>;
 }

@@ -7,6 +7,9 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Fixed
 
 - The browser tab icon now follows your accent colour.
+- Connections now has Cloudflare (DNS), so the domain check can read records behind Cloudflare.
+- The domain check names the app clearly when no proxy rule routes a domain to it.
+- Sites behind a Cloudflare Tunnel no longer show a failed proxy step.
 
 ## [3.0.0] - 2026-11-25
 
