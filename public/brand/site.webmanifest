@@ -2,30 +2,30 @@
   "id": "/",
   "name": "DockNest",
   "short_name": "DockNest",
-  "description": "Docker Backup & Restore",
+  "description": "Backup & Restore for Self-Hosted Apps",
   "start_url": "/",
   "scope": "/",
   "icons": [
     {
-      "src": "/brand/app-icon-192-deadd2f768.png",
+      "src": "/brand/app-icon-192-1490ad8249.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/brand/app-icon-512-deadd2f768.png",
+      "src": "/brand/app-icon-512-1490ad8249.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/brand/app-icon-maskable-512-deadd2f768.png",
+      "src": "/brand/app-icon-maskable-512-1490ad8249.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#673AB7",
-  "background_color": "#F6F4F9",
+  "theme_color": "#0D786C",
+  "background_color": "#F9F9FB",
   "display": "standalone"
 }

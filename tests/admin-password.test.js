@@ -15,8 +15,8 @@ test('local password setup requires confirmed TOTP and preserves enrolled admini
  let connection;
  try{
   assert.notEqual(run('password',{password:'123'}).status,0);
-  assert.notEqual(run('password',{password:'12345678901234567'}).status,0);
-  const bootstrap=run('password',{password:'1234'});assert.equal(bootstrap.status,0,bootstrap.stderr);
+  assert.notEqual(run('password',{password:'12345678901'}).status,0);assert.notEqual(run('password',{password:'x'.repeat(129)}).status,0);
+  const bootstrap=run('password',{password:'bootstrap-1234'});assert.equal(bootstrap.status,0,bootstrap.stderr);
   const result=JSON.parse(bootstrap.stdout);assert.equal(result.enrollmentRequired,true);assert.equal(fs.existsSync(result.enrollmentFile),true);
   connection=new DatabaseSync(path.join(dir,'state.sqlite'));
   const user=connection.prepare('SELECT * FROM users').get();assert.equal(user.enrolled,0);

@@ -59,7 +59,11 @@ def test_limits(req):
     return memory,float(cpus),limits.get('internet') is True
 def limit_args(memory,cpus):
     # Swap equal to memory means no swap on top. Restart 'no' makes a crash loop visible to the stability check.
-    return ['--memory','%dm'%memory,'--memory-swap','%dm'%memory,'--cpus','%g'%cpus,'--pids-limit','1024','--restart','no','--log-driver','local','--log-opt','max-size=10m','--log-opt','max-file=3']
+    limits=['--memory','%dm'%memory,'--memory-swap','%dm'%memory,'--cpus','%g'%cpus,'--pids-limit','1024','--restart','no']
+    # Podman has no `local` log driver (its create fails with exit 125). Its k8s-file driver takes the same size cap (max-size; it has no
+    # file count), so a test copy's logs stay bounded. Docker: exactly as before.
+    if current_runtime().engine=='podman':return [*limits,'--log-driver','k8s-file','--log-opt','max-size=10m']
+    return [*limits,'--log-driver','local','--log-opt','max-size=10m','--log-opt','max-file=3']
 def test_dir(tid):return RESTORE_TESTS_ROOT/tid
 def test_staging(tid):return RESTORE_ROOT/tid
 def test_state(tid,create=False):
