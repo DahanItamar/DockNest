@@ -1,6 +1,6 @@
 # Automatic restore tests (ADR, PM-22)
 
-Status: accepted design for 2.9.0. Implemented in 2.9.0; out of beta since 2.13.1. Date: 2026-10-26.
+Status: accepted design for 2.9.0. Implemented in 2.9.0; validated since 2.13.1. Date: 2026-10-26.
 Backlog: PM-22 (this design), PM-23 (build), PM-19 (storage report part). Owner answers: Q9 (test server), Q6 (no
 incremental backups in 2.9.0). Release order: restore tests are 2.9.0; the radar moves to 2.10.0.
 
@@ -9,7 +9,7 @@ the result, and removes everything it created. It answers one question on a sche
 I needed it today?"
 
 Real restore tests count as validated only when the Linux integration test below passes (see AGENTS.md). Until then
-the feature ships with its own "beta" label, like moves did. It left beta in 2.13.1 after real-app validation (see
+the feature was not claimed as validated at first. It was validated in 2.13.1 on real apps (see
 [acceptance.md](acceptance.md)).
 
 ## Decisions at a glance

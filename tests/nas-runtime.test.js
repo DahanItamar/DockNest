@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { helperArgv, helperCommand, identityFor, LEGACY_HOST_COMMAND, LOADER, quote, CommandRefused } from '../src/nas/command.js';
+import { helperArgv, helperCommand, identityFor, bindNasGate, LEGACY_HOST_COMMAND, LOADER, quote, CommandRefused } from '../src/nas/command.js';
+bindNasGate(() => true); // the gate itself is tested in nas-gates.test.js
 import { computeMounts, checkMountPath, MountRefused } from '../src/nas/mounts.js';
 import { prepareHelper, setSudoAuditSink, auditSudo } from '../src/nas/run.js';
 import { detectNas, parseUnraidVersion, parseSynologyVersion, parseTrueNasVersion, trueNasSupported, pythonUsable, chooseStagingBase } from '../src/nas/detect.js';
@@ -103,8 +104,8 @@ function fakeRun({ files = {}, python = null, docker = null, image = null, sudoO
 const unraidFiles = { '/etc/unraid-version': 'version="6.12.10"\n' };
 
 test('NAS detection from file samples', async () => {
-  assert.deepEqual(await detectNas(fakeRun({ files: unraidFiles }).run), { kind: 'unraid', version: '6.12.10' });
-  assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x=1', '/etc.defaults/VERSION': 'majorversion="7"\nproductversion="7.2.1"\n' } }).run), { kind: 'synology', version: '7.2.1' });
+  assert.deepEqual(await detectNas(fakeRun({ files: unraidFiles }).run, { unraid: true }), { kind: 'unraid', version: '6.12.10' });
+  assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x=1', '/etc.defaults/VERSION': 'majorversion="7"\nproductversion="7.2.1"\n' } }).run, { synology: true }), { kind: 'synology', version: '7.2.1' });
   assert.deepEqual(await detectNas(fakeRun({ files: { '/etc/version': 'TrueNAS-SCALE 25.10.0\n', midclt: 1 } }).run), { kind: 'truenas', version: '25.10.0' });
   assert.equal(await detectNas(fakeRun({ files: { '/etc/version': 'TrueNAS-SCALE 25.10.0\n' } }).run), null, 'midclt is required');
   assert.equal(await detectNas(fakeRun({ files: { '/etc/synoinfo.conf': 'x' } }).run), null);
@@ -131,7 +132,7 @@ test('staging base is on persistent storage', () => {
 
 test('readiness: root on Unraid with Python uses the host runtime', async () => {
   const fake = fakeRun({ files: unraidFiles, python: '3 11', docker: '27.0.3', existing: ['/mnt/cache'] });
-  const result = await checkNas({ run: fake.run, username: 'root' });
+  const result = await checkNas({ run: fake.run, username: 'root', unraid: true });
   assert.equal(result.ready, true); assert.equal(result.helperRuntime, 'host'); assert.equal(result.identity, 'root');
   assert.equal(result.stagingBase, '/mnt/cache/system/docknest');
   assert.equal(result.checks.find(c => c.id === 'docker').status, 'warn');
@@ -159,13 +160,13 @@ test('readiness: sudo user, passwordless, on TrueNAS', async () => {
 test('readiness: old TrueNAS is refused, no-Python needs a pinned image, low space and lost keys are named', async () => {
   const old = await checkNas({ run: fakeRun({ files: { '/etc/version': 'TrueNAS-SCALE 24.04.2', midclt: 1 }, python: '3 11', docker: '27.0.0' }).run, username: 'root' });
   assert.equal(old.ready, false); assert.match(old.checks[0].message, /Kubernetes/);
-  const noImage = await checkNas({ run: fakeRun({ files: unraidFiles, python: null, docker: '27.0.0' }).run, username: 'root' });
+  const noImage = await checkNas({ run: fakeRun({ files: unraidFiles, python: null, docker: '27.0.0' }).run, username: 'root' , unraid: true });
   assert.equal(noImage.checks.find(c => c.id === 'runtime').status, 'fail');
-  const pinned = await checkNas({ run: fakeRun({ files: unraidFiles, python: '3 8', docker: '27.0.0', image: fakeId }).run, username: 'root', imageId: fakeId });
+  const pinned = await checkNas({ run: fakeRun({ files: unraidFiles, python: '3 8', docker: '27.0.0', image: fakeId }).run, username: 'root', imageId: fakeId , unraid: true });
   assert.equal(pinned.helperRuntime, 'container'); assert.equal(pinned.checks.find(c => c.id === 'runtime').status, 'ok');
-  const unloaded = await checkNas({ run: fakeRun({ files: unraidFiles, python: null, docker: '27.0.0' }).run, username: 'root', imageId: fakeId });
+  const unloaded = await checkNas({ run: fakeRun({ files: unraidFiles, python: null, docker: '27.0.0' }).run, username: 'root', imageId: fakeId , unraid: true });
   assert.equal(unloaded.checks.find(c => c.id === 'runtime').status, 'warn');
-  const tight = await checkNas({ run: fakeRun({ files: unraidFiles, python: '3 11', docker: '28.0.0', free: 1024 ** 3, authKeys: false }).run, username: 'root' });
+  const tight = await checkNas({ run: fakeRun({ files: unraidFiles, python: '3 11', docker: '28.0.0', free: 1024 ** 3, authKeys: false }).run, username: 'root' , unraid: true });
   assert.equal(tight.checks.find(c => c.id === 'staging').status, 'fail');
   assert.equal(tight.checks.find(c => c.id === 'key-persistence').status, 'warn');
   assert.ok(tight.checks.find(c => c.id === 'hard-links'));

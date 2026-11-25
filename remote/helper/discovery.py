@@ -450,6 +450,12 @@ def engine_version(runtime,format):
     try:answer=runtime.cli('version','--format',format,timeout=20).decode('utf-8','replace').strip()
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):return None
     return answer if ENGINE_VERSION.fullmatch(answer) else None
+DOCKER_NOT_RUNNING='Docker is installed but not running. Start Docker on this server, then check again.'
+def rootful_docker_down(which=shutil.which,call=None):
+    """True when the Docker CLI is installed but its engine does not answer (not started, crashed or not reachable)."""
+    if not which('docker'):return False
+    try:(call or run)(['docker','version','--format','{{.Server.Version}}'],timeout=15);return False
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):return True
 def engine_probe(subuid_text=None,lookup=None,lstat=os.lstat,which=shutil.which,delegated=cgroup_delegated,version=engine_version):
     """Engines found on this server: [{engine, rootless, user?, uid?, version, cgroupDelegated}]. Never raises."""
     engines=[]

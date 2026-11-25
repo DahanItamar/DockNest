@@ -483,7 +483,7 @@ def readiness(cfg):
         try:
             fn();checks.append({'name':name,'ok':True,'message':'Ready'})
         except Exception as error:
-            message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
+            message=str(error) if isinstance(error,ValueError) else DOCKER_NOT_RUNNING if isinstance(error,subprocess.CalledProcessError) and rootful_docker_down() else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
     selected={}
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:selected.update(containers=preflight(cfg)))
@@ -730,7 +730,7 @@ def capture(req,output=None):
             # The inventory pass reads each archive once; the second pass must give the same bytes (SHA-256), so a key
             # read here is a key in the package.
             for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
-            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv('save',*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
+            inventory=stream_artifacts(archive,[('images.tar',current_runtime().argv(*current_runtime().save_arguments(len(saved_ids)+len(images)),*saved_ids,*images),None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
             # Streamed: the plaintext dump never stays in the staging folder.
             for service in plan['services']:

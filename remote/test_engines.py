@@ -180,4 +180,21 @@ class EngineErrorTests(unittest.TestCase):
             helper.other_engine_containers(many, {'u%d' % n: '/home/u%d' % n for n in range(40)}, errors)
         self.assertEqual(len(errors), helper.ENGINE_LIST_LIMIT)
 
+class DockerStoppedTests(unittest.TestCase):
+    def test_a_stopped_rootful_engine_is_told_apart_from_no_docker(self):
+        stopped=lambda args,**kw:(_ for _ in ()).throw(subprocess.CalledProcessError(1,args))
+        self.assertTrue(helper.rootful_docker_down(which=lambda name:'/usr/bin/docker',call=stopped))
+        self.assertFalse(helper.rootful_docker_down(which=lambda name:'/usr/bin/docker',call=lambda args,**kw:b'29.1.0'))
+        self.assertFalse(helper.rootful_docker_down(which=lambda name:None,call=stopped),'no Docker CLI is not "installed but not running"')
+        timeout=lambda args,**kw:(_ for _ in ()).throw(subprocess.TimeoutExpired(args,15))
+        self.assertTrue(helper.rootful_docker_down(which=lambda name:'/usr/bin/docker',call=timeout))
+    def test_readiness_says_docker_is_not_running_in_plain_words(self):
+        failing=subprocess.CalledProcessError(1,['docker','inspect','web'])
+        with patch('helper.preflight',side_effect=failing),patch('helper.rootful_docker_down',return_value=True):
+            result=helper.readiness({'containers':['web'],'healthUrl':'https://example.org','maintenance':{}})
+        self.assertEqual(result['checks'][0]['message'],helper.DOCKER_NOT_RUNNING)
+        with patch('helper.preflight',side_effect=failing),patch('helper.rootful_docker_down',return_value=False):
+            result=helper.readiness({'containers':['web'],'healthUrl':'https://example.org','maintenance':{}})
+        self.assertIn('Could not verify',result['checks'][0]['message'],'any other failure keeps the generic line')
+
 if __name__ == '__main__': unittest.main()

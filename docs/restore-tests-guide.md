@@ -4,7 +4,7 @@ A backup is only worth something if it comes back. An automatic restore test che
 latest verified backup of an app onto a test server, starts it, runs checks, records the result and removes
 everything it created.
 
-Restore tests left beta in 2.13.1: they pass DockNest's Linux Docker test on every release and were validated on real
+Restore tests pass DockNest's Linux Docker test on every release and were validated on real
 production apps (see [acceptance.md](acceptance.md)). A pass shows the backup restores and the app starts in isolation;
 it does not test every business workflow of your application. The design is in [restore-tests.md](restore-tests.md).
 

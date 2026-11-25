@@ -185,7 +185,7 @@ async function boards(width,scheme){
  await shot(page,'01','edit',width,scheme);await layout(page,'edit '+tag);
  // The new dialog carries the edge, and an existing dialog is unchanged.
  const edge=await dlg(page).evaluate(el=>{const c=getComputedStyle(el);return {w:c.borderTopWidth,c:c.borderTopColor}});
- assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(51, 55, 62)':'rgb(211, 216, 223)','dialog edge colour');
+ assert.equal(edge.w,'1px');assert.equal(edge.c,scheme==='dark'?'rgb(54, 58, 63)':'rgb(217, 217, 224)','dialog edge colour');
  // 02 environment: write-only values
  await dirtyEnv(page);
  await dlg(page).getByLabel('New value for SECRET_KEY').waitFor();
