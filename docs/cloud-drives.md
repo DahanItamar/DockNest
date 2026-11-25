@@ -4,7 +4,7 @@ DockNest 3.0.0 can keep backups on Google Drive, OneDrive, Dropbox, a WebDAV ser
 SMB share. The transport is a bundled [rclone](https://rclone.org). DockNest encrypts every package before it reaches
 rclone, so rclone only ever moves ciphertext; rclone's own `crypt`, daemon and mount are not used.
 
-This page covers the backend and the screens.
+This page covers the backend and the screens. To prepare the provider side (your own Google app, test users, revoking access), see [Connecting a cloud drive](cloud-drive-setup.md).
 
 ## The screens
 
@@ -40,13 +40,13 @@ Storage, **Add storage destination**: the provider list has the groups Cloud dri
    container and returns the provider's sign-in address. Only one address sign-in can be open; it ends after 10 minutes.
 2. The owner signs in in their own browser. The provider redirects to `http://127.0.0.1:53682/...`, which does not open on
    their computer. They copy that address and paste it:
-   `POST /api/storage-targets/rclone/authorize/:sessionId { pasted }`. DockNest accepts only host `127.0.0.1`, port `53682`,
+   `POST /api/storage-targets/rclone/authorize/:sessionId { pasted }`. DockNest accepts only host `127.0.0.1` or `localhost` (Microsoft and Dropbox use the second), port `53682`,
    path `/`, no credentials or fragment, the issued `state`, and `code` and `state` once each (a provider's `scope`,
    `authuser` and `prompt` are read and ignored). It builds the request itself from `code` and `state`, sends it to the
-   local listener and keeps the resulting token, sealed, in memory for the session.
+   local listener (always at `127.0.0.1`, whichever name was pasted) and keeps the resulting token, sealed, in memory for the session.
 3. Alternatively `flow: "token"`: paste the JSON that `rclone authorize "drive"` printed on the owner's computer. Only
    `access_token`, `token_type`, `refresh_token`, `expiry` (and a numeric `expires_in`) are accepted.
-4. The owner's own app (client ID and secret, strongly recommended for Google Drive: the shared sign-in app has one request limit for everyone, so Google answers `rateLimitExceeded` and a test can take minutes; DockNest then says "Google is limiting the shared sign-in app. Use your own Google app ID for steady speed.") goes to the helper through its environment.
+4. The owner's own app (client ID and secret, strongly recommended for Google Drive: the shared sign-in app has one request limit for everyone, so Google answers `rateLimitExceeded` and a test can take minutes; DockNest then says "Google is limiting the shared sign-in app. Use your own Google app ID for steady speed." If your app is in Google's "Testing" mode, add your Google account as a test user, or Google answers 403 access_denied.) goes to the helper through its environment.
 5. `POST /api/storage-targets/rclone/connect` creates the destination from the session (OAuth) or from a login (WebDAV, SMB),
    tests it and saves it. Scopes: Drive `drive.file`, OneDrive `Files.ReadWrite` + `offline_access`.
 

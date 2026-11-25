@@ -44,3 +44,8 @@ test('the page polls until the test is done, and surfaces a failure or a vanishe
   await assert.rejects(waitForTest(sequence([{ state: 'none' }]), '/p', options), /no longer running/);
   await assert.rejects(waitForTest(async () => ({ state: 'checking' }), '/p', { ...options, tries: 3 }), /still running/);
 });
+test('the Google config always asks for drive.file, so listing, reading and removing touch only DockNest files', () => {
+  const text = buildConfig({ backend: 'drive', settings: {} }, { token: { access_token: 'a' } });
+  assert.match(text, /^scope = drive\.file$/m);
+  assert.doesNotMatch(text, /^scope = drive$/m);
+});

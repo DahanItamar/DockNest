@@ -33,11 +33,15 @@ export function classify(stderr, exitCode, backend) {
   if (backend === 'onedrive' && MS_REFUSED.test(text)) return { reason: 'sign_in_refused', needsReconnect: false, message: `Microsoft refused the sign-in. Check the account and the app settings, then try again.` };
   if (RATE.test(text)) return { reason: 'rate_limited', needsReconnect: false, message: backend === 'drive' ? GOOGLE_SHARED_APP : `${label} is limiting requests, DockNest retries at the next run.` };
   if (QUOTA.test(text)) return { reason: 'quota', needsReconnect: false, message: `${label} has no space left for this backup.` };
-  if (exitCode === 3 || exitCode === 4 || MISSING.test(text)) return { reason: 'not_found', needsReconnect: false, missing: true, message: `The file or folder is not on ${label}.` };
+  if (exitCode === 3 || exitCode === 4 || MISSING.test(text)) return { reason: 'not_found', needsReconnect: false, missing: true, message: backend === 'drive' ? 'The file or folder is not on Google Drive, or it was uploaded by a different Google app or access level, so DockNest cannot see it.' : `The file or folder is not on ${label}.` };
   if (TLS.test(text)) return { reason: 'tls', needsReconnect: false, message: `${label} could not be trusted: its security certificate was not accepted. Check that the server clock is right and that the system certificates are installed.` };
   if (NETWORK.test(text)) return { reason: 'network', needsReconnect: false, message: `${label} could not be reached. Check the network connection.` };
   return { reason: 'failed', needsReconnect: false, message: `${label} did not accept the request.` };
 }
+// Google Drive's `drive.file` access shows only files the same Google app created. After the app (client ID) or access level
+// changes, earlier backups are not found, which is not damage and must never be reported as an integrity failure.
+export const NOT_VISIBLE_MESSAGE = "This backup was uploaded by a different Google app or access level, so DockNest can't see it.";
+export const notVisibleOnProvider = error => error?.reason === 'not_found' && error?.backend === 'drive';
 // Status 502, never 401: a provider's refusal must not end the owner's DockNest session.
 export function rcloneError(info, extra = {}) {
   return Object.assign(new Error(info.message), { code: info.missing ? 'ENOENT' : 'ERCLONE', reason: info.reason, needsReconnect: info.needsReconnect, status: 502, expose: true, publicCode: info.reason, ...extra });

@@ -30,6 +30,8 @@ import { recordScan, cleanScan } from './keys-safe/store.js';
 import { takeRouting, withoutRouting } from './domains/check.js';
 import { parseCapabilities } from './nas/command.js';
 import { withRestoreDecisions } from './restore-decisions.js';
+import { NOT_VISIBLE_MESSAGE, notVisibleOnProvider } from './storage/rclone-errors.js';
+import { hiddenByClientChange } from './storage/rclone-state.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
@@ -144,7 +146,7 @@ async function executeScrub(job){
  // manifests, which mirror the sealed ones), so a broken chain is found from any of its packages. A broken chain fails
  // the job, marks the backups that can no longer be restored as unverified (the next backup is then full) and raises
  // the site's "Backup failed" alert (src/alerts/detect.js, details.chainBroken).
- let members=null,damaged=null,chainError=null;const brokenDependents=[];let dependentError=null;
+ let members=null,damaged=null,chainError=null,invisible=null;const brokenDependents=[];let dependentError=null;
  if(backup&&linkOf(backupId)){
   try{members=verifyChainLinks(loadChain(backupId));}catch(error){chainError=error;}
   for(const dependent of dependentsOf(backupId)){try{verifyChainLinks(loadChain(dependent));}catch(error){brokenDependents.push(dependent);dependentError??=error;}}
@@ -153,7 +155,13 @@ async function executeScrub(job){
  try{
   stage(job.id,'verifying');
   if(chainError)throw chainError;
-  for(const member of members??[backup]){if(await verifyEncrypted(packagePath(member)).catch(()=>null)!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}}
+  for(const member of members??[backup]){
+   // Google Drive hides files another app (or access level) uploaded: that is not damage, and nothing is marked failed or unverified.
+   const sum=await verifyEncrypted(packagePath(member)).catch(error=>{if(notVisibleOnProvider(error)&&hiddenByClientChange(packagePath(member),member.created_at))invisible=error;return null;});
+   if(invisible)break;
+   if(sum!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}
+  }
+  if(invisible){transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?,details=?",now(),NOT_VISIBLE_MESSAGE,JSON.stringify({backupId,notVisible:true})))return;audit('worker','backup.scrub.not_visible',backupId,{job:job.id});});return;}
   const passed=()=>{for(const member of members??[backup]){recordVerification(member.id,'integrity',{status:'passed',method:member.id===backupId?'full AES-256-GCM authentication and SHA256':'full AES-256-GCM authentication and SHA256, as part of the chain of '+backupId},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(member.id);}};
   if(brokenDependents.length){
    // This package and the chain below it authenticate; a backup built on it cannot be restored.
