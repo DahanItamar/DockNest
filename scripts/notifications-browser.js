@@ -52,11 +52,11 @@ const unread = async () => (await (await call('GET', '/notifications/unread-coun
 let browser; const failures = [];
 try {
   browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true });
-  const open = async ({ width = 1280, height = 800, scheme = 'light' } = {}) => {
+  const open = async ({ width = 1280, height = 800, scheme = 'light', clock = false } = {}) => {
     const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme });
     await context.addCookies([{ name: 'dbm_session', value: token, url: base }]);
     await context.addInitScript(value => { try { localStorage.setItem('docknest-theme', value); } catch { /* none */ } }, scheme);
-    const page = await context.newPage(); page.setDefaultTimeout(12000); page.on('pageerror', error => failures.push('pageerror: ' + error.message));
+    const page = await context.newPage(); page.setDefaultTimeout(12000); if (clock) await page.clock.install(); page.on('pageerror', error => failures.push('pageerror: ' + error.message));
     page.on('console', message => { if (message.type() === 'error' && !/Failed to load resource/.test(message.text())) failures.push('console: ' + message.text()); });
     await page.goto(base);
     const ask = page.getByRole('dialog', { name: 'Check GitHub daily for new versions?' });
@@ -145,16 +145,18 @@ try {
     await context.close();
   }
 
-  // Success toast clears in 5 s and pauses on hover.
+  // Success toast clears in 5 s and pauses on hover. The page clock is controlled, so there are no real sleeps: time moves only when we run it.
   {
-    const { context, page } = await open({});
-    await page.evaluate(() => { document.title = document.title; });
+    const { context, page } = await open({ clock: true });
     emit({ type: 'backup.succeeded', key: 'site:toast-ok', siteName: 'Shop', serverName: 'Server 1' });
-    await page.locator('.nc-toast-success').first().waitFor({ timeout: 9000 });
-    await page.locator('.nc-toast-success').first().hover();
-    await page.waitForTimeout(6500); assert.equal(await page.locator('.nc-toast-success').count(), 1, 'paused while hovered');
-    await page.mouse.move(5, 5); await page.waitForTimeout(5600); assert.equal(await page.locator('.nc-toast-success').count(), 0, 'success clears itself');
-    assert.equal(await page.locator('.nc-toast[role=alert]').count() >= 0, true);
+    const toast = page.locator('.nc-toast-success', { hasText: 'Shop on Server 1' });
+    for (let step = 0; step < 40 && !(await toast.count()); step++) await page.clock.runFor(1000); // the 5 s state poll brings it in
+    await toast.waitFor();
+    await toast.hover();
+    await page.clock.runFor(30_000); assert.equal(await toast.count(), 1, 'paused while hovered, however long');
+    await page.mouse.move(5, 5);
+    await page.clock.runFor(2000); assert.equal(await toast.count(), 1, 'still there while time is left');
+    await page.clock.runFor(4000); await toast.waitFor({ state: 'detached' }); // success clears itself
     await context.close();
   }
 } finally { await browser?.close(); http.close(); }
