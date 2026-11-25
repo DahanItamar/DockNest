@@ -20,8 +20,8 @@ export function AdminSetup({api,Field,status,onAuth,onExit}) {
   {!enrollment?<>
    {status.setupRequired&&<><AuthField label="Administrator name" name="name" required maxLength={100}/><AuthField label="Administrator email" name="email" type="email" required maxLength={254}/></>}
    <PasswordField label="Setup token" name="setupToken" autoComplete="off" required help="Available only in /opt/docknest/data/setup.token on the deployment server. Never share it in chat."/>
-   <PasswordField label="System password" name="password" autoComplete="new-password" minLength={4} maxLength={16} required/>
-   <PasswordField label="Confirm system password" name="confirmPassword" autoComplete="new-password" minLength={4} maxLength={16} required error={error==='Passwords do not match.'}/>
+   <PasswordField label="System password" name="password" autoComplete="new-password" minLength={status.setupRequired?12:undefined} maxLength={status.setupRequired?128:undefined} help={status.setupRequired?'12 to 128 characters. Use a passphrase.':undefined} required/>
+   <PasswordField label="Confirm system password" name="confirmPassword" autoComplete="new-password" minLength={status.setupRequired?12:undefined} maxLength={status.setupRequired?128:undefined} required error={error==='Passwords do not match.'}/>
   </>:<>
    <img className="auth-qr" src={enrollment.qrDataUrl} alt="Administrator authenticator setup QR"/>
    <details><summary>Manual authenticator setup</summary><code>{enrollment.secret}</code></details>

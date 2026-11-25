@@ -17,6 +17,7 @@ import { config } from '../config.js';
 import { RCLONE_MINIMUM } from './rclone-pin.js';
 import { BACKENDS, backendLabel, classify, rcloneError } from './rclone-errors.js';
 import { parseToken } from './rclone-input.js';
+import { listOneDrives } from './onedrive-graph.js';
 import { loadSecrets, saveToken, markReconnect } from './rclone-state.js';
 
 export const scheme = 'rclone', label = 'Cloud drive';
@@ -347,12 +348,14 @@ export async function account(options) {
     return typeof value === 'string' && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
   } catch { return null; }
 }
-// OneDrive: the drives the signed-in account can use, for the short list shown after sign-in. [] when rclone cannot list them.
+// The drives the signed-in account can use, for the short list shown after sign-in. OneDrive asks Microsoft Graph with the
+// fresh access token; Google Drive has `rclone backend drives`. A failure is an error, never an empty list.
 export async function drives(options) {
-  try {
-    const data = JSON.parse(await run(options, ['backend', 'drives', REMOTE + ':']));
-    return (Array.isArray(data) ? data : []).filter(item => /^[A-Za-z0-9!_.-]{1,200}$/.test(String(item.id)))
-      .map(item => ({ id: String(item.id), name: String(item.name ?? item.id).slice(0, 100), type: ['personal', 'business', 'documentLibrary'].includes(item.driveType) ? item.driveType : 'personal' }));
-  } catch { return []; }
+  if (options.backend === 'onedrive') return listOneDrives(secretsOf(options).token?.access_token);
+  let data;
+  try { data = JSON.parse(await run(options, ['backend', 'drives', REMOTE + ':'])); }
+  catch (error) { throw error.publicCode ? error : Object.assign(new Error('The drives of this account could not be listed.'), { status: 502, expose: true, publicCode: 'drives_failed' }); }
+  return (Array.isArray(data) ? data : []).filter(item => /^[A-Za-z0-9!_.-]{1,200}$/.test(String(item.id)))
+    .map(item => ({ id: String(item.id), name: String(item.name ?? item.id).slice(0, 100), type: ['personal', 'business', 'documentLibrary'].includes(item.driveType) ? item.driveType : 'personal' }));
 }
 export { BACKENDS };

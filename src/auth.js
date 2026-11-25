@@ -1,3 +1,4 @@
+import { globalLoginGuard, recordGlobalFailure, rememberSignIn } from './login-guard.js';
 import { Router } from 'express';
 import fs from 'node:fs';
 import { clientKey } from './client-key.js';
@@ -17,6 +18,9 @@ const CHALLENGE_MS=5*60_000;
 export const opaque = () => randomBytes(32).toString('base64url');
 const tokenSchema=z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const passwordSchema=z.string().min(1).max(256);
+// Only NEW system passwords (first-admin setup, changing it) follow this policy. Signing in accepts whatever is stored, so an
+// existing 4-16 character password keeps working until its owner changes it.
+export const newPasswordSchema=z.string().min(12,'Choose a system password of 12 to 128 characters.').max(128,'Choose a system password of 12 to 128 characters.');
 const cookieOptions={httpOnly:true,secure:config.secureCookies,sameSite:'strict',path:'/',maxAge:ABSOLUTE_MS};
 const dummyHash=passwordHash('unavailable-credential-timing-protection');
 const userView=user=>({id:user.id,name:user.name||user.email,email:user.email,role:user.role});
@@ -140,7 +144,7 @@ auth.get('/status',(req,res)=>{
  res.json({setupRequired:!db.prepare('SELECT 1 FROM users LIMIT 1').get(),authenticated:Boolean(req.user),securityPolicy,...(req.user?{user:req.user,csrfToken:req.session.csrf_token,...sessionTimes(req.session)}:{serverTime:Date.now()})});
 });
 auth.post('/setup',rateLimit('setup',5),async(req,res)=>{
- const data=z.object({email:z.email().max(254).transform(v=>v.toLowerCase()),name:z.string().trim().min(1).max(100).optional(),password:z.string().min(4).max(16),setupToken:z.string().min(1).max(256)}).parse(req.body);
+ const data=z.object({email:z.email().max(254).transform(v=>v.toLowerCase()),name:z.string().trim().min(1).max(100).optional(),password:newPasswordSchema,setupToken:z.string().min(1).max(256)}).parse(req.body);
  if(!validSetupToken(data.setupToken))return res.status(403).json({error:'Invalid setup token.'});
  const user=transaction(()=>{
   if(db.prepare('SELECT 1 FROM users LIMIT 1').get())throw Object.assign(new Error('Administrator already exists. Sign in instead.'),{status:409});
@@ -153,9 +157,9 @@ auth.post('/setup',rateLimit('setup',5),async(req,res)=>{
  });
  res.status(201).json(await firstEnrollment(user));
 });
-auth.post('/login',rateLimit('login'),async(req,res)=>{
+auth.post('/login',globalLoginGuard,rateLimit('login'),async(req,res)=>{
  const data=z.object({password:passwordSchema,setupToken:z.string().max(256).optional()}).parse(req.body);
- if(!sharedPasswordMatches(data.password)){audit('anonymous','auth.login_failed');return res.status(401).json({error:'Invalid password or code.'});}
+ if(!sharedPasswordMatches(data.password)){recordGlobalFailure();audit('anonymous','auth.login_failed');return res.status(401).json({error:'Invalid password or code.'});}
  const users=db.prepare('SELECT * FROM users ORDER BY created_at,id').all();
  const pending=users[0];
  if(pending&&pending.role==='admin'&&!pending.enrolled&&!pending.disabled&&!users.some(user=>user.role==='admin'&&user.enrolled&&!user.disabled)){
@@ -164,7 +168,7 @@ auth.post('/login',rateLimit('login'),async(req,res)=>{
  }
  res.json({challenge:challengeFor()});
 });
-auth.post('/verify',rateLimit('verify',15),(req,res)=>{
+auth.post('/verify',globalLoginGuard,rateLimit('verify',15),(req,res)=>{
  const data=z.object({challenge:tokenSchema,code:z.string().min(6).max(32)}).parse(req.body);
  const result=transaction(()=>{
   const now=Date.now(),challenge=db.prepare('SELECT * FROM login_challenges WHERE token_hash=? AND expires_at>? AND attempts<5 AND credential_epoch=?').get(digest(data.challenge),now,credentialEpoch());
@@ -184,8 +188,9 @@ auth.post('/verify',rateLimit('verify',15),(req,res)=>{
   audit(user.id,match.index>=0?'auth.recovery_login':'auth.login',user.id);
   return result;
  });
- if(!result)return res.status(401).json({error:'Invalid password or code.'});
+ if(!result){recordGlobalFailure();return res.status(401).json({error:'Invalid password or code.'});}
  res.cookie('dbm_session',result.token,cookieOptions);
+ rememberSignIn(req,res,cookieOptions);
  const {token:_token,...view}=result;res.json(view);
 });
 auth.post('/reauth',requireAuth,csrf,rateLimit('reauth',10),(req,res)=>{
@@ -225,12 +230,13 @@ auth.post('/invite-info',rateLimit('invite-info',30),(req,res)=>{
  if(!invitationValid(invitation))return inviteUnavailable(res);
  res.json({name:invitation.name,expiresAt:invitation.expires_at,serverTime:Date.now()});
 });
-auth.post('/invite-start',rateLimit('invite-start',10),async(req,res)=>{
+auth.post('/invite-start',globalLoginGuard,rateLimit('invite-start',10),async(req,res)=>{
  const data=z.object({token:tokenSchema,password:passwordSchema}).parse(req.body);
  const invitation=invitationFor(data.token);
  if(!invitationValid(invitation))return inviteUnavailable(res);
  const epoch=credentialEpoch();
  if(!sharedPasswordMatches(data.password)){
+  recordGlobalFailure();
   db.prepare('UPDATE invitations SET attempts=attempts+1 WHERE id=?').run(invitation.id);
   return res.status(401).json({error:'Invalid password.'});
  }

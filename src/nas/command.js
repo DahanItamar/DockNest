@@ -43,9 +43,16 @@ export function parseCapabilities(server) {
 }
 // What a stored server needs. Sudo and the container runtime are only ever used on a server detected as a NAS; a
 // non-root user on any other server keeps today's behaviour (the helper itself refuses without root).
-export function identityFor(server) {
+// A saved Synology or Unraid server stops counting as a NAS while its support is off (src/nas/gate.js), so it goes
+// back to the normal root identity. The process binds the gate once; it reads the setting live on every call and the
+// default is off. `enabled` overrides it, for example { synology: true }.
+let gateOn = () => false;
+export const bindNasGate = read => { gateOn = read; };
+export function identityFor(server, enabled = null) {
   const facts = parseCapabilities(server);
-  const nasKind = facts?.nas?.kind ?? null;
+  const kind = facts?.nas?.kind ?? null;
+  const on = kind === 'synology' || kind === 'unraid' ? (enabled ? Boolean(enabled[kind]) : gateOn(kind)) : true;
+  const nasKind = on ? kind : null;
   const root = String(server?.username ?? '') === 'root';
   if (!nasKind) return { identity: 'root', runtime: 'host', nasKind: null };
   return { identity: root ? 'root' : 'sudo', runtime: facts.helperRuntime === 'container' ? 'container' : 'host', nasKind };

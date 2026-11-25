@@ -12,6 +12,8 @@ const masterKey = randomBytes(32);
 await writeFile(process.env.MASTER_KEY_FILE, masterKey.toString('base64'));
 const { db } = await import('../src/db.js');
 const engine = await import('../src/engine.js');
+const { bindNasGate } = await import('../src/nas/command.js');
+bindNasGate(() => true); // these tests are about the Unraid restore hook, not the gate
 const at = new Date().toISOString();
 const serverRow = name => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(serverId, name, '192.0.2.10', 22, 'root', 'unused', 'a'.repeat(64), 'connected', at); return serverId; };
 const siteRow = (serverId, name, config = { containers: ['wiki-web-1'], composeFiles: ['/srv/wiki/compose.yaml'], configFiles: ['/srv/wiki/.env'] }) => { const siteId = randomUUID(); db.prepare('INSERT INTO sites(id,server_id,name,config,created_at) VALUES(?,?,?,?,?)').run(siteId, serverId, name, JSON.stringify(config), at); return siteId; };
