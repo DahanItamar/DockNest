@@ -39,7 +39,30 @@ function ReauthBox({client,onVerified,onCancel,verifyLabel='Verify and continue'
  </section>;
 }
 
-export function ConnectionDialog({client,providers,connection,initialProvider,prefill,role,onClose,onSaved}){
+export const CLOUDFLARE_DNS='cloudflare-dns';
+
+// Cloudflare (DNS): the same token the Map move flow saves (PUT /settings/cloudflare-dns). Read-only DNS is enough for the domain check.
+// The token is typed once and never shown back; the API checks it is active, covers the domain and can read DNS.
+export function CloudflareDialog({api,onClose,onSaved}){
+ const ref=useRef(null),guard=useReauth({reauth:(password,code)=>api('/auth/reauth',{password,code})}),[info,setInfo]=useState(null),[token,setToken]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{api('/settings/cloudflare-dns').then(setInfo).catch(()=>setInfo({configured:false}))},[api]);
+ async function run(fn,done){setBusy(true);setError('');await guard.run(async()=>{await fn();setToken('');await done()},e=>setError(e.message||'Cloudflare did not accept this.'));setBusy(false)}
+ const save=()=>run(()=>api('/settings/cloudflare-dns',{token:token.trim()},'PUT'),()=>onSaved('Cloudflare (DNS) is saved.')),remove=()=>run(()=>api('/settings/cloudflare-dns',undefined,'DELETE'),()=>onSaved('Cloudflare (DNS) is removed.'));
+ return <dialog ref={ref} className="site-wizard rt-dialog cx-dialog" aria-labelledby="cx-cf-title" onCancel={e=>{e.preventDefault();onClose()}}>
+  <div className="modal-head"><h2 id="cx-cf-title">Cloudflare (DNS)</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>
+  <form className="modal-body cx-form" onSubmit={e=>{e.preventDefault();if(token.trim())save()}}>
+   <p className="t-caption">Lets DockNest read your DNS records for the domain check and switch DNS in a move. Read-only DNS is enough for the check.</p>
+   {info?.configured&&<div className="cx-saved"><span><IconLock size={18} stroke={1.75} aria-hidden="true"/>Saved, hidden</span></div>}
+   <label className="field"><span>{info?.configured?'New API token':'API token'}</span><input type="password" autoComplete="new-password" spellCheck={false} value={token} onChange={e=>setToken(e.target.value)}/></label>
+   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
+   {guard.box}
+   <div className="modal-foot">{info?.configured&&<button className="link-action" type="button" disabled={busy} onClick={remove}>Remove</button>}<button className="link-action" type="button" onClick={onClose}>Cancel</button><button className="link-action primary" type="submit" disabled={busy||!token.trim()}>{info?.configured?'Replace':'Save'}</button></div>
+  </form>
+ </dialog>;
+}
+
+export function ConnectionDialog({client,providers,connection,initialProvider,prefill,role,onClose,onSaved,onCloudflare}){
  const edit=!!connection,ref=useRef(null),nameRef=useRef(null),guard=useReauth(client);
  const [providerId,setProviderId]=useState(connection?.provider||initialProvider||'');
  const item=providers.find(p=>p.id===providerId)||null;
@@ -49,7 +72,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
  const readOnly=(edit&&connection.editable===false)||(!!item?.adminOnly&&role!=='admin');
  useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();const first=()=>(edit?nameRef.current:d?.querySelector('.cx-combo'))?.focus();first();return()=>{if(d?.open)d.close()}},[]);
  // A new provider starts from its own defaults; the name follows the provider until the user types one.
- function pickProvider(id){const p=providers.find(x=>x.id===id);setProviderId(id);setResult(null);setError(null);setReplacing(new Set());setCustomLang(false);
+ function pickProvider(id){if(id===CLOUDFLARE_DNS){onCloudflare();return}const p=providers.find(x=>x.id===id);setProviderId(id);setResult(null);setError(null);setReplacing(new Set());setCustomLang(false);
   const next={};for(const f of p?.fields||[])if(!f.secret)next[f.key]=text(prefill?.[f.key]??defaultOf(f));setValues(next);
   if(!name.trim()||providers.some(x=>name==='My '+(x.id==='webhook'?'webhook':x.label)))setName('My '+(id==='webhook'?'webhook':p.label));}
  const set=(key,v)=>{setValues(s=>({...s,[key]:v}));setResult(null);if(error?.field===key)setError(null)};
@@ -97,7 +120,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
   }catch(e){if(e.field)fail(e);setResult({ok:false,text:e.message||'The test message could not be sent.'})}
   setTesting(false);
  }
- const items=providers.map(p=>({value:p.id,label:p.label,icon:p.icon,group:GROUPS[p.group]||p.group}));
+ const items=[...providers,...(onCloudflare&&!edit?[{id:CLOUDFLARE_DNS,label:'Cloudflare (DNS)',icon:null,group:'advanced'}]:[])].map(p=>({value:p.id,label:p.label,icon:p.icon,group:GROUPS[p.group]||p.group}));
  function control(f){
   const v=values[f.key]??'',invalid=error?.field===f.key||undefined,id='cx-f-'+f.key,help=f.help||(f.type==='email-list'?`Up to ${f.max||5} addresses, separated by commas.`:'');
   const helpEl=help&&<small id={id+'-help'}>{help}</small>;

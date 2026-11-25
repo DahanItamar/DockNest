@@ -138,3 +138,20 @@ test('tree layout: subdomains left of the root, one input dot on the server, no 
   const p = moved.domainPaths.find(q => q.id === 'a.example.com'), r2 = moved.domains.find(n => n.id === 'example.com');
   assert.deepEqual(p.points.at(-1), [r2.in.x, r2.in.y], 'lines follow a moved root');
 });
+
+test('Connections offers Cloudflare (DNS) through the existing save route, and the proxy wording names the app', async () => {
+  const { readFileSync } = await import('node:fs');
+  const dialog = readFileSync(new URL('../web/connections/ConnectionDialog.jsx', import.meta.url), 'utf8');
+  assert.match(dialog, /label:'Cloudflare \(DNS\)'[^}]*group:'advanced'/);
+  assert.match(dialog, /api\('\/settings\/cloudflare-dns',\{token:token\.trim\(\)\},'PUT'\)/);
+  assert.doesNotMatch(dialog, /value=\{info/);
+  const model = readFileSync(new URL('../web/map/domains-model.js', import.meta.url), 'utf8');
+  assert.match(model, /routes this domain to the app “\$\{siteName\}”/);
+  assert.match(model, /Through Cloudflare Tunnel/);
+});
+
+test('a Cloudflare Tunnel proxy step is neutral, not failed', () => {
+  const text = hopText('proxy', hop('unknown', 'tunnel', { serverId: 's1' }), ctx);
+  assert.equal(text.detail, 'Through Cloudflare Tunnel.');
+  assert.notEqual(text.state, 'failed');
+});

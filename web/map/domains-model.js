@@ -44,7 +44,8 @@ export function hopText(name,hop,ctx={}){
   if(r==='routed')return out(`${px} on ${srv} sends it to ${up}${p.appServerId?` on ${serverName(p.appServerId)}`:''}.`);
   if(r==='static')return out(`${px} on ${srv} serves this static site.`);
   if(r==='static-no-app')return out(`${px} on ${srv} serves it as a static site${p.root?` from ${p.root}`:''}.`,{next:'Add it as a static app to back it up.',link:'add-static'});
-  if(r==='no-route')return out(`No proxy on ${srv} has this domain.`,{reason:`Visitors reach ${srv}, but nothing there sends this domain to ${siteName}.`,next:`Add the domain to the proxy on ${srv} and send it to ${siteName}, then check again.`});
+  if(r==='tunnel')return out('Through Cloudflare Tunnel.',{reason:`A cloudflared container runs on ${srv}, so visitors can reach the app through the tunnel without a proxy rule.`});
+  if(r==='no-route')return out(`No proxy on ${srv} has this domain.`,{reason:`No proxy rule on ${srv} routes this domain to the app “${siteName}”.`,next:'Add a proxy rule for this domain that points to the app’s container, then check again.'});
   if(r==='routes-elsewhere')return out(`${px} on ${srv} sends it to ${up||'another target'}.`,{reason:`That target is not a container of ${siteName}.`,next:`Change the route to the port ${siteName} publishes, then check again.`});
   if(r==='proxy-stopped')return out(`${px} on ${srv} has the route, but it is not running.`,{next:`Start ${px} on ${srv}, then check again.`});
   if(r==='no-app')return out(`${px} on ${srv} sends it to ${up||'something'}, which is not one of your apps.`,{next:'If that is an app you want to back up, add it to DockNest.'});
