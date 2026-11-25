@@ -2,114 +2,54 @@
 
 All notable changes to DockNest are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and DockNest uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/upgrading.md](docs/upgrading.md) describes what stays stable within a major version and the deprecation policy. Detailed notes for each release live in [docs/releases](docs/releases).
 
-## [Unreleased]
+## [3.0.0] - Unreleased
 
-Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300).
+Upgrading from 2.16.x: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300). Backups of Podman and rootless apps use backup format 3, which 2.16 cannot restore.
 
-### Fixed
+### New
 
-- Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
-- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard. After a revoked sign-in, the first test now says OneDrive needs you to sign in again.
-- Cloud drives: the sign-in address from Microsoft and Dropbox (`localhost:53682`) is accepted, personal Microsoft account codes are accepted, Google Drive sign-in asks only for access to files DockNest creates, and the account name shows after Reconnect.
-- Cloud drives: the account name now shows on every drive (and fills in for existing ones after a Test). Reconnecting a Google Drive with a different Google app asks you to confirm first, because earlier backups would no longer be visible; a backup that Google no longer shows is reported as not visible, not as damaged.
-- Google Drive: the root folder is remembered, so tests and backups make fewer calls. A slow test no longer fails the page: it shows "Still checking" and finishes in the background. When Google limits the shared sign-in app, DockNest says so and recommends your own app ID.
+- Recovery time: how long each app took to come back in its newest passed restore test, on the dashboard, the Map and Restore tests. Existing tests already count.
+- Client reports: a Clients page; group apps per client and make a monthly PDF of backups, restore tests, recovery time, certificate, hardening grade and domain checks, downloaded or emailed to up to 3 people. Never shows server addresses, logins or paths. See [client reports](docs/client-reports.md).
+- Cloud drives as backup storage: Google Drive, OneDrive, Dropbox, WebDAV, SMB shares and a mounted local folder, with Reconnect and an alert when a sign-in expires. See [cloud drives](docs/cloud-drives.md).
+- NAS servers: TrueNAS SCALE, as root or a non-root SSH user with passwordless sudo, with a sealed helper container when the NAS has no Python. Unraid and Synology are early access under Settings (off by default); until then they connect as normal Linux servers with Docker. See [NAS servers](docs/nas-servers.md).
+- Podman and rootless Docker: servers list their engines, Discover groups apps by engine, and such apps can be backed up, restored and restore-tested in the same kind of engine. Not yet: systemd-managed (quadlet) apps, native databases, several containers in one restore, incremental backups and moves between engines.
+- Notification center: a bell and a Notifications page with folders, filters, Archive and toasts for new problems.
+- New look: slate neutrals and a teal accent, with an accent colour choice (Teal, Blue, Indigo, Orange, Pink) under Settings > Appearance. Apps (was Sites) and Self Backup are the new names; nothing to change.
+- Recovery Guide: numbered steps and exact commands to bring every app back on a new server, as a PDF (Hebrew included), with expected recovery time per app. A login-free copy is saved next to the recovery kit after every Self Backup.
+- Recovery kit: checked after every Self Backup and on demand (alert on failure); optional split so K of N trusted people can open it together.
+- Keys safe: finds app encryption keys (Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud, Vaultwarden and others) and checks they are inside the last backup. Key values never leave the server.
+- Backup coverage and linked apps: every container and volume on a server and whether an app backs it up, plus which apps depend on each other.
+- Domain checks: follow each domain through DNS, proxy (nginx, Nginx Proxy Manager, Caddy, Traefik), app and certificate; shown on the Map. Domains move with their app.
+- Restore check also lists cron jobs, timers, networks, volumes, secrets and certificates a restore on a new server would miss. See [restore check](docs/restore-check.md).
+- Redis, Valkey and MongoDB (6.0 to 8.0) apps are detected and backed up; online dumps for PostgreSQL, MySQL, MariaDB, Redis and Valkey (opt-in).
+- Portainer and Dockge stacks are found when adding an app; apps started with plain `docker run` get a Compose preview and a readable Compose file inside the backup.
+- Alerts: "Backup missed", "Configuration changed", "Client report failed" and a cloud-drive Reconnect alert.
+- Append-only SFTP storage is detected, and SFTP capacity fills in automatically.
+- Restore tests can read the backup copy on your second storage.
 
-### Added
+### Improved
 
-- New look: slate neutrals and a teal accent. Settings > Appearance has an accent colour choice (Teal by default, Blue, Indigo, Orange or Pink), saved per account in this browser. The logo, buttons, links and charts follow it. Switching accent or light/dark fades smoothly (about 0.2 s, colours only, instant with reduced motion). The dashboard tiles are solid accent cards. Status colours stay green, amber and red, and text on buttons meets contrast in every accent and in light and dark.
-- Unraid and Synology support are hidden until they can be tested on real hardware: such a server connects as a normal Linux server with Docker, with one plain info line. 3.0.0 NAS support is TrueNAS SCALE. Early-access "Unraid support" and "Synology support" switches (off by default, with a Beta tag) are under Settings; problem reports from those servers carry a "unraid" or "synology" tag.
-
-**Recovery**
-- Recovery time: DockNest now measures how long each app takes to come back, from its newest passed restore test (get the backup, restore data, start and check). Existing restore tests already count, so there is a number on day one. It shows under the last test on the dashboard ("Back in about 12 min, proven 3 days ago"), on the app panel in the Map with its three parts, and at the top of Restore tests with the recent tests. An old test is greyed and says "not recent"; after the backups grow a note says the number may be low.
-- Redis and Valkey: apps using them are detected and shown in the Databases list with what they keep (saved to disk or cache only). A cache-only server is no longer an error, and with online dumps on, a server that saves to disk keeps running while a consistent snapshot is taken and restored.
-- Recovery Guide: plain, numbered steps to bring every app back on a new server, made from what DockNest knows now, with the exact commands for each app. Download it as a PDF (Hebrew included); addresses and storage logins are added only if you choose, and logins need you to confirm again. A copy without any login is saved next to the recovery kit after every Self Backup, and an optional alert tells you when the guide is out of date.
-- Client reports: a Clients page in the menu. Group apps into clients and make a monthly PDF per client, on demand or emailed on day 1 to up to 3 recipients through your email Connection. It shows backups, restore tests, recovery time, certificate, hardening grade and domain checks, and never a server address, login or path. A failed send raises the new alert "Client report failed". See [client reports](docs/client-reports.md).
-- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
-- Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels. Splitting again, or going back to one passphrase, asks for a new recovery passphrase, so earlier holders cannot open new kits.
-- Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
-- Restore tests check that the restored app has the same keys as the backup.
-- Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
-
-**Apps and servers**
-- Podman and rootless Docker groundwork: the server helper now has one place that decides how DockNest talks to the container engine, with strict checks on users, ID ranges and systemd units. Nothing changes for existing apps, which keep using rootful Docker; Podman and rootless apps follow in later 3.0.0 changes.
-- NAS servers (backend): connect a Unraid or TrueNAS system with a non-root SSH user that has passwordless sudo, or with root. Other servers still need root. The helper works in the NAS's persistent working folder and reads free space there, not from memory storage. Connect answers say which identity is used and the one fix when sudo asks for a password. Release note: Connecting a NAS no longer needs root SSH.
-- Podman and rootless Docker discovery: Test connection now lists the container engines a server runs (Docker, Podman, and rootless Docker or Podman for users with their own container storage), and Discover tags each container with its engine. An app can be saved with its engine only when the server reported it. Backups and restores of such apps are refused with a plain message until they arrive in a later 3.0.0 change; existing apps are unchanged.
-- Podman and rootless Docker backups: an app that runs in Podman or rootless Docker can be backed up and restored into the same kind of engine, as a new isolated copy. The backup records the container engine and the user ID ranges, and a restore for another user translates every file owner, refusing the whole restore if one cannot be mapped. A backup of such an app cannot be opened by older releases. Not yet supported: apps managed by systemd units (quadlets), native database engines, several containers in one restore, incremental backups, restore tests and moves.
-- Restore tests for Podman and rootless Docker apps: the test runs in the same kind of engine, as one isolated container with the usual memory and CPU limits, and only on a server where those limits can be set for that user. The copy and its data folder are always removed, also by the safety reaper and when a restore fails. Not yet: internet tests, apps with several containers, the internal web check, and a custom seccomp profile on rootless.
-- Podman and rootless Docker in the app: Discover & add an app groups what it finds by engine, says "One app, one engine" when a Compose project is split across engines, and keeps the engine of the app you save. Apps show an Engine row, restore tests explain in one sentence why a server cannot test them, Self-heal says it is not available for them yet, and a server lists the engines it runs (including a server with Podman and no Docker).
-- Podman and rootless Docker moves and cleanup: the move check now reads the rules for these apps (Docker and Podman cannot be moved into each other, the target must run the engine, a rootless user cannot use ports below the system limit, a missing linger setting is flagged, file owners are translated) and still blocks the move itself for now. Server cleanup lists DockNest's restore copies in these engines as kept and offers the data folder of a failed rootless restore for removal.
-- Podman and rootless Docker image copies: backups and restores of these apps move image archives through the engine's own input and output, so a rootless user's engine never needs access to DockNest's private folders.
-- NAS apps (backend): on Unraid, Synology and TrueNAS, scanning a server now tells which apps the NAS itself manages (Unraid templates, Container Manager projects, TrueNAS apps), read-only. An Unraid app's template is saved with its backup and can be put back, never over a different file. TrueNAS before 24.10 is refused with a clear message. Release note: DockNest recognises apps managed by Unraid, Synology and TrueNAS.
-- Unraid restore (backend): after an app is restored, its saved template is put back so the Unraid Docker page keeps managing it, without ever replacing a different file. Compose Manager projects are listed by name. TrueNAS version files in the common formats are recognised. Release note: Restoring an Unraid app also restores its Docker template.
-- NAS helper runtime (backend): a NAS with no usable Python can now run DockNest's helper in a small container image that ships inside the DockNest image. DockNest checks its checksum, loads it over SSH, and runs it only by its pinned ID with no network and only the folders the call needs. Release note: NAS systems without Python no longer need Python installed to connect.
-- NAS helper runtime hardening: folders are checked where they point and never follow a link into a system folder, the image is built in a job with no publish rights and verified again before release, and its package versions are pinned. Release note: NAS helper runtime checks are stricter.
-- NAS backups, restores and restore tests now work for a sudo user: packages are moved through the helper under sudo instead of SFTP, and the root-only staging folders are not opened up. Release note: Backups, restores and restore tests work on a NAS with a sudo user.
-- NAS screens: the server card and Map panel show the NAS name and a readiness list (helper runtime, staging folder, Docker, key warning with its fix). Discover groups apps by the manager the NAS uses, with the Unraid WebUI shown as text. The connect wizard explains Unraid, Synology and TrueNAS, accepts a passwordless-sudo user and, without Python, a pasted host key fingerprint. Release note: Unraid, Synology and TrueNAS systems get their own screens and setup help.
-- Recovery Guide: a new column, Expected time to recover, shows how long each app took in its newest passed restore test. Release note: The Recovery Guide now says how long each app should take to restore.
-- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
-- Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
-- Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).
-- A move preview lists every domain that stops working until DNS points to the new server, and separately the domains another server's proxy sends to the app.
-- Domains on the Map: a Domains column shows where each domain really points, with the broken step and what to do about it. Each app panel lists its domains. Checks run only when you ask.
-- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
-- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
-- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
-- Adding an app finds stacks that Portainer or Dockge manage, fills in their Compose file from the manager's stacks folder and shows the manager on the app card. DockNest only reads it and never changes Portainer or Dockge.
-- NAS support, first part (no screens yet): DockNest recognizes Unraid, Synology and TrueNAS servers, can connect as a non-root user with passwordless sudo on them, and can run its helper in a sealed container when the NAS has no Python. Servers that are not NAS systems are unchanged. See [NAS servers](docs/nas-servers.md).
-
-**Storage and backups**
-- Cloud drives as backup storage: connect Google Drive, OneDrive, Dropbox, WebDAV (Nextcloud, ownCloud) and SMB shares through a bundled, checksum-pinned rclone. Sign in by pasting the address your browser ends on, or a token from rclone on your own computer; tokens are sealed with the master key and never shown. When a drive asks you to sign in again, backups to it stop with a plain message, one alert is sent, and Reconnect replaces only the token. Not append-only; deleted files go to the provider's trash. See [cloud drives](docs/cloud-drives.md).
-- Online database dumps (opt-in per app, a switch under Advanced backup settings; each database says whether it can stay running): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
-- Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or overwrite stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
-- Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
-
-**Sign-in**
-- Sign-in: password dots and two-factor code digits animate as you type; the focus border is gone. Off under reduced motion.
-
-**Alerts**
-- Notification center: a bell with an unread count, the newest notifications and your running jobs, and a Notifications page under Operations with folders (All, Needs action, Backups & restores, Storage, System, Archived), filters and one-click Mark read, Archive and Open. It lists the same events your alert channels get, plus restores, restore tests that passed and recovery times that went old, for every administrator, kept for 90 days. A repeat of the same event counts up instead of piling up. Short messages now appear as toasts: errors stay until you close them, success clears itself after 5 seconds.
-- Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
-- A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
-- Keys safe on screen: a padlock on each app in the Map and a Keys line on each app card (found in the last backup, missing, or changed), a Keys section in the app's Map panel with each key's name, place and short fingerprint (never the key), "Add file" for a key in a file the app does not back up, and "Mark as known-good" for administrators after a sign-in check. Self Backup shows a Recovery kit check card with its last result, and a move review lists owner, file-mode and target-folder findings as separate notes.
-- The recovery kit check on Self Backup says which kit it opened ("Kit from 18 Nov 03:10") whenever it found one.
-- Before a move, DockNest checks the new server for owner and permission problems: remapped Docker user IDs, files whose setuid, ACL or extended attributes the new file system would drop, and folders on read-only, noexec, nosuid or root-squashed mounts. A check that cannot run stops the move with a plain message instead of passing quietly. What the checks find about owners and permissions is a warning: you tick "I checked these" before the move can start.
-
-### Changed
-- Sign-in hardening: a new system password (first setup, or when you change it) must be 12 to 128 characters instead of 4 to 16. Existing passwords keep working; nobody is locked out. After 20 failed sign-ins from anyone within 15 minutes, sign-in pauses for a short, growing time (30 seconds up to 15 minutes) with a plain message, then continues by itself. Release note: New system passwords need 12 to 128 characters, and repeated failed sign-ins now pause sign-in briefly.
-
-- Secondary actions everywhere are quiet text links; each screen and dialog has one clear main button.
-- Map: lines curve smoothly between connection points, like a workflow canvas.
-- The app and server details panels on the Map have a new layout: a status line under the name, one label and value list, thin lines between sections, and Self-heal, Edit history and Add an app found here together under Tools. Move to and Edit are plain underlined links; Open site stays the one filled button.
-- Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are plain underlined links instead of outlined buttons; main actions stay filled buttons.
-- A new look across the dashboard: consistent dialogs, tabs, notices, step-by-step flows, fields and buttons. Sign-in animates each password dot and 2FA digit as you type, with no focus border on those inputs. Off under reduced motion.
-- Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
-- DockNest's own backup is now called **Self Backup** in the menu, page, alerts and docs. Nothing changes in how it works, and your existing settings and backups are untouched.
-- Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
-- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
-- A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
+- One main button per screen, quiet text links for secondary actions, one actions menu per list row, consistent dialogs, tabs and fields.
+- The Map: curved lines, a domain tree, drag anywhere with positions remembered, Fit to screen keeps names readable, new details panels, a Keys padlock, and the storage an app really uses.
+- Adding an app hides containers that are already backed up and refuses duplicates.
+- A move no longer stops over configuration files outside the app folders; it names them to put back by hand. It also checks for owner and permission problems on the new server and lists domains that need new DNS.
+- A backup stopped by a changing folder names that folder.
+- Moving a `docker run` app keeps its hostname, limits, DNS, log settings and other options.
+- Google Drive makes fewer calls, and a slow test shows "Still checking" instead of failing the page.
 
 ### Fixed
 
-- A Podman or rootless app whose user has no container runtime folder (linger off, user logged out) now gets a plain message with the fix, instead of a bare engine error.
-- A server where Docker is installed but not running no longer fails a scan: the app list still shows the other engines, the scan names the stopped Docker engine, and the readiness check says "Docker is installed but not running". The TrueNAS-before-24.10 refusal no longer repeats its last sentence. Release note: A stopped Docker is reported plainly instead of failing the scan.
-- The Recovery Guide shows the whole install command instead of cutting it off.
-- The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
-- The move preview dialog no longer has an empty gap above its buttons.
-- Fit to screen on the Map keeps names readable and lets you pan a big map instead of shrinking it.
-- The Map shows the backup storage an app really uses: the app's own main destination, not always the default one.
-- The Recovery Guide says whether a restore test read the main backup or the off-site copy.
-- Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
-- A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
-- On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
-- Safe Edit: an invalid field keeps its red border when you hover it.
-- The Map shows `example.com` and `www.example.com` as one domain, with the www name inside it and one status for both.
-- On the Map, a subdomain hangs under its domain and only the domain connects to the server (subdomain, domain, server). A subdomain that runs on another server connects to its own server and says "part of" its domain.
-- Lines from domains end in one input dot on the server, like the output dot on its right, instead of an arrowhead each.
-- The Map opens whole and centred instead of at a cut-off corner.
-- The "+" next to an app on the Map opens the Add to the map panel instead of doing nothing.
-- A domain moves with its app on the Map: drag its dot onto another server to start the app's move, see it dashed at the new server while the move runs, and find it there afterwards. A domain with no app, or used by several apps, says so and moves nothing.
-- A static website that nginx serves from a folder is shown as a note with an "Add as app" link, not as a failed proxy.
-- The Recovery Guide PDF is denser (no half-empty pages), carries the DockNest mark and a credit with working links to GitHub and trydocknest.com.
+- Cloud drives: sign-in links appear, OneDrive lists its drives, the Microsoft and Dropbox `localhost:53682` address and personal Microsoft accounts are accepted, the account name shows (masked), and certificate problems are reported as such.
+- Reconnecting Google Drive with a different Google app asks first; a backup Google no longer shows is reported as not visible, not damaged.
+- A server where Docker is installed but stopped no longer fails a scan; Podman users without a runtime folder get a plain fix.
+- The Recovery Guide shows the whole install command and is denser; the Map no longer leaves stale messages; the move preview has no empty gap.
+- A static site that nginx serves from a folder shows an "Add as app" link instead of a failed proxy.
+
+### Security
+
+- A new system password must be 12 to 128 characters (existing passwords keep working). After 20 failed sign-ins from anyone within 15 minutes, sign-in pauses briefly.
+- NAS connections no longer need root SSH; the helper runtime image is pinned, checksum-verified and run with no network. Cloud-drive tools are checksum-pinned.
+- Google Drive sign-in asks only for access to files DockNest creates.
 
 ## [2.16.4] - 2026-11-14
 
@@ -677,7 +617,7 @@ Pre-release of 2.1.0, tagged `v2.1.0-rc.1`. The GitHub release for it has been r
 
 See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
 
-[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.1.0...HEAD
+[3.0.0]: https://github.com/DahanItamar/DockNest/compare/v2.16.4...HEAD
 [2.1.0]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0
 [2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0

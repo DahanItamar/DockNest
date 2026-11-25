@@ -26,7 +26,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Discovers the Docker projects and static nginx sites on each server you connect.
 - Backs up each app on its own schedule to encrypted SFTP or S3-compatible storage. Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults.
 - Verifies recovery points and restores them to a separate copy. The live app is not overwritten.
-- New in 3.0.0: a notification center; measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (TrueNAS SCALE; Unraid and Synology as early access in Settings); Podman and rootless Docker apps; a new look with a choice of accent colour (Settings > Appearance), with a smooth fade when you change it or switch light and dark.
+- New in 3.0.0: a notification center; measured recovery time per app; monthly client reports as a PDF, downloaded or emailed; cloud drives as storage (Google Drive, OneDrive, Dropbox, WebDAV, SMB, a local folder); NAS servers (TrueNAS SCALE; Unraid and Synology as early access in Settings); Podman and rootless Docker apps; security hardening (12 to 128 character system passwords, sign-in pause after repeated failures, checksum-pinned helper images); a new look with a choice of accent colour (Settings > Appearance), with a smooth fade when you change it or switch light and dark.
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
@@ -223,9 +223,10 @@ scripts/upgrade.sh --dry-run    # show the plan only
 
 With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
 
-Upgrading from 2.16.x to 3.0.0 (the 3.0.0 development line) adds only compatible database tables (migration 27), so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300). Worth knowing before you update:
+Upgrading from 2.16.x to 3.0.0 adds only compatible database tables (migrations 19 to 27), so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300). Worth knowing before you update:
 
-- Backups of Podman and rootless apps use backup format 3 (`formatVersion: 3`); 2.16 and older cannot restore them. Docker apps keep the older format.
+- 3.0.0 backups of Podman and rootless apps use backup format 3 (`formatVersion: 3`); 2.16 and older cannot read or restore them. Docker apps keep the older format.
+- New system passwords must be 12 to 128 characters; existing passwords keep working.
 - Cloud drives use a bundled rclone that exists for `linux/amd64` only.
 - A NAS (TrueNAS; Unraid and Synology when enabled) connects as root, or as a non-root SSH user with passwordless sudo.
 - Moving an app between container engines is not supported yet.
