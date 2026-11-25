@@ -129,7 +129,7 @@ New in 3.0.0, with synthetic data:
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/podman-app.png" width="100%" alt="Apps page with a Podman rootless engine badge on an app" /></td>
-    <td width="50%"></td>
+    <td width="50%"><img src="docs/media/accent-colours.png" width="100%" alt="Settings with the five accent colours, Teal selected" /></td>
   </tr>
 </table>
 

@@ -100,5 +100,9 @@ try{
  const podState={...state,servers:[podServer],sites:podSites,policies:podSites.map(s=>({siteId:s.id,enabled:true,schedule:'0 2 * * *',timezone:'UTC',retention:7})),backups:[],jobs:[]};
  ({context,page}=await open({width:1280,height:800,scale:1,pageState:podState}));
  await go(page,'Apps & Schedules');await page.locator('.site-card',{hasText:'Team Portal'}).getByText('Podman rootless, user svc').waitFor();await settle(page);await shot(page,'podman-app.png');await context.close();
+ // Settings drawer with the five accent colours, Teal (the default) selected, and v3.0.0 under About.
+ ({context,page}=await open({width:1280,height:1180,scale:1,extra:p=>p==='/api/version'?{version:'3.0.0',schemaVersion:28}:undefined}));
+ await page.getByRole('button',{name:'Open account preferences'}).click();
+ await page.getByText('DockNest v3.0.0').waitFor();await page.locator('.accent-options label.selected',{hasText:'Teal'}).waitFor();await settle(page);await shot(page,'accent-colours.png');await context.close();
  console.log('Documentation screenshots captured with synthetic data only.');
 }finally{await browser.close();}
