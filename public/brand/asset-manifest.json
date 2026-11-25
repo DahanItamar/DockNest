@@ -161,6 +161,36 @@
       "sha256": "5e032e8ef21de4a57bd60e6612acb24b643d1efe8e9ec9377c31c2db14f45ab0"
     },
     {
+      "filename": "favicon-blue-32-d35aadcbec.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "d35aadcbece87cbdef77508c2f369c147179ee908eee5cd6a69d6bd1d6b2ff87",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1571,
+      "sha256": "3afd4eae4847db67acc0299b9a5edc1c6146c4b56bb13dba23816cdea270d46b"
+    },
+    {
+      "filename": "apple-touch-icon-blue-d35aadcbec.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "d35aadcbece87cbdef77508c2f369c147179ee908eee5cd6a69d6bd1d6b2ff87",
+      "width": 180,
+      "height": 180,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 9353,
+      "sha256": "53d735b734d235b88332662d269e0de82fc2ebc9e418ca5ef019a1ba62f3bdbd"
+    },
+    {
       "filename": "logo-indigo-light-600-b7e876e8bf.webp",
       "source": "docs/media/logo-blue.png",
       "sourceSha256": "b7e876e8bfdb72521797505b436c42d3ac58cc49746ed988c7ffba5561a6ab9b",
@@ -219,6 +249,36 @@
       },
       "bytes": 57928,
       "sha256": "bcd1c84830805acf4ec1beb55473fb94146cef03274086958fa71a6c586a0044"
+    },
+    {
+      "filename": "favicon-indigo-32-b7e876e8bf.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "b7e876e8bfdb72521797505b436c42d3ac58cc49746ed988c7ffba5561a6ab9b",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1730,
+      "sha256": "8588eba94095b88440862a3aab3f38234da4f7d4d6ca5dfdc763ffaee9614fb1"
+    },
+    {
+      "filename": "apple-touch-icon-indigo-b7e876e8bf.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "b7e876e8bfdb72521797505b436c42d3ac58cc49746ed988c7ffba5561a6ab9b",
+      "width": 180,
+      "height": 180,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 9485,
+      "sha256": "d4032f62b261214535461bf735db5cec055a38fc0810b7ab12bed6cef52a13d0"
     },
     {
       "filename": "logo-orange-light-600-06d0c1277a.webp",
@@ -281,6 +341,36 @@
       "sha256": "2f332fdc0949e7db7eb21d09eded4be9116433705341f02ef4680ae09ecc76c5"
     },
     {
+      "filename": "favicon-orange-32-06d0c1277a.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "06d0c1277acff2686cfef7cc9c29e88fba3df08939ee95e3593bc9f808776826",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1704,
+      "sha256": "25fda7da658e1e60a21862b66ed60284ffbc77e619ea87619f8eb97da0ac89d9"
+    },
+    {
+      "filename": "apple-touch-icon-orange-06d0c1277a.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "06d0c1277acff2686cfef7cc9c29e88fba3df08939ee95e3593bc9f808776826",
+      "width": 180,
+      "height": 180,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 9578,
+      "sha256": "711c9bae4567e252d785961b35dc40eec62f31932337af6e6f3668ea50767f21"
+    },
+    {
       "filename": "logo-pink-light-600-9f8092d71d.webp",
       "source": "docs/media/logo-blue.png",
       "sourceSha256": "9f8092d71deb28da73b384ca056bdc5301a9a852da756ce5a3a54669fd6f5d1f",
@@ -339,6 +429,36 @@
       },
       "bytes": 57000,
       "sha256": "6a8536721471f01f819df5fda13f669162c99d6fa3634e55af9cff9da2babf88"
+    },
+    {
+      "filename": "favicon-pink-32-9f8092d71d.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "9f8092d71deb28da73b384ca056bdc5301a9a852da756ce5a3a54669fd6f5d1f",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1761,
+      "sha256": "bbc3372df564b68f52cd6c0f9954f32ed25f452baebeb4f4f5c65d2249fc9ca3"
+    },
+    {
+      "filename": "apple-touch-icon-pink-9f8092d71d.png",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "9f8092d71deb28da73b384ca056bdc5301a9a852da756ce5a3a54669fd6f5d1f",
+      "width": 180,
+      "height": 180,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 9550,
+      "sha256": "e1dc5ea83aa8a6b957433d6d9a8f398c3f22139dff40c1406d2a868cfcfa89db"
     },
     {
       "filename": "favicon-16-1490ad8249.png",

@@ -43,7 +43,7 @@ export function ThemeProvider({children}){
   const key=id?'docknest-theme:user:'+id:'docknest-theme';if(key===storageKey.current)return;storageKey.current=key;
   try{const saved=localStorage.getItem(key);if(saved!==null)changePreference(saved)}catch{}
  }
- useLayoutEffect(()=>{document.documentElement.dataset.theme=theme;document.documentElement.dataset.preference=preference;document.documentElement.dataset.accent=accent;const styles=getComputedStyle(document.documentElement);document.querySelector('meta[name="theme-color"]')?.setAttribute('content',(theme==='dark'?styles.getPropertyValue('--dn-bg-surface'):styles.getPropertyValue('--dn-brand-solid-step')).trim()||'#0D786C')},[theme,preference,accent]);
+ useLayoutEffect(()=>{document.documentElement.dataset.theme=theme;document.documentElement.dataset.preference=preference;document.documentElement.dataset.accent=accent;window.dnSetIcons?.(accent);const styles=getComputedStyle(document.documentElement);document.querySelector('meta[name="theme-color"]')?.setAttribute('content',(theme==='dark'?styles.getPropertyValue('--dn-bg-surface'):styles.getPropertyValue('--dn-brand-solid-step')).trim()||'#0D786C')},[theme,preference,accent]);
  useEffect(()=>{
   const syncAccent=e=>{if(e.key===accentKey.current||(accentKey.current===ACCENT_KEY&&e.key===ACCENT_KEY)){const next=validAccent(e.newValue);currentAccent.current=next;setAccentState(next)}};
   addEventListener('storage',syncAccent);

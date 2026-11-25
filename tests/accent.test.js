@@ -44,3 +44,18 @@ test('no hardcoded purple or blue literals are left outside the token file', () 
   assert.doesNotMatch(read('web/dashboard.jsx'), /color="#/, 'sparklines take a token name');
   assert.match(read('web/charts.jsx'), /color='--dn-viz-2'/);
 });
+
+test('the tab and touch icons follow the accent, with teal as the fallback', () => {
+  const links = { icon: { href: '' }, touch: { href: '' } };
+  const document = { querySelector: s => (s.includes('apple') ? links.touch : links.icon) };
+  const window = {};
+  new Function('window', 'document', read('public/theme-init.js').split('// Apply a saved')[0])(window, document);
+  for (const id of ['teal', 'blue', 'indigo', 'orange', 'pink']) {
+    window.dnSetIcons(id);
+    assert.match(links.icon.href, id === 'teal' ? /favicon-[a-f0-9]+\.png$/ : new RegExp('favicon-' + id + '-32-'));
+    assert.ok(existsSync(new URL('../public' + links.icon.href, import.meta.url)) && existsSync(new URL('../public' + links.touch.href, import.meta.url)), id);
+  }
+  window.dnSetIcons('nope');
+  assert.match(links.icon.href, /favicon-[a-f0-9]+\.png$/);
+  assert.match(read('web/brand.jsx'), /dnSetIcons\?\.\(accent\)/);
+});

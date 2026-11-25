@@ -99,7 +99,7 @@ try{
   return{left:Math.max(0,l-8),top:Math.max(0,t-8),width:Math.min(c.width,r+9)-Math.max(0,l-8),height:Math.min(c.height,b+9)-Math.max(0,t-8)};
  },'data:image/png;base64,'+blue.toString('base64'));
  // One light and one dark logo per accent: the light master recoloured for white surfaces, the lighter master for dark ones.
- const accentLogos={};
+ const accentLogos={},accentIcons={};
  for(const accent of ACCENTS){
   const light=await recolor(master,logoColor(accent,false),true),dark=await recolor(blue,logoColor(accent,true));
   if(accent==='teal')await writeFile('docs/media/logo-teal.png',dark); // README header: the lighter variant reads on both GitHub themes
@@ -109,6 +109,7 @@ try{
    await exportImage('logo-'+accent+'-dark-'+width+'-'+darkVersion+'.webp',{width,mime:'image/webp',sourceImage:dark,sourceCrop:blueCrop});
   }
   const set=(mode,v)=>({src:'/brand/logo-'+accent+'-'+mode+'-600-'+v+'.webp',srcSet:'/brand/logo-'+accent+'-'+mode+'-600-'+v+'.webp 600w, /brand/logo-'+accent+'-'+mode+'-1200-'+v+'.webp 1200w'});
+  if(accent!=='teal'){const fav='favicon-'+accent+'-32-'+lightVersion+'.png',touch='apple-touch-icon-'+accent+'-'+lightVersion+'.png';await exportImage(fav,{size:32,mark:true,fill:.96,sourceImage:light});await exportImage(touch,{size:180,mark:true,background:'#FFFFFF',fill:.8,sourceImage:light});accentIcons[accent]=[fav,touch]}
   accentLogos[accent]={light:set('light',lightVersion),dark:set('dark',darkVersion)};
  }
  for(const size of [16,32,48])await exportImage('favicon-'+size+'-'+version+'.png',{size,mark:true,fill:.96});
@@ -129,6 +130,7 @@ try{
  // Drop files of earlier exports (their names carry a content hash) so public/brand holds only the current set.
  const keep=new Set([...outputs.map(x=>x.filename),'asset-manifest.json','site.webmanifest','favicon-'+version+'.ico']);
  for(const name of await readdir('public/brand'))if(!keep.has(name))await rm('public/brand/'+name);
+ {const t=await readFile('public/theme-init.js','utf8'),icons={teal:['favicon-'+version+'.png','apple-touch-icon-'+version+'.png'],...accentIcons};await writeFile('public/theme-init.js',t.replace(/const ICONS=.*?;[/][/]icons/,()=>'const ICONS='+JSON.stringify(icons)+';//icons'))}
  const index=await readFile('index.html','utf8');
  await writeFile('index.html',index.replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]png','g'),'/brand/favicon-'+version+'.png').replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]ico','g'),'/brand/favicon-'+version+'.ico').replace(new RegExp('/brand/apple-touch-icon(?:-[a-f0-9]+)?[.]png','g'),'/brand/apple-touch-icon-'+version+'.png').replace(new RegExp('/brand/site[.]webmanifest(?:[?]v=[a-f0-9]+)?','g'),'/brand/site.webmanifest?v='+version));
  console.log(JSON.stringify({version,source,outputs:outputs.map(({filename,width,height,bytes})=>({filename,width,height,bytes}))}));

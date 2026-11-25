@@ -2,7 +2,13 @@
 
 All notable changes to DockNest are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and DockNest uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/upgrading.md](docs/upgrading.md) describes what stays stable within a major version and the deprecation policy. Detailed notes for each release live in [docs/releases](docs/releases).
 
-## [3.0.0] - Unreleased
+## [3.0.1] - 2026-11-25
+
+### Fixed
+
+- The browser tab icon now follows your accent colour.
+
+## [3.0.0] - 2026-11-24
 
 Upgrading from 2.16.x: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300). Backups of Podman and rootless apps use backup format 3, which 2.16 cannot restore.
 
