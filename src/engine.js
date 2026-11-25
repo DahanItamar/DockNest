@@ -286,9 +286,12 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
  return {backupId,serverId,mode,mappings,capabilities,...(targetRuntime?{runtime:targetRuntime}:{}),...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
+// What a client plan may ask for again at enqueue time: nothing else of it is trusted, and a requested runtime (the user of a Podman or
+// rootless restore) is kept so the fresh plan re-checks it against the engines the target server reported (an unknown user is a blocker).
+export const freshPlanOptions=plan=>({serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null,...(plan?.runtime!==undefined?{runtime:plan.runtime}:{})});
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id,actor);}
- const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null});
+ const fresh=await planRestore(backupId,freshPlanOptions(plan));
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  const restoreId=id(),jobId=id();
