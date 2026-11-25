@@ -432,7 +432,8 @@ def preflight(cfg):
     for c in cs:
         temporary_mounts(c)
         if c.get('HostConfig',{}).get('Privileged') or c.get('HostConfig',{}).get('Devices'):raise ValueError('Privileged/device-backed containers require a capture adapter')
-        if c.get('Config',{}).get('Labels',{}).get('com.docker.compose.project'):
+        # Podman reports Labels as null for an image without labels (Docker: {}); a missing and a null value are the same here.
+        if ((c.get('Config') or {}).get('Labels') or {}).get('com.docker.compose.project'):
             if not cfg.get('composeFiles'):raise ValueError('Select this site\'s Compose project files in Edit configuration before backing up. No files have been selected for this backup.')
             if not cfg.get('externalReferencesConfirmed'):raise ValueError('Review the Compose and environment files in Edit configuration and confirm the dependencies before backing up.')
         for m in c['Mounts']:
