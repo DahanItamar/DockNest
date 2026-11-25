@@ -26,7 +26,7 @@ if (flags['--config']) {
   try { for (const line of fs.readFileSync(flags['--config'], 'utf8').split('\n')) { const match = /^(\w+) = (.*)$/.exec(line); if (match) conf[match[1]] = match[2]; } } catch { /* none */ }
 }
 let mode = null; try { mode = fs.statSync(flags['--config']).mode & 0o777; } catch { /* none */ }
-fs.appendFileSync(path.join(here, 'calls.jsonl'), JSON.stringify({ command, args: argv.filter(arg => arg !== flags['--config']), confKeys: Object.keys(conf), confType: conf.type ?? null, confMode: mode, env: Object.keys(process.env).filter(key => key.startsWith('RCLONE')), envValues: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('RCLONE'))), home: process.env.HOME, cwdConf: flags['--config'] ?? null }) + '\n');
+fs.appendFileSync(path.join(here, 'calls.jsonl'), JSON.stringify({ command, args: argv.filter(arg => arg !== flags['--config']), confKeys: Object.keys(conf), confType: conf.type ?? null, confRoot: conf.root_folder_id ?? null, confMode: mode, env: Object.keys(process.env).filter(key => key.startsWith('RCLONE')), envValues: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('RCLONE'))), home: process.env.HOME, cwdConf: flags['--config'] ?? null }) + '\n');
 
 const fail = (stderr, code = 1) => { process.stderr.write(stderr + '\n'); process.exit(code); };
 const remoteFile = spec => {
@@ -48,6 +48,7 @@ const refresh = () => {
 const readStdin = () => new Promise(resolveRead => { const chunks = []; process.stdin.on('data', chunk => chunks.push(chunk)); process.stdin.on('end', () => resolveRead(Buffer.concat(chunks))); });
 
 if (command !== 'version' && command !== 'obscure' && command !== 'authorize') refresh();
+if (control().delayMs && command !== 'version') await new Promise(resolveDelay => setTimeout(resolveDelay, control().delayMs));
 const injected = control().fail?.find(item => item.cmd === command && (item.times === undefined || item.times > 0));
 if (injected) {
   if (injected.times !== undefined) { const next = control(); next.fail.find(item => item.cmd === command && item.times !== undefined).times--; fs.writeFileSync(path.join(here, 'control.json'), JSON.stringify(next)); }
@@ -83,7 +84,7 @@ switch (command) {
   case 'mkdir': fs.mkdirSync(remoteFile(positional[1]), { recursive: true }); break;
   case 'rmdir': { const target = remoteFile(positional[1]); if (!fs.existsSync(target)) fail('error: directory not found', 3); fs.rmdirSync(target); break; }
   case 'about': if (!control().about) fail('about not supported by this backend', 1); process.stdout.write(JSON.stringify(control().about)); break;
-  case 'config userinfo': process.stdout.write(JSON.stringify({ email: 'fake.user@example.invalid' })); break;
+  case 'config userinfo': process.stdout.write(JSON.stringify(control().userinfo ?? { email: 'fake.user@example.invalid' })); break;
   case 'backend drives': process.stdout.write(JSON.stringify([{ id: 'drive-fixture-1', name: 'Fixture drive', driveType: 'personal' }])); break;
   case 'authorize': {
     const state = randomBytes(12).toString('base64url');

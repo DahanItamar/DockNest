@@ -21,6 +21,7 @@ import {StorageGlyph} from './storage-drives/StorageGlyph.jsx';
 import {ReconnectDialog} from './storage-drives/ReconnectDialog.jsx';
 import {isDriveKind} from './storage-drives/drive-model.js';
 import {useReauth} from './connections/ConnectionDialog.jsx';
+import {waitForTest} from './storage-drives/test-poll.js';
 import './storage-drives/drives.css';
 
 // Append-only SFTP (docs/storage-backends.md): what the last test found, what the storage keeps past retention, and a
@@ -125,7 +126,7 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
  async function run(path,body,message,scope,busyText='Working…'){
   if(busy||inFlight.current)return null;
   inFlight.current=true;setBusy(true);setError('');setNotice(null);setFormError(null);setCardError(null);setStatus(busyText);
-  try{const result=await api(path,body);setNotice({message,card:scope?.card});setStatus(message);await load();await onChanged();setRefreshKey(value=>value+1);return result;}
+  try{let result=await api(path,body);if(result?.checking&&path.endsWith('/test'))result=await waitForTest(api,path,{onWait:setStatus});setNotice({message,card:scope?.card});setStatus(message);await load();await onChanged();setRefreshKey(value=>value+1);return result;}
   catch(error){
    setStatus('');
    if(error.status===401){onSessionExpired();return null;}

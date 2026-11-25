@@ -17,7 +17,7 @@ const server = http.createServer((request, response) => {
   if (request.url === '/v1.0/me/drive') return json(200, { id: 'b!personalDrive_1', name: 'OneDrive', driveType: 'personal' });
   if (request.url === '/v1.0/me/drives') {
     if (mode === 'drives-denied') return json(403, {});
-    return json(200, { value: [{ id: 'b!personalDrive_1', name: 'OneDrive', driveType: 'personal' }, { id: 'b!libraryA-2', name: 'Team site', driveType: 'documentLibrary' }, { id: 'bad id with spaces', name: 'x', driveType: 'business' }, { id: 'b!work3', name: 'Work\u0007 drive', driveType: 'business' }, { id: 'b!odd4', name: '', driveType: 'unknown' }] });
+    return json(200, { value: [{ id: 'b!personalDrive_1', name: 'OneDrive', driveType: 'personal' }, { id: 'b!libraryA-2', name: 'Team site', driveType: 'documentLibrary' }, { id: 'bad id with spaces', name: 'x', driveType: 'business' }, { id: 'b!work3', name: 'Work\u0007 drive', driveType: 'business' }, { id: 'b!odd4', name: 'Odd drive', driveType: 'unknown' }, { id: 'b!guid5', name: '3f2504e0-4f89-41d3-9a0c-0305e82c3301', driveType: 'business' }, { id: 'b!guid6', name: '{3F2504E0-4F89-41D3-9A0C-0305E82C3301}', driveType: 'business' }, { id: 'b!noname7', name: '', driveType: 'business' }, { id: 'b!noquota8', name: 'Empty library', driveType: 'documentLibrary', quota: { total: 0 } }] });
   }
   json(404, {});
 });
@@ -32,7 +32,7 @@ test('OneDrive drives come from Graph with the access token, deduplicated, typed
     { id: 'b!personalDrive_1', name: 'OneDrive', type: 'personal' },
     { id: 'b!libraryA-2', name: 'Team site', type: 'documentLibrary' },
     { id: 'b!work3', name: 'Work drive', type: 'business' },
-    { id: 'b!odd4', name: 'OneDrive', type: 'personal' },
+    { id: 'b!odd4', name: 'Odd drive', type: 'personal' },
   ]);
   assert.deepEqual(requests.map(item => item.url), ['/v1.0/me/drive', '/v1.0/me/drives']);
 });

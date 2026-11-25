@@ -9,7 +9,10 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 ### Fixed
 
 - Cloud drives: the Google Drive, OneDrive and Dropbox sign-in link now appears, drives can connect over HTTPS, the connected account is shown masked, and a certificate problem is reported as such instead of "could not be reached".
-- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard.
+- OneDrive: the list of drives after sign-in is no longer empty, so OneDrive can be connected from the dashboard. After a revoked sign-in, the first test now says OneDrive needs you to sign in again.
+- Cloud drives: the sign-in address from Microsoft and Dropbox (`localhost:53682`) is accepted, personal Microsoft account codes are accepted, Google Drive sign-in asks only for access to files DockNest creates, and the account name shows after Reconnect.
+- Cloud drives: the account name now shows on every drive (and fills in for existing ones after a Test). Reconnecting a Google Drive with a different Google app asks you to confirm first, because earlier backups would no longer be visible; a backup that Google no longer shows is reported as not visible, not as damaged.
+- Google Drive: the root folder is remembered, so tests and backups make fewer calls. A slow test no longer fails the page: it shows "Still checking" and finishes in the background. When Google limits the shared sign-in app, DockNest says so and recommends your own app ID.
 
 ### Added
 

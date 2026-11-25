@@ -27,6 +27,9 @@ const clean = item => {
   const name = String(item.name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 100) || (type === 'personal' ? 'OneDrive' : type === 'business' ? 'OneDrive for work or school' : 'Document library');
   return { id, name, type };
 };
+// /me/drives also returns hidden system drives named with a bare GUID, or with no name or no space. They are not shown.
+const GUID = /^[{(]?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}[})]?$/i;
+const usable = item => { const name = String(item?.name ?? '').trim(); return name !== '' && !GUID.test(name) && item?.quota?.total !== 0; };
 export async function listOneDrives(accessToken) {
   if (typeof accessToken !== 'string' || !accessToken) throw fail('Sign in again before choosing a OneDrive drive.', 'onedrive_denied');
   const main = clean(await get(accessToken, '/me/drive'));
@@ -34,7 +37,7 @@ export async function listOneDrives(accessToken) {
   let others = [];
   try { const more = await get(accessToken, '/me/drives'); others = Array.isArray(more?.value) ? more.value.slice(0, 50) : []; } catch (error) { if (!main) throw error; }
   const seen = new Set(), out = [];
-  for (const drive of [main, ...others.map(clean)]) if (drive && !seen.has(drive.id)) { seen.add(drive.id); out.push(drive); }
+  for (const drive of [main, ...others.filter(usable).map(clean)]) if (drive && !seen.has(drive.id)) { seen.add(drive.id); out.push(drive); }
   if (!out.length) throw fail('No OneDrive drive was found for this account.', 'onedrive_none');
   return out;
 }

@@ -10,6 +10,14 @@ export function loadSecrets(targetId) {
   if (!found) return null;
   return JSON.parse(open(found.credential));
 }
+// Google Drive only shows files the same app created, so a changed client ID hides every package uploaded before the change.
+// Reconnect stamps the change here; a missing package is only called "not visible" when it is older than the stamp.
+export function hiddenByClientChange(path, createdAt) {
+  const target = /^rclone:([^:]+):/.exec(String(path ?? ''))?.[1];
+  const stamp = target ? settingsOf(target)?.clientChangedAt : null;
+  return Boolean(stamp && createdAt && String(createdAt) < String(stamp));
+}
+export function saveSettings(targetId, patch) { writeSettings(targetId, patch); }
 export function settingsOf(targetId) {
   try { return JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(targetId)?.settings || 'null'); } catch { return null; }
 }

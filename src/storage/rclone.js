@@ -17,8 +17,10 @@ import { config } from '../config.js';
 import { RCLONE_MINIMUM } from './rclone-pin.js';
 import { BACKENDS, backendLabel, classify, rcloneError } from './rclone-errors.js';
 import { parseToken } from './rclone-input.js';
+import { ROOT_ID } from './drive-root.js';
 import { listOneDrives } from './onedrive-graph.js';
-import { loadSecrets, saveToken, markReconnect } from './rclone-state.js';
+import { loadSecrets, saveSettings, saveToken, markReconnect, settingsOf } from './rclone-state.js';
+import { fetchAccount } from './account-info.js';
 
 export const scheme = 'rclone', label = 'Cloud drive';
 // Rate limits and retries (docs/cloud-drives.md, "Rate limits").
@@ -52,7 +54,7 @@ export function buildConfig(options, secrets) {
   const client = () => { add('client_id', secrets.clientId); add('client_secret', secrets.clientSecret); };
   const token = () => { if (secrets.token) add('token', JSON.stringify(secrets.token)); };
   switch (options.backend) {
-    case 'drive': add('type', 'drive'); add('scope', 'drive.file'); add('use_trash', 'true'); client(); token(); break;
+    case 'drive': add('type', 'drive'); add('scope', 'drive.file'); add('use_trash', 'true'); if (ROOT_ID.test(String(settings.rootFolderId ?? ''))) add('root_folder_id', settings.rootFolderId); client(); token(); break;
     case 'onedrive': add('type', 'onedrive'); add('drive_id', settings.driveId); add('drive_type', settings.driveType); client(); token(); break;
     case 'dropbox': add('type', 'dropbox'); client(); token(); break;
     case 'webdav': add('type', 'webdav'); add('url', settings.endpoint); add('vendor', settings.vendor || 'other'); add('user', secrets.username); add('pass', secrets.passwordObscured); break;
@@ -124,6 +126,7 @@ async function launch(options, args, { input = false } = {}) {
       child.once('close', code => resolveRun({ code, stderr, spawnFailed }));
     }).then(async result => {
       try { await writeBack(options, file, secrets); } catch { /* the old token stays; the next operation refreshes again */ }
+      if (result.code === 0 && options.persist !== false && options.id && !options.settings?.account) learnAccount(options.id).catch(() => {});
       try { await rm(folder, { recursive: true, force: true }); } finally { release(); }
       return result;
     });
@@ -147,7 +150,7 @@ function failure(options, result) {
   if (result.spawnFailed) return Object.assign(new Error('rclone is not available in this DockNest, so cloud drives cannot be used. Install rclone or use the official image.'), { code: 'ERCLONEMISSING', reason: 'rclone_missing', status: 503, expose: true, publicCode: 'rclone_missing' });
   const info = classify(result.stderr, result.code, options.backend);
   if (info.needsReconnect && options.persist !== false) markReconnect(options.id);
-  return rcloneError(info, { rcloneExit: result.code });
+  return rcloneError(info, { rcloneExit: result.code, backend: options.backend });
 }
 async function run(options, args, { input, stdin, limit = MAX_OUTPUT } = {}) {
   const { child, finished } = await launch(options, args, { input: stdin !== undefined || input });
@@ -340,12 +343,24 @@ export async function capacity(options, { maxAgeMs = 0, managedBytes = 0 } = {})
   if (options.capacity > 0) return { ...common, used: managedBytes, total: options.capacity, available: Math.max(0, options.capacity - managedBytes), capacitySource: 'configured', estimated: true };
   return { ...common, used: managedBytes, total: null, available: null, unbounded: true, capacitySource: 'cloud-storage', estimated: false };
 }
-// Account name or e-mail the provider reports (`rclone config userinfo`), or null. Best effort: a failure is not a failed connect.
+// Account name or e-mail the provider reports for the stored access token, or null. Best effort: a failure is not a failed
+// connect, test or backup (src/storage/account-info.js).
 export async function account(options) {
+  if (!BACKENDS[options.backend]?.oauth) return null;
+  return fetchAccount(options.backend, secretsOf(options).token?.access_token);
+}
+// A saved destination without an account name learns it once, after its first successful operation or test, so existing
+// destinations show it without a new sign-in. Once per destination per run; never throws.
+const accountTried = new Set();
+export async function learnAccount(targetId) {
+  if (accountTried.has(targetId)) return null;
   try {
-    const data = JSON.parse(await run(options, ['config', 'userinfo', '--json', REMOTE + ':']));
-    const value = data.email ?? data.user ?? data.name ?? data.display_name ?? null;
-    return typeof value === 'string' && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+    const settings = settingsOf(targetId), secrets = loadSecrets(targetId);
+    if (!settings || !BACKENDS[settings.backend]?.oauth || settings.account || !secrets?.token) return null;
+    accountTried.add(targetId);
+    const found = await fetchAccount(settings.backend, secrets.token.access_token);
+    if (found) saveSettings(targetId, { account: found });
+    return found;
   } catch { return null; }
 }
 // The drives the signed-in account can use, for the short list shown after sign-in. OneDrive asks Microsoft Graph with the

@@ -11,9 +11,12 @@ import * as rclone from './storage/rclone.js';
 import * as oauth from './storage/rclone-oauth.js';
 import * as folder from './storage/folder.js';
 import { BACKENDS, backendLabel } from './storage/rclone-errors.js';
-import { RECONNECT_STATUS, loadSecrets, replaceToken, settingsOf } from './storage/rclone-state.js';
+import { destinationUsage } from './backup-copies.js';
+import { fetchRootFolderId } from './storage/drive-root.js';
+import { RECONNECT_STATUS, loadSecrets, replaceToken, saveSettings, settingsOf } from './storage/rclone-state.js';
 
 export const rcloneRoutes = Router();
+export const CLIENT_CHANGED = 'Earlier backups on this destination will no longer be visible to DockNest.';
 
 // "ada@example.com" -> "a***@e***.com"; a plain user name keeps its first two characters.
 export function maskAccount(value) {
@@ -105,6 +108,8 @@ rcloneRoutes.post('/rclone/connect', requireRecentAuth, rateLimit('rclone-connec
   }
   if (!BACKENDS[data.backend].oauth) secrets.passwordObscured = await rclone.obscure({ backend: data.backend }, data.password);
   const options = optionsOf(targetId, data, settings, secrets);
+  // Google Drive: the root folder's ID, asked once, so rclone does not ask for it before every operation.
+  if (data.backend === 'drive') { const rootFolderId = await fetchRootFolderId(options.secrets.token?.access_token); if (rootFolderId) settings.rootFolderId = rootFolderId; }
   await rclone.test(options);
   // A token rclone refreshed during the test is in options.secrets now.
   const account = BACKENDS[data.backend].oauth ? await rclone.account(options) : null;
@@ -146,14 +151,26 @@ rcloneRoutes.post('/:id/reconnect', requireRecentAuth, rateLimit('rclone-connect
   if (!row) return res.status(404).json({ error: 'Cloud drive destination not found.' });
   const settings = settingsOf(row.id) ?? {};
   if (!BACKENDS[settings.backend]?.oauth) return res.status(409).json({ error: 'This destination signs in with a user name and password, not a token. Remove it and connect again to change them.', code: 'not_oauth' });
-  const { sessionId } = z.object({ sessionId: z.string().min(8).max(100) }).parse(req.body);
+  const { sessionId, confirmHidden } = z.object({ sessionId: z.string().min(8).max(100), confirmHidden: z.boolean().optional() }).parse(req.body);
   await rclone.version();
   const taken = oauth.take({ sessionId, userId: req.user.id, backend: settings.backend });
   const old = loadSecrets(row.id);
+  // Google Drive's drive.file access shows only files the same Google app (client ID) created. Another app hides every earlier
+  // backup from DockNest, so the owner confirms first. The sign-in stays open for the retry.
+  if (settings.backend === 'drive' && !confirmHidden && (taken.client?.clientId ?? null) !== (old?.clientId ?? null)) {
+    const usage = destinationUsage(row.id);
+    if (usage.copies > 0 || usage.mainBackups > 0) return res.status(409).json({ error: CLIENT_CHANGED, code: 'client_changed' });
+  }
   const options = { id: row.id, mode: 'rclone', name: row.name, backend: settings.backend, settings, root: row.root, capacity: row.capacity_bytes, persist: false,
     secrets: { ...old, token: taken.token, ...(taken.client ?? {}) } };
+  // A different account has a different root folder: the old ID is dropped and asked for again.
+  if (settings.backend === 'drive') { delete options.settings.rootFolderId; const rootFolderId = await fetchRootFolderId(taken.token?.access_token); if (rootFolderId) options.settings = { ...settings, rootFolderId }; }
   await rclone.test(options);
+  // The account is asked again: a reconnect can be to another account, and the card shows it masked.
+  const account = await rclone.account(options);
   transaction(() => {
+    if (settings.backend === 'drive') saveSettings(row.id, { rootFolderId: options.settings.rootFolderId ?? null, ...((taken.client?.clientId ?? null) !== (old?.clientId ?? null) ? { clientChangedAt: new Date().toISOString() } : {}) });
+    if (account) saveSettings(row.id, { account });
     replaceToken(row.id, options.secrets.token, taken.client, req.user.id);
     db.prepare('UPDATE storage_targets SET last_tested_at=? WHERE id=?').run(new Date().toISOString(), row.id);
   });
