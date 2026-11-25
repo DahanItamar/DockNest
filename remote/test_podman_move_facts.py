@@ -41,4 +41,31 @@ class MoveFactsTests(unittest.TestCase):
         engine = Engine({'{{.Architecture}}': 'x86_64\n'})
         self.assertEqual(self.facts(engine, helper.Runtime('docker', True, 'app', 1001, '/home/app'))['architecture'], 'x86_64')
 
+    def test_rootless_podman_modes_are_not_networks_to_inspect(self):
+        # pasta and slirp4netns appear as network names in the record of a rootless Podman container; they are not networks.
+        for mode in ('pasta', 'slirp4netns', 'private', 'ns:/run/netns/shop', 'container:' + 'a' * 12, 'slirp4netns:port_handler=slirp4netns', 'pasta:--map-gw'):
+            record = {**RECORD, 'NetworkSettings': {'Networks': {mode: {}}, 'Ports': {}}}
+            engine = Engine({'{{.Host.Arch}}': 'amd64\n'})
+            def inspect_network(*args, engine=engine):
+                if args[0] == 'network': raise helper.subprocess.CalledProcessError(125, ['podman'], stderr=b'no such network')
+                return engine.docker(*args)
+            with patch.object(helper, 'inspect', lambda ids, record=record: [dict(record)]), patch.object(helper, 'docker', inspect_network), patch.object(helper, 'port_bindings', lambda c: []),                  patch.object(helper, 'hand_placed', lambda *a: []), helper.using_runtime(helper.Runtime('podman', True, 'app', 1001, '/home/app')):
+                facts = helper.source_site_facts(CONFIG, [])
+            self.assertEqual(facts['networks'], [], mode)
+    def test_names_that_only_look_like_modes_are_still_inspected(self):
+        for name in ('privately', 'my-pasta', 'ns', 'containers', 'slirp4netns2', 'hosted'):
+            self.assertFalse(helper.engine_network_mode(name), name)
+        for name in ('bridge', 'host', 'none', 'private', 'pasta', 'slirp4netns', 'ns:/x', 'container:abc'):
+            self.assertTrue(helper.engine_network_mode(name), name)
+    def test_a_real_user_network_is_still_inspected(self):
+        record = {**RECORD, 'NetworkSettings': {'Networks': {'shop_default': {}}, 'Ports': {}}}
+        asked = []
+        def docker(*args):
+            asked.append(args)
+            if args[:2] == ('network', 'inspect'): return b'[{"Driver": "bridge", "Internal": false, "EnableIPv6": false, "Labels": {}}]'
+            return b'x86_64\n' if args[:2] == ('info', '--format') else b'[]'
+        with patch.object(helper, 'inspect', lambda ids: [dict(record)]), patch.object(helper, 'docker', docker), patch.object(helper, 'port_bindings', lambda c: []), patch.object(helper, 'hand_placed', lambda *a: []):
+            facts = helper.source_site_facts(CONFIG, [])
+        self.assertIn(('network', 'inspect', 'shop_default'), asked); self.assertEqual([n['name'] for n in facts['networks']], ['shop_default']); self.assertEqual(facts['networks'][0]['driver'], 'bridge')
+
 if __name__ == '__main__': unittest.main()

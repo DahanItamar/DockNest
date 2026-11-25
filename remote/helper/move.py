@@ -213,6 +213,11 @@ def env_findings(containers,files,tokens):
             match=re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$',line)
             if match:scan(match[1],match[2].strip().strip('"\''),'file '+str(p))
     return findings[:100]
+# Names a container's network list can hold that are modes, not networks to inspect: Docker's three, and Podman's `private`, `pasta`,
+# `slirp4netns` (with options after a colon), `ns:<path>` and `container:<id>`.
+NETWORK_MODES=('bridge','host','none','private','pasta','slirp4netns')
+def engine_network_mode(name):
+    return name in NETWORK_MODES or str(name).startswith(('ns:','container:','pasta:','slirp4netns:'))
 def source_site_facts(cfg,tokens):
     domains=[d for d in cfg.get('domains',[]) if isinstance(d,str) and DOMAIN.fullmatch(d)]
     nginx=nginx_domain_facts(domains) if domains else {'directives':[],'upstreamPorts':[]}
@@ -228,7 +233,8 @@ def source_site_facts(cfg,tokens):
     networks={}
     for c in cs:
         for name in (c.get('NetworkSettings',{}).get('Networks') or {}):
-            if name in ['bridge','host','none'] or name in networks:continue
+            # pasta and slirp4netns are how rootless Podman reaches the network, not networks: `network inspect pasta` exits 125.
+            if engine_network_mode(name) or name in networks:continue
             n=json.loads(docker('network','inspect',name))[0]
             networks[name]={'name':name,'driver':n.get('Driver'),'internal':bool(n.get('Internal')),'ipv6':bool(n.get('EnableIPv6')),'labels':{k:v for k,v in (n.get('Labels') or {}).items() if k.startswith('com.docker.compose.')}}
     # The web port nginx proxies to; then the configured loopback health URL; then the first published TCP port.
