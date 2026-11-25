@@ -101,6 +101,13 @@ class Runtime:
         # Only the user's own bus path (session_bus checked it): a caller cannot name another one.
         if bus is not None and self.engine=='podman' and bus=='unix:path=/run/user/%d/bus'%self.uid:environment.append('DBUS_SESSION_BUS_ADDRESS='+bus)
         return ['runuser','-u',self.user,'--','env','-i',*environment,self.engine,*args]
+    def check_runtime_dir(self,lstat=os.lstat):
+        """Before every rootless engine call: the user's runtime folder must exist and belong to the user. systemd removes it when the
+        user's last session ends and linger is off; the engine then fails with an unhelpful exit status."""
+        path='/run/user/%d'%self.uid
+        try:info=lstat(path)
+        except OSError:raise RuntimeRefused("This user's container runtime folder is missing. Turn on linger for the user (loginctl enable-linger %s) or log the user in."%self.user)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid!=self.uid:raise RuntimeRefused("This user's container runtime folder does not belong to the user.")
     def save_arguments(self,references=1):
         """`save` with the format DockNest reads back. Podman's own default can be an OCI archive, whose image names live in index.json; a
         backup is always the docker archive (manifest.json), which is also what a Docker host writes and what a restore checks."""
@@ -130,6 +137,7 @@ class Runtime:
         run than `timeout` is an error. The engine's last STREAM_ERROR_TAIL bytes of error output travel on the exception
         as `.stderr` only; they are never printed or sent."""
         if STOPPING:raise ValueError('DockNest stopped this step.')
+        if self.rootless:self.check_runtime_dir()
         if self.engine=='docker' and self.rootless:self.check_socket()
         import tempfile
         with tempfile.TemporaryFile() as errors:
@@ -164,6 +172,7 @@ class Runtime:
         a rootless engine that cannot enter it fails (podman ps, for one). Rootful Docker keeps the folder it always had."""
         return '/' if self.rootless else None
     def cli(self,*args,**options):
+        if self.rootless:self.check_runtime_dir()
         if self.engine=='docker' and self.rootless:self.check_socket()
         if self.workdir() is not None:options.setdefault('cwd',self.workdir())
         return run(self.argv(*args,bus=self.session_bus()),**options)

@@ -9,6 +9,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it)
 import helper
+REAL_RUNTIME_DIR_CHECK = helper.Runtime.check_runtime_dir
+helper.Runtime.check_runtime_dir = lambda self, lstat=None: None  # no /run/user in these fakes; the real check has its own tests in test_runtime.py
 
 R = helper.RuntimeRefused
 NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)

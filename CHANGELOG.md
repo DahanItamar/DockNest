@@ -88,6 +88,8 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
 
 ### Fixed
+
+- A Podman or rootless app whose user has no container runtime folder (linger off, user logged out) now gets a plain message with the fix, instead of a bare engine error.
 - A server where Docker is installed but not running no longer fails a scan: the app list still shows the other engines, the scan names the stopped Docker engine, and the readiness check says "Docker is installed but not running". The TrueNAS-before-24.10 refusal no longer repeats its last sentence. Release note: A stopped Docker is reported plainly instead of failing the scan.
 - The Recovery Guide shows the whole install command instead of cutting it off.
 - The Map no longer leaves "Change cancelled" under the canvas; status messages disappear after a few seconds.
