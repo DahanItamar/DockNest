@@ -8,7 +8,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - The browser tab icon now follows your accent colour.
 
-## [3.0.0] - 2026-11-24
+## [3.0.0] - 2026-11-25
 
 Upgrading from 2.16.x: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300). Backups of Podman and rootless apps use backup format 3, which 2.16 cannot restore.
 
