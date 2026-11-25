@@ -79,7 +79,7 @@ ignores the new tables: it still backs up and restores from the main copy, and l
 
 ## Cloudflare R2 and other providers
 
-Separate from this design, S3 leaves beta after the Linux suite runs a full backup and restore against MinIO and
+Separate from this design, S3 counts as validated after the Linux suite runs a full backup and restore against MinIO and
 the `s3-integration` job becomes required. The job also runs against real providers (Cloudflare R2 first, then
 Backblaze B2) when their credentials exist as GitHub Actions secrets: a dedicated, empty test bucket per provider,
 keys limited to that bucket, never printed. Each provider listed as "tested" in the README must pass on the release
@@ -87,5 +87,5 @@ commit.
 
 ## Release plan
 
-2.11.0: S3 out of beta, storage per app, backup copies. Incremental backups follow in 2.12.0, because they build on
+2.11.0: S3 validated, storage per app, backup copies. Incremental backups follow in 2.12.0, because they build on
 copies (chains on every destination).

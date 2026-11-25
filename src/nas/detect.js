@@ -46,11 +46,17 @@ export function parseDockerVersion(text) {
 
 const read = async (run, path) => { const out = await run(['cat', '--', path]).catch(() => null); return out?.code === 0 ? String(out.stdout).slice(0, 8192) : null; };
 
-export async function detectNas(run) {
+export async function looksLikeSynology(run) {
+  return (await read(run, '/etc/synoinfo.conf')) !== null && (await read(run, '/etc.defaults/VERSION')) !== null;
+}
+export async function looksLikeUnraid(run) {
+  return (await read(run, '/etc/unraid-version')) !== null;
+}
+// `synology` and `unraid` are the opt-in gates (src/nas/gate.js): with one off, that system is not a NAS and is handled as a normal Linux server.
+export async function detectNas(run, { synology = false, unraid: unraidOn = false } = {}) {
   const unraid = await read(run, '/etc/unraid-version');
-  if (unraid !== null) return { kind: 'unraid', version: parseUnraidVersion(unraid) };
-  const synoinfo = await read(run, '/etc/synoinfo.conf'), synoVersion = await read(run, '/etc.defaults/VERSION');
-  if (synoinfo !== null && synoVersion !== null) return { kind: 'synology', version: parseSynologyVersion(synoVersion) };
+  if (unraid !== null) return unraidOn ? { kind: 'unraid', version: parseUnraidVersion(unraid) } : null;
+  if (await looksLikeSynology(run)) return synology ? { kind: 'synology', version: parseSynologyVersion(await read(run, '/etc.defaults/VERSION')) } : null;
   const truenas = parseTrueNasVersion(await read(run, '/etc/version'));
   if (truenas) {
     const midclt = await run(['test', '-x', '/usr/bin/midclt']).catch(() => null);

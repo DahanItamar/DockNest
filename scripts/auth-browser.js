@@ -147,14 +147,14 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  assert.equal(await page.locator('.auth-page .lg-brandpanel').count(),1);
  await page.getByLabel('Administrator name').fill('Alex');await page.getByLabel('Administrator email').fill('alex@example.com');
  await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));
- await page.getByLabel('System password',{exact:true}).fill('abcd');await page.getByLabel('Confirm system password').fill('abce');
+ await page.getByLabel('System password',{exact:true}).fill('abcdefghijkl');await page.getByLabel('Confirm system password').fill('abcdefghijkm');
  await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('alert').getByText('Passwords do not match.',{exact:true}).waitFor();
  await noBox(page);assert.equal(await page.getByLabel('Confirm system password').getAttribute('aria-invalid'),'true');
  await fit(page,'setup '+theme+width);
   await page.waitForTimeout(500);
  await page.screenshot({path:`${shots}/setup-1-error-${theme}-${width}.png`,fullPage:true});
- await page.getByLabel('Confirm system password').fill('abcd');await page.getByRole('button',{name:'Continue setup'}).click();
+ await page.getByLabel('Confirm system password').fill('abcdefghijkl');await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('heading',{name:'Connect your authenticator',exact:true}).waitFor();
  assert.equal(await page.locator('.auth-qr').count(),1);assert.equal(await page.locator('.recovery-codes code').count(),8);
  await noBox(page);await fit(page,'authenticator '+theme+width);
@@ -167,7 +167,7 @@ for(const [theme,width,height] of [['light',1440,900],['dark',1440,900],['light'
  const {context,page}=await open({status:{authenticated:false,setupRequired:true},setup:429});
  await page.goto(base+'/#/setup');await page.getByRole('heading',{name:'Set up DockNest',exact:true}).waitFor();
  await page.getByLabel('Administrator name').fill('Alex');await page.getByLabel('Administrator email').fill('alex@example.com');
- await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));await page.getByLabel('System password',{exact:true}).fill('abcd');await page.getByLabel('Confirm system password').fill('abcd');
+ await page.getByLabel('Setup token',{exact:true}).fill('t'.repeat(20));await page.getByLabel('System password',{exact:true}).fill('abcdefghijkl');await page.getByLabel('Confirm system password').fill('abcdefghijkl');
  await page.getByRole('button',{name:'Continue setup'}).click();
  await page.getByRole('alert').getByText('Too many attempts. Try again later.',{exact:true}).waitFor();await context.close();
 }

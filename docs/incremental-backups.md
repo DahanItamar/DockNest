@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0 as a beta; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 
@@ -33,7 +33,7 @@ on the storage report after release, is far below the estimate.
 
 | Topic | Decision |
 |---|---|
-| Default | Off. Opt in per app under backup settings: "Incremental backups (beta)". Existing apps and backups do not change. |
+| Default | Off. Opt in per app under backup settings: "Incremental backups". Existing apps and backups do not change. |
 | Chain | One full package, then up to N increments. Default N = 6 (with daily backups, one full per week). Range 1 to 30. |
 | What is incremental | Mount archives (`mount-I-J.tar`). Images only when their ID is new to the chain (see Images). Manifest, config files and restore guide are always complete. |
 | New full package when | The interval is reached; the chain's full package is missing, unverified or being removed; the source's tar snapshot file is missing or does not match; the container, mount or image set changed; the storage destination changed; the app moved; the manifest format changed; the previous increment renamed folders (GNU tar repeats rename records in later increments, so the chain ends there); the owner asks ("Make a full backup now"). |
@@ -176,7 +176,7 @@ folders swap names) and compares the file tree and database with the source at t
 - Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Turn
   incremental off for every app, then make a backup, before downgrading to 2.11. The upgrade notes say so, and the update center
   warns before a downgrade when the database contains incremental backups.
-- The feature ships labelled beta and opt-in, like moves and restore tests did.
+- The feature ships opt-in, like moves and restore tests did.
 
 ## What we will not do
 
@@ -205,9 +205,9 @@ folders swap names) and compares the file tree and database with the source at t
 3. Phase 1: "Download chain" for increments; ZIP export for full backups only.
 4. Release: 2.12.0, after storage per app and backup copies (2.11.0), so each destination can hold whole chains.
 
-## Leaving beta
+## Validation
 
-Incremental backups stay beta until all of these are true. The 4-week clock started on 2026-10-30, when the first real
+Incremental backups count as validated on real servers when all of these are true. The 4-week clock started on 2026-10-30, when the first real
 chain (one full backup and two increments) was captured, re-verified and restored in an isolated restore test.
 
 - The Linux integration tests above pass on the release commit and are part of the required checks.

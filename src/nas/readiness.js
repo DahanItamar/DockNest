@@ -1,6 +1,7 @@
 import { HELPER_RUNTIME_IMAGE_ID, isPinnedImageId } from '../../shared/helper-runtime.js';
-import { detectNas, dockerFacts, pythonFacts, pythonUsable, stagingFacts, trueNasSupported, TRUENAS_TOO_OLD } from './detect.js';
+import { detectNas, looksLikeSynology, looksLikeUnraid, dockerFacts, pythonFacts, pythonUsable, stagingFacts, trueNasSupported, TRUENAS_TOO_OLD } from './detect.js';
 import { sudoPrefix } from './command.js';
+import { gateInfo } from './gate.js';
 
 // Readiness for a NAS server (backend only). `run(argv)` runs one fixed argv as the SSH user and resolves
 // { code, stdout }; `runAsRoot(argv)` runs it with `sudo -n --` (or directly for root). Each failed check names one fix.
@@ -11,10 +12,12 @@ const fail = (id, message, fix, extra = {}) => ({ id, status: 'fail', message, f
 
 export const SUDO_FIX = 'Give this user passwordless sudo (a NOPASSWD rule for it), or connect as root.';
 
-export async function checkNas({ run, username = 'root', imageId = HELPER_RUNTIME_IMAGE_ID }) {
+export async function checkNas({ run, username = 'root', imageId = HELPER_RUNTIME_IMAGE_ID, synology = false, unraid = false }) {
   const checks = [];
-  const nas = await detectNas(run);
-  if (!nas) return { nas: null, ready: false, checks: [fail('nas', 'This server is not a Unraid, Synology or TrueNAS system.', 'Add it as a regular Linux server with a root SSH key.')] };
+  const nas = await detectNas(run, { synology, unraid });
+  const hidden = nas ? null : !synology && await looksLikeSynology(run) ? 'synology' : !unraid && await looksLikeUnraid(run) ? 'unraid' : null;
+  if (hidden) return { nas: null, gatedOff: hidden, ready: false, checks: [warn(hidden, gateInfo(hidden), 'Connect it as a normal Linux server with a root SSH key.')] };
+  if (!nas) return { nas: null, ready: false, checks: [fail('nas', 'This server is not a TrueNAS system.', 'Add it as a regular Linux server with a root SSH key.')] };
   const identity = username === 'root' ? 'root' : 'sudo';
   const runAsRoot = identity === 'root' ? run : argv => run([...sudoPrefix(), ...argv]);
 
@@ -35,7 +38,7 @@ export async function checkNas({ run, username = 'root', imageId = HELPER_RUNTIM
   const docker = await dockerFacts(runAsRoot);
   let helperRuntime = null;
   if (pythonUsable(python)) { helperRuntime = 'host'; checks.push(ok('runtime', `Python ${python.join('.')} on the server.`, { helperRuntime })); }
-  else if (!docker) checks.push(fail('runtime', 'The server has no usable Python and no Docker.', 'Install or start Docker (Container Manager on Synology) first.'));
+  else if (!docker) checks.push(fail('runtime', 'The server has no usable Python and no Docker.', 'Install or start Docker first.'));
   else if (!isPinnedImageId(imageId)) checks.push(fail('runtime', 'This DockNest build has no helper runtime image.', 'Update DockNest to a release that includes the helper runtime.'));
   else {
     const image = await runAsRoot([docker.binary, 'image', 'inspect', '--format', '{{.Id}}', imageId]).catch(() => ({ code: 1, stdout: '' }));

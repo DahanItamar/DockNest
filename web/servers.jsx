@@ -8,6 +8,7 @@ import {ServerEngines} from './runtime-ui.jsx';
 import {buildServerReport} from './report/builders.js';
 import {catalogued,EXPLAIN} from './report/catalogue.js';
 import {NasLabel} from './nas/NasReadiness.jsx';
+import {reportTag} from './nas/nas.js';
 import './servers.css';
 
 const ServerIcon=props=><BrandIcon name="server" {...props}/>;
@@ -29,7 +30,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
      <ServerEngines server={server}/>
      <div className="def-row"><dt>Apps</dt><dd><span aria-label={`${count} configured ${count===1?'app':'apps'}`}>{count}</span></dd></div>
     </dl>
-    {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" excerptSource={catalogued(failure.message)||!failure.message?null:{error:failure.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildServerReport({...facts,...opts,check:failure.check,errorClass:failure.errorClass,message:failure.message,explanation:EXPLAIN.server})}/></div>}>{failure.message}</AlertPanel>}
+    {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" excerptSource={catalogued(failure.message)||!failure.message?null:{error:failure.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildServerReport({...facts,...opts,nas:reportTag(server),check:failure.check,errorClass:failure.errorClass,message:failure.message,explanation:EXPLAIN.server})}/></div>}>{failure.message}</AlertPanel>}
    </div>
    <footer className="card-footer server-card-actions">
     <button type="button" className="link-action" disabled={busy} onClick={()=>onTest(server)}>Test connection</button>
